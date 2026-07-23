@@ -1,0 +1,10 @@
+node_modules/
+.next/
+nohup.out
+
+# Environment files — never commit secrets
+.env
+.env.*
+*.env
+.env.bak
+!.env.example

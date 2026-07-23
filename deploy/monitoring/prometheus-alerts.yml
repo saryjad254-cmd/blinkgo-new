@@ -1,0 +1,110 @@
+# ─────────────────────────────────────────────────────────
+# Prometheus Alerting Rules for BlinkGo
+# ─────────────────────────────────────────────────────────
+# Import this file into your Prometheus config:
+#   rule_files:
+#     - /etc/prometheus/alerts/blinkgo.yml
+
+groups:
+  # ════════════════════════════════════════
+  # 1. APPLICATION HEALTH
+  # ════════════════════════════════════════
+  - name: blinkgo_app_health
+    interval: 30s
+    rules:
+      - alert: BlinkGoDown
+        expr: up{job="blinkgo"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "BlinkGo instance is down"
+          description: "BlinkGo instance {{ $labels.instance }} has been down for more than 1 minute."
+          runbook: "docs/runbooks/instance-down.md"
+
+      - alert: BlinkGoHighErrorRate
+        expr: rate(http_errors_total[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "High error rate ({{ $value | humanizePercentage }})"
+          description: "Error rate exceeds 5% over the last 5 minutes."
+          runbook: "docs/runbooks/high-error-rate.md"
+
+      - alert: BlinkGoSlowResponses
+        expr: histogram_quantile(0.95, rate(http_request_duration_ms_bucket[5m])) > 2000
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "p95 latency > 2s ({{ $value }}ms)"
+          description: "95th percentile response time exceeds 2 seconds."
+
+  # ════════════════════════════════════════
+  # 2. DATABASE
+  # ════════════════════════════════════════
+  - name: blinkgo_database
+    interval: 30s
+    rules:
+      - alert: DatabaseDown
+        expr: db_queries_total{status="error"} > 10
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Database connectivity issues"
+          description: "More than 10 DB errors in the last 1 minute."
+
+      - alert: DatabaseSlowQueries
+        expr: histogram_quantile(0.95, rate(db_query_duration_ms_bucket[5m])) > 500
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Slow DB queries detected"
+          description: "p95 DB query time exceeds 500ms."
+
+  # ════════════════════════════════════════
+  # 3. RESOURCES
+  # ════════════════════════════════════════
+  - name: blinkgo_resources
+    interval: 30s
+    rules:
+      - alert: HighMemoryUsage
+        expr: process_resident_memory_bytes / 1024 / 1024 > 800
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "High memory usage ({{ $value }}MB)"
+
+      - alert: ProcessRestarting
+        expr: rate(process_start_time_seconds[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Process restarting frequently"
+
+  # ════════════════════════════════════════
+  # 4. CACHE
+  # ════════════════════════════════════════
+  - name: blinkgo_cache
+    interval: 1m
+    rules:
+      - alert: LowCacheHitRate
+        expr: rate(cache_hits_total[5m]) / (rate(cache_hits_total[5m]) + rate(cache_misses_total[5m])) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Cache hit rate below 50%"
