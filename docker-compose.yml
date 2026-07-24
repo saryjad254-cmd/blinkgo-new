@@ -1,0 +1,77 @@
+# ─────────────────────────────────────────────────────────
+# BlinkGo Production Docker Compose
+# For production-like local testing and on-prem deployment
+# ─────────────────────────────────────────────────────────
+version: '3.9'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        COMMIT_SHA: ${COMMIT_SHA:-unknown}
+        VERSION: ${VERSION:-unknown}
+    image: blinkgo/web:${VERSION:-latest}
+    container_name: blinkgo-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - NEXT_PUBLIC_SUPABASE_URL=${NEXT_PUBLIC_SUPABASE_URL}
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${NEXT_PUBLIC_SUPABASE_ANON_KEY}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - SUPABASE_PROJECT_REF=${SUPABASE_PROJECT_REF}
+      - NEXT_PUBLIC_APP_URL=${NEXT_PUBLIC_APP_URL}
+      - NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=${NEXT_PUBLIC_GOOGLE_MAPS_API_KEY}
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - EMAIL_FROM=${EMAIL_FROM}
+      - LOG_LEVEL=info
+      - SENTRY_DSN=${SENTRY_DSN:-}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1024M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - blinkgo-net
+
+  # Optional: log shipper for production
+  # fluentbit:
+  #   image: fluent/fluent-bit:2.2
+  #   ...
+
+  # Optional: metrics scraper for Prometheus
+  # prometheus:
+  #   image: prom/prometheus:latest
+  #   ...
+
+networks:
+  blinkgo-net:
+    driver: bridge

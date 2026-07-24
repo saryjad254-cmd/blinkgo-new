@@ -1,0 +1,72 @@
+[
+  {
+    "id": "ff04c437-0e45-4db2-864b-4c09a7f9e64e",
+    "email": "trace-test-1784741930@blinkgo.de",
+    "user_id": "220820a3-1102-4d83-8075-05da9e794e22",
+    "code_hash": "dd3ef2288e82667947530988d8a2fc45bf424d8b6d06f8bcb0143ec8bb9075ed",
+    "expires_at": "2026-07-22T17:53:52.803Z",
+    "purpose": "signup",
+    "used_at": null,
+    "created_at": "2026-07-22T17:38:53.593Z"
+  },
+  {
+    "id": "d6e2cbaf-d407-4f22-aa90-d223f2d24c7d",
+    "email": "trace2-1784742191@blinkgo.de",
+    "user_id": "bb5782b9-8c79-4774-ac9a-6511eb8154d5",
+    "code_hash": "082a24a251294b4593e4977fcda84a2280fa1e1846f91e3916f325494c57fcbe",
+    "expires_at": "2026-07-22T17:58:13.387Z",
+    "purpose": "signup",
+    "used_at": null,
+    "created_at": "2026-07-22T17:43:14.373Z"
+  },
+  {
+    "id": "943be705-347a-4316-b59e-aa780fa364c1",
+    "email": "final-1784742415@blinkgo.de",
+    "user_id": "2717d493-7933-40f3-b90b-f2cdf2370ab2",
+    "code_hash": "7260f3fc18cca67c6d818a1e0eecae81e14a71a22df8cdb1d151789f8fd18460",
+    "expires_at": "2026-07-22T18:01:57.010Z",
+    "purpose": "signup",
+    "used_at": null,
+    "created_at": "2026-07-22T17:46:57.970Z"
+  },
+  {
+    "id": "84a92722-1ae9-4eeb-bed2-478831b01c25",
+    "email": "final-1784742415@blinkgo.de",
+    "user_id": "2717d493-7933-40f3-b90b-f2cdf2370ab2",
+    "code_hash": "2a8610aefdd0028c6bf074dd18721c0ef8bc43241cc7a653d7aedf2036bdf6b3",
+    "expires_at": "2026-07-22T18:02:43.310Z",
+    "purpose": "signup",
+    "used_at": "2026-07-22T17:54:09.178Z",
+    "created_at": "2026-07-22T17:47:43.311Z"
+  },
+  {
+    "id": "a80f6bd2-673e-4a46-8e73-f77dcb6b3b90",
+    "email": "comprehensive-1784742865@blinkgo.de",
+    "user_id": "7b034361-b58f-4dde-8ada-87390aa2054f",
+    "code_hash": "406ee566b996acb2abf54319c0e15468aeae62a89c0fa746ef19c70ee2de4e25",
+    "expires_at": "2026-07-22T18:09:26.393Z",
+    "purpose": "signup",
+    "used_at": null,
+    "created_at": "2026-07-22T17:54:27.158Z"
+  },
+  {
+    "id": "8b49eecf-f618-4a15-abdc-ea03f5460c3b",
+    "email": "comprehensive-1784742865@blinkgo.de",
+    "user_id": "7b034361-b58f-4dde-8ada-87390aa2054f",
+    "code_hash": "cc8a345871a7d0d6a8243b8f7c9fc135a9a34c8e242b3250f99d72adbaea3106",
+    "expires_at": "2026-07-22T18:09:27.983Z",
+    "purpose": "signup",
+    "used_at": null,
+    "created_at": "2026-07-22T17:54:28.377Z"
+  },
+  {
+    "id": "abb07836-0f22-4a76-8b2c-10f0c5b548ad",
+    "email": "zip-test-1784743392@blinkgo.de",
+    "user_id": "8eebd098-5ec2-453c-a801-e98c8447097d",
+    "code_hash": "96ef859ca0fbd2f3e9fc51666206bb5675edc1525cd047df350e408ebbbc7a6b",
+    "expires_at": "2026-07-22T18:18:14.927Z",
+    "purpose": "signup",
+    "used_at": null,
+    "created_at": "2026-07-22T18:03:15.890Z"
+  }
+]
