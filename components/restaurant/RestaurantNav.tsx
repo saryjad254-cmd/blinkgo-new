@@ -10,9 +10,9 @@ import { createBrowserClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/cn';
 
 const T = {
-  de: { brand: 'BlinkGo', subtitle: 'Restaurant-Panel', dashboard: 'Dashboard', orders: 'Bestellungen', menu: 'Menü', settings: 'Einstellungen' },
-  ar: { brand: 'BlinkGo', subtitle: 'لوحة المطعم', dashboard: 'الرئيسية', orders: 'الطلبات', menu: 'القائمة', settings: 'الإعدادات' },
-  en: { brand: 'BlinkGo', subtitle: 'Restaurant Panel', dashboard: 'Dashboard', orders: 'Orders', menu: 'Menu', settings: 'Settings' },
+  de: { brand: 'BlinkGo', subtitle: 'Restaurant-Panel', dashboard: 'Dashboard', orders: 'Bestellungen', kitchen: 'Küche', menu: 'Menü', settings: 'Einstellungen' },
+  ar: { brand: 'BlinkGo', subtitle: 'لوحة المطعم', dashboard: 'الرئيسية', orders: 'الطلبات', kitchen: 'المطبخ', menu: 'القائمة', settings: 'الإعدادات' },
+  en: { brand: 'BlinkGo', subtitle: 'Restaurant Panel', dashboard: 'Dashboard', orders: 'Orders', kitchen: 'Kitchen', menu: 'Menu', settings: 'Settings' },
 };
 
 function detectLocale(): 'de' | 'ar' | 'en' {
@@ -54,7 +54,7 @@ export function RestaurantNav() {
   const links = [
     { href: '/restaurant/dashboard', label: t.dashboard, icon: LayoutDashboard },
     { href: '/restaurant/orders', label: t.orders, icon: ShoppingBag },
-    { href: '/restaurant/kitchen', label: 'Kitchen', icon: ChefHat },
+    { href: '/restaurant/kitchen', label: t.kitchen, icon: ChefHat },
     { href: '/restaurant/menu', label: t.menu, icon: UtensilsCrossed },
     { href: '/restaurant/settings', label: t.settings, icon: Settings },
   ];
@@ -106,14 +106,14 @@ export function RestaurantNav() {
       {/* MOBILE TOP HEADER */}
       <header className="md:hidden sticky top-0 z-30 bg-bg/95 backdrop-blur-xl border-b border-edge-light">
         <div className="px-4 py-3 flex items-center justify-between min-h-[56px]">
-          <Link href="/restaurant/dashboard" className="flex items-center gap-2">
+          <Link href="/restaurant/dashboard" className="flex items-center gap-2 min-w-0">
             <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-brand-yellow via-brand-yellow-hover to-brand-yellow-active flex items-center justify-center overflow-hidden">
               <div className="absolute top-0 start-0 w-full h-0.5 bg-brand-red/40" />
               <span className="font-black italic text-brand-black text-sm">B</span>
             </div>
-            <span className="font-extrabold text-white">{t.brand}</span>
+            <span className="font-extrabold text-white truncate">{t.brand}</span>
           </Link>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <LanguageSwitcher />
             {user && <LogoutButton variant="icon" email={user.email} role={user.role} />}
           </div>
@@ -122,7 +122,7 @@ export function RestaurantNav() {
 
       {/* MOBILE BOTTOM TAB BAR — premium, unified iconography */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-sticky bg-bg-elevated/85 backdrop-blur-2xl border-t border-edge pb-safe-bottom">
-        <div className="grid grid-cols-4 max-w-screen-sm mx-auto">
+        <div className="grid grid-cols-5 max-w-screen-sm mx-auto">
           {links.map((l) => {
             const Icon = l.icon;
             const active = pathname === l.href || pathname.startsWith(`${l.href}/`);
@@ -133,7 +133,7 @@ export function RestaurantNav() {
                 aria-current={active ? 'page' : undefined}
                 aria-label={l.label}
                 className={cn(
-                  'group relative flex flex-col items-center justify-center gap-0.5 py-2.5 min-h-[56px] transition-colors duration-200 ease-silk',
+                  'group relative flex flex-col items-center justify-center gap-0.5 px-0.5 py-2.5 min-h-[56px] min-w-0 transition-colors duration-200 ease-silk',
                   'active:scale-95 touch-manipulation',
                   active ? 'text-brand' : 'text-text-secondary hover:text-white',
                 )}

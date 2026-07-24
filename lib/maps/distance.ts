@@ -73,6 +73,27 @@ export const DEFAULT_MAX_DELIVERY_RADIUS_M = 50_000;
  * the restaurant's own `delivery_radius_km` when configured (> 0),
  * otherwise the platform fallback.
  */
+/**
+ * Is this a usable geographic coordinate?
+ *
+ * ROOT CAUSE THIS GUARDS (Phase 8.3): the cart only checked `!= null`, so a
+ * restaurant row that was never geocoded — latitude/longitude stored as 0, or
+ * null coerced to 0 — passed the guard and produced a distance of ~5688 km to
+ * any German address. Every valid delivery address was then rejected with
+ * "zu weit vom Restaurant entfernt", regardless of the configured radius.
+ *
+ * 0/0 ("Null Island") is treated as MISSING data rather than a real location.
+ */
+export function isValidCoord(lat: unknown, lng: unknown): boolean {
+  const la = Number(lat);
+  const ln = Number(lng);
+  if (!Number.isFinite(la) || !Number.isFinite(ln)) return false;
+  if (la === 0 && ln === 0) return false;            // ungeocoded placeholder
+  if (la < -90 || la > 90) return false;
+  if (ln < -180 || ln > 180) return false;
+  return true;
+}
+
 export function effectiveRadiusMeters(restaurant: { delivery_radius_km?: number | null } | null | undefined): number {
   const km = Number(restaurant?.delivery_radius_km);
   return Number.isFinite(km) && km > 0 ? km * 1000 : DEFAULT_MAX_DELIVERY_RADIUS_M;

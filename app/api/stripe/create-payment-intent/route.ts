@@ -14,6 +14,8 @@ import { getStripe, isStripeConfigured } from '@/lib/stripe/client';
 import { isDevPaymentEnabled, simulateDevPayment } from '@/lib/stripe/dev-mode';
 import { getApiUserWithRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
+import { PAYMENT_ERROR_CODES } from '@/lib/payments/error-codes';
+import { logger } from '@/lib/logging';
 
 export const runtime = 'nodejs';
 export const dynamic = "force-dynamic";
@@ -48,7 +50,7 @@ export async function POST(req: NextRequest) {
         });
       } catch (e: any) {
         return NextResponse.json(
-          { ok: false, error: `Dev payment failed: ${e.message}` },
+          { ok: false, code: PAYMENT_ERROR_CODES.FAILED, error: 'dev_payment_failed' },
           { status: 400 }
         );
       }
@@ -61,7 +63,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           ok: false,
-          error: 'Payments are temporarily unavailable. Please contact support.',
+          code: PAYMENT_ERROR_CODES.CONFIG_MISSING,
+          error: 'payment_config_missing',
           needsKeys: true,
           devPaymentAvailable: isDevPaymentEnabled(),
           // Only include the developer-facing details in NODE_ENV !== 'production'
@@ -101,7 +104,11 @@ export async function POST(req: NextRequest) {
     if (paymentIntentId) {
       const existing = await stripe.paymentIntents.retrieve(paymentIntentId);
       if (existing.status === 'succeeded' || existing.status === 'canceled') {
-        return NextResponse.json({ ok: false, error: `PaymentIntent already ${existing.status}` }, { status: 409 });
+        // Stable code — the client translates it; no raw Stripe status is shown.
+        return NextResponse.json(
+          { ok: false, code: PAYMENT_ERROR_CODES.ALREADY_COMPLETED, error: `PaymentIntent already ${existing.status}` },
+          { status: 409 },
+        );
       }
       return NextResponse.json({
         ok: true,
@@ -111,6 +118,9 @@ export async function POST(req: NextRequest) {
     }
 
     // Create new
+    // Order-scoped idempotency key: a double-clicked checkout button can no
+    // longer create two PaymentIntents for the same order (Stripe returns the
+    // original intent for a repeated key).
     const intent = await stripe.paymentIntents.create({
       amount: Math.round(Number(order.total) * 100), // Stripe expects cents
       currency: 'eur',
@@ -119,7 +129,7 @@ export async function POST(req: NextRequest) {
         customer_id: order.customer_id,
       },
       automatic_payment_methods: { enabled: true },
-    });
+    }, { idempotencyKey: `pi_order_${order.id}` });
 
     // Save to order
     await supabase
@@ -148,6 +158,12 @@ export async function POST(req: NextRequest) {
       paymentIntentId: intent.id,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+    // Never return e.message to the client: it can carry Stripe/DB internals.
+    // The detail is logged server-side in English instead.
+    logger.error('create-payment-intent failed', { message: e?.message, type: e?.type, code: e?.code });
+    return NextResponse.json(
+      { ok: false, code: PAYMENT_ERROR_CODES.INIT_FAILED, error: 'payment_init_failed' },
+      { status: 500 },
+    );
   }
 }

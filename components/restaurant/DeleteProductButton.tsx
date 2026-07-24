@@ -40,8 +40,8 @@ export function DeleteProductButton({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl p-6 max-w-sm w-full">
-        <h3 className="text-lg font-bold text-gray-900 mb-2">تأكيد الحذف</h3>
+      <div className="bg-bg-card border border-edge rounded-2xl p-6 max-w-sm w-full shadow-speed-lg">
+        <h3 className="text-lg font-bold text-text mb-2">تأكيد الحذف</h3>
         <p className="text-sm text-gray-600 mb-4">
           هل أنت متأكد من حذف <strong>{productName}</strong>؟ لا يمكن التراجع.
         </p>

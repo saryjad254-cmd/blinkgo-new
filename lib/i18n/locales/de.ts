@@ -1883,6 +1883,19 @@ const de = {
     forecast: 'Prognose',
     reports: 'Berichte',
   },
+  payments: {
+    initFailed: 'Die Zahlung konnte nicht gestartet werden. Bitte versuche es erneut.',
+    declined: 'Deine Karte wurde abgelehnt. Bitte nutze eine andere Zahlungsmethode.',
+    invalidCard: 'Die Kartendaten sind ungültig. Bitte überprüfe deine Eingabe.',
+    cancelled: 'Die Zahlung wurde abgebrochen.',
+    alreadyCompleted: 'Diese Bestellung wurde bereits bezahlt.',
+    configMissing: 'Zahlungen sind vorübergehend nicht verfügbar. Bitte kontaktiere den Support.',
+    networkError: 'Netzwerkfehler. Bitte prüfe deine Verbindung und versuche es erneut.',
+    retry: 'Zahlung erneut versuchen',
+    succeeded: 'Zahlung erfolgreich!',
+    processing: 'Zahlung wird verarbeitet…',
+    genericFailed: 'Die Zahlung ist fehlgeschlagen. Bitte versuche es erneut.',
+  },
 };
 export default de;
 export type Translations = typeof de;

@@ -9,6 +9,16 @@ export const dynamic = 'force-dynamic';
  * GET /api/restaurant/dashboard
  * Returns live stats and active orders for the current restaurant.
  */
+/**
+ * Canonical operational status buckets — the single definition shared by the
+ * dashboard counters and the active order list, so one order can never be
+ * counted in two incompatible buckets and SSR/realtime totals agree.
+ */
+const ACTIVE_STATUSES = ['pending', 'confirmed', 'preparing', 'ready'] as const;
+
+/** Orders older than this are excluded from LIVE queues (not deleted). */
+const STALE_ACTIVE_HOURS = 24;
+
 export async function GET() {
   const user = await requireApiRole('restaurant');
   if (!user) {
@@ -19,7 +29,7 @@ export async function GET() {
     // First try with all v38 columns, fallback to basic
     let { data: restaurant } = await svc
       .from('restaurants')
-      .select('id, is_active, is_paused, busy_mode, busy_mode_until, rating, review_count')
+      .select('*')  // tolerant: is_online may not exist until migration 47 is applied
       .eq('owner_id', user.id)
       .maybeSingle();
     if (!restaurant) {
@@ -48,7 +58,16 @@ export async function GET() {
         .from('orders')
         .select('id, order_number, status, total, created_at, delivery_address, customer_id, accepted_at, prepared_at')
         .eq('restaurant_id', r.id)
-        .in('status', ['pending', 'confirmed', 'preparing', 'ready'])
+        // CANONICAL ACTIVE BUCKET (must match the order list and the counters):
+        // pending | confirmed | preparing | ready.
+        // delivered / cancelled / picked_up / delivering are NOT active for a
+        // restaurant — the food has left the kitchen.
+        .in('status', ACTIVE_STATUSES)
+        // Stale guard: orders stuck in a non-terminal state for more than
+        // STALE_ACTIVE_HOURS are excluded from the LIVE queue so old test rows
+        // cannot inflate counters or drive absurd timers. Nothing is deleted —
+        // history pages still show them.
+        .gte('created_at', new Date(Date.now() - STALE_ACTIVE_HOURS * 3600_000).toISOString())
         .order('created_at', { ascending: true })
         .limit(20),
       svc

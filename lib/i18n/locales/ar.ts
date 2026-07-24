@@ -1869,6 +1869,19 @@ common: {
     forecast: 'التوقعات',
     reports: 'التقارير',
   },
+  payments: {
+    initFailed: 'تعذّر بدء عملية الدفع. يرجى المحاولة مرة أخرى.',
+    declined: 'تم رفض بطاقتك. يرجى استخدام وسيلة دفع أخرى.',
+    invalidCard: 'بيانات البطاقة غير صحيحة. يرجى التحقق من إدخالك.',
+    cancelled: 'تم إلغاء عملية الدفع.',
+    alreadyCompleted: 'تم دفع هذا الطلب بالفعل.',
+    configMissing: 'الدفع غير متاح مؤقتاً. يرجى التواصل مع الدعم.',
+    networkError: 'خطأ في الشبكة. يرجى التحقق من اتصالك والمحاولة مرة أخرى.',
+    retry: 'إعادة محاولة الدفع',
+    succeeded: 'تم الدفع بنجاح!',
+    processing: 'جارٍ معالجة الدفع…',
+    genericFailed: 'فشلت عملية الدفع. يرجى المحاولة مرة أخرى.',
+  },
 };
 export default ar;
 export type Translations = typeof ar;

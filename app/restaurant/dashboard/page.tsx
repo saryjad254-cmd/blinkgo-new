@@ -34,7 +34,7 @@ async function getDashboardData(restaurantId: string) {
   const [restaurantRes, activeOrdersRes, todayOrdersRes] = await Promise.all([
     supabase
       .from('restaurants')
-      .select('id, name, is_active, is_paused, busy_mode, busy_mode_until, address, phone, rating, review_count')
+      .select('*')  // tolerant: is_online arrives with migration 47
       .eq('id', restaurantId)
       .maybeSingle(),
     supabase
@@ -91,7 +91,11 @@ async function getDashboardData(restaurantId: string) {
     restaurantId,
     restaurant: r,
     restaurantName: r?.name ?? 'Restaurant',
-    isOnline: !!r?.is_active,
+    // AVAILABILITY MODEL: operational state is is_online; is_active is the
+    // account/listing flag and must not stand in for it. Until migration 47 is
+    // applied the column is absent, so fall back to "online" rather than
+    // reporting every restaurant as offline.
+    isOnline: (r as any)?.is_online ?? true,
     isPaused: !!r?.is_paused,
     busyMode: !!r?.busy_mode,
     avgPrepMin: 15,
@@ -134,7 +138,7 @@ export default async function RestaurantDashboardPage() {
           <Card className="animate-slide-up">
             <div className="flex items-center gap-3 mb-4">
               <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-md ${
-                data.restaurant?.is_active
+                ((data.restaurant as any)?.is_online ?? true)
                   ? 'bg-gradient-to-br from-emerald-500 to-green-600'
                   : 'bg-surface-elevated'
               }`}>
@@ -142,17 +146,17 @@ export default async function RestaurantDashboardPage() {
               </div>
               <div>
                 <p className="text-xs text-text-muted uppercase tracking-wider">{labels.statusHeader}</p>
-                <p className={`text-base font-extrabold ${data.restaurant?.is_active ? 'text-emerald-500' : 'text-text-secondary'}`}>
-                  ● {data.restaurant?.is_active ? labels.online : labels.offline}
+                <p className={`text-base font-extrabold ${((data.restaurant as any)?.is_online ?? true) ? 'text-emerald-500' : 'text-text-secondary'}`}>
+                  ● {((data.restaurant as any)?.is_online ?? true) ? labels.online : labels.offline}
                 </p>
                 <p className="text-xs text-text-secondary mt-0.5">
-                  {data.restaurant?.is_active ? labels.onlineDesc : labels.offlineDesc}
+                  {((data.restaurant as any)?.is_online ?? true) ? labels.onlineDesc : labels.offlineDesc}
                 </p>
               </div>
             </div>
             <ToggleOnlineButton
               restaurantId={restaurantId}
-              initialActive={data.restaurant?.is_active ?? false}
+              initialActive={(data.restaurant as any)?.is_online ?? true}
             />
           </Card>
 

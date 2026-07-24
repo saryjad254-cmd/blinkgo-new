@@ -214,7 +214,7 @@ function Checkbox({
         defaultChecked={defaultChecked}
         className="w-4 h-4 rounded border-gray-300 text-brand focus:ring-brand"
       />
-      <span className="text-sm text-gray-700">{label}</span>
+      <span className="text-sm text-text-secondary">{label}</span>
     </label>
   );
 }

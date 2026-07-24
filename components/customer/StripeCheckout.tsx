@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useT, useI18n } from '@/lib/i18n/I18nProvider';
 import { CreditCard, Loader2, AlertTriangle, FlaskConical } from 'lucide-react';
 import { formatCurrency } from '@/lib/i18n/format';
+import { PAYMENT_ERROR_CODES, paymentErrorMessage, stripeErrorToCode } from '@/lib/payments/error-codes';
 
 interface Props {
   orderId: string;
@@ -105,19 +106,12 @@ export function StripeCheckout({ orderId, amount, onSuccess }: Props) {
       const data = await res.json();
 
       if (!data.ok) {
-        if (data.needsKeys) {
-          setError(
-            data.devPaymentAvailable
-              ? (locale === 'ar'
-                  ? 'Stripe غير مُهيّأ. وضع التطوير متاح أدناه.'
-                  : locale === 'en'
-                  ? 'Stripe is not configured yet. DEV MODE is offered below.'
-                  : 'Stripe ist noch nicht konfiguriert. DEV MODE wird unten angeboten.')
-              : E.stripeNotConfigured
-          );
-        } else {
-          setError(data.error || E.paymentStartFailed);
-        }
+        // Stable code → translated copy. `data.error` (raw server/Stripe text)
+        // is never rendered; it stays in the server logs only.
+        const code = data.needsKeys
+          ? PAYMENT_ERROR_CODES.CONFIG_MISSING
+          : data.code || PAYMENT_ERROR_CODES.INIT_FAILED;
+        setError(paymentErrorMessage(t, code));
         setLoading(false);
         return;
       }
@@ -133,7 +127,7 @@ export function StripeCheckout({ orderId, amount, onSuccess }: Props) {
       // Real Stripe path
       const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
       if (!publishableKey) {
-        setError(E.stripeMissingKey);
+        setError(paymentErrorMessage(t, PAYMENT_ERROR_CODES.CONFIG_MISSING));
         setLoading(false);
         return;
       }
@@ -141,7 +135,7 @@ export function StripeCheckout({ orderId, amount, onSuccess }: Props) {
       const { loadStripe } = await import('@stripe/stripe-js');
       const stripe = await loadStripe(publishableKey);
       if (!stripe) {
-        setError(E.stripeJsLoadFailed);
+        setError(paymentErrorMessage(t, PAYMENT_ERROR_CODES.CONFIG_MISSING));
         setLoading(false);
         return;
       }
@@ -153,12 +147,19 @@ export function StripeCheckout({ orderId, amount, onSuccess }: Props) {
       });
 
       if (result.error) {
-        setError(result.error.message || E.paymentFailed);
+        // Only the code/type is inspected; result.error.message is discarded so
+        // untranslated Stripe copy can never reach the customer.
+        setError(paymentErrorMessage(t, stripeErrorToCode(result.error as any)));
       } else {
         onSuccess?.();
       }
     } catch (e: any) {
-      setError(e.message || E.unknown);
+      // Never surface exception text. A failed fetch is a network problem;
+      // anything else is a generic payment failure.
+      const isNetwork = e?.name === 'TypeError' || /fetch|network/i.test(String(e?.message ?? ''));
+      setError(paymentErrorMessage(t, isNetwork ? PAYMENT_ERROR_CODES.NETWORK : PAYMENT_ERROR_CODES.FAILED));
+      // eslint-disable-next-line no-console
+      console.error('[StripeCheckout] payment error', e);
     } finally {
       setLoading(false);
     }

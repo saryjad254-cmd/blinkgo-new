@@ -153,6 +153,19 @@ http.createServer(async (req, res) => {
     return json(res, 401, { code: 'PGRST301', message: 'invalid JWT: unable to parse or verify signature, token is unverifiable: error while executing keyfunc: unrecognized JWT kid <nil> for algorithm ES256', details: null, hint: null });
   }
 
+
+  // ── Phase 8.1: restaurants UPDATE (availability) ──
+  if (url.pathname === '/rest/v1/restaurants' && req.method === 'PATCH') {
+    const body = Array.isArray(parsed) ? parsed[0] : parsed;
+    LOG(`RESTAURANT_UPDATE ${JSON.stringify(body).slice(0,120)}`);
+    return json(res, 200, [{ id: 'rest-1', ...body }]);
+  }
+  // ── Phase 8.1: single order fetch + status PATCH ──
+  if (url.pathname === '/rest/v1/orders' && req.method === 'PATCH') {
+    const body = Array.isArray(parsed) ? parsed[0] : parsed;
+    LOG(`ORDER_UPDATE ${JSON.stringify(body).slice(0,120)}`);
+    return json(res, 200, [{ id: 'o1', restaurant_id: 'rest-1', customer_id: 'newuser0-1111-2222-3333-444455556666', ...body }]);
+  }
   // ── Phase 6.6: support_tickets CHECK constraint as deployed ──
   if (url.pathname === '/rest/v1/support_tickets' && req.method === 'POST') {
     const rows = Array.isArray(parsed) ? parsed : [parsed];
@@ -186,6 +199,13 @@ http.createServer(async (req, res) => {
 
   // ── Phase 6.4: /rest/v1/orders with configurable failure modes ──
   if (url.pathname === '/rest/v1/orders' && req.method === 'GET') {
+    if ((req.headers.accept || '').includes('vnd.pgrst.object')) {
+      const st = process.env.ORDER_STATUS || 'pending';
+      const owner = process.env.ORDER_RESTAURANT || 'rest-1';
+      return json(res, 200, { id: 'o1', order_number: 'A-1', status: st, restaurant_id: owner,
+        customer_id: 'newuser0-1111-2222-3333-444455556666', driver_id: null, total: 24.5,
+        created_at: new Date(Date.now() - 3 * 86400000).toISOString(), accepted_at: null, prepared_at: null });
+    }
     const mode = process.env.ORDERS_MODE || 'ok';
     const auth = req.headers.authorization || '';
     LOG('ORDERS_AUTH_HDR=' + auth.slice(0,30) + ' apikey=' + String(req.headers.apikey||'').slice(0,18));

@@ -82,7 +82,24 @@ export async function PATCH(req: NextRequest): Promise<NextResponse> {
     const role = profile?.role || 'customer';
     const isAdmin = role === 'admin';
     const isDriver = role === 'driver' && (order.driver_id === user.id || (!order.driver_id && status === 'confirmed'));
-    const isRestaurant = role === 'restaurant';
+    // SECURITY FIX (Phase 8.1): the documented rule is "Restaurant: only their
+    // own restaurant's orders", but the role check alone allowed ANY restaurant
+    // user to mutate ANY order. Ownership is now verified against
+    // restaurants.owner_id, matching the RLS model used elsewhere.
+    let isRestaurant = false;
+    if (role === 'restaurant') {
+      const { data: ownedRestaurant } = await supabase
+        .from('restaurants')
+        .select('id')
+        .eq('owner_id', user.id)
+        .maybeSingle();
+      isRestaurant = !!ownedRestaurant && ownedRestaurant.id === order.restaurant_id;
+      if (!isRestaurant) {
+        logger.warn('Restaurant attempted to mutate another restaurant order', {
+          user_id: user.id, order_id, order_restaurant: order.restaurant_id,
+        });
+      }
+    }
     // Customer can only cancel their own order (and only before preparation starts)
     const isCustomer = role === 'customer' && order.customer_id === user.id && status === 'cancelled';
 

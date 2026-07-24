@@ -228,7 +228,10 @@ function ForgotPasswordInner() {
                   ) : (
                     <>
                       {t.submit}
-                      <Arrow className="w-4 h-4 rtl:rotate-180" strokeWidth={2.5} />
+                      {/* FIX (v91): the icon is already direction-aware (see the
+                          `Arrow` selection above), so the extra rtl:rotate-180
+                          flipped it a second time and pointed it the wrong way. */}
+                      <Arrow className="w-4 h-4" strokeWidth={2.5} />
                     </>
                   )}
                 </button>

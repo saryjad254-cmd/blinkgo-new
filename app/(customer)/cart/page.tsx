@@ -18,7 +18,7 @@ import { EmptyStateClient } from '@/components/shared/EmptyStateClient';
 import { useToast } from '@/components/ui/Toast';
 import { useT, useI18n } from '@/lib/i18n/I18nProvider';
 import { formatEUR } from '@/lib/format';
-import { haversineKm, formatDistance, effectiveRadiusMeters } from '@/lib/maps/distance';
+import { haversineKm, formatDistance, effectiveRadiusMeters, isValidCoord } from '@/lib/maps/distance';
 import { AddressWithMap } from '@/components/shared/AddressWithMap';
 import { TipSelector } from '@/components/cart/TipSelector';
 import { PromoCodeInput } from '@/components/cart/PromoCodeInput';
@@ -182,10 +182,20 @@ export default function CartPage() {
     // delivery_radius_km when configured, else the platform fallback.
     // (Zone-based acceptance is server-side only, so this client check can
     // only ever be equal to or MORE permissive than the server — never stricter.)
-    if (items[0]?.restaurant_lat != null && items[0]?.restaurant_lng != null) {
+    // FIX (v92): `!= null` accepted 0/0 from restaurants that were never
+    // geocoded, yielding ~5688 km and blocking every valid address. When the
+    // cart lacks usable restaurant coordinates (e.g. an item persisted by an
+    // older cart schema), we do NOT guess and do NOT apply a fixed fallback —
+    // we defer to the server's canonical checkDeliveryDistance in /api/orders,
+    // which re-reads the restaurant row fresh. The client check therefore stays
+    // equal to or more permissive than the server, never stricter.
+    const canValidateLocally =
+      isValidCoord(items[0]?.restaurant_lat, items[0]?.restaurant_lng) &&
+      isValidCoord(addressLat, addressLng);
+    if (canValidateLocally) {
       const km = haversineKm(
-        { lat: items[0].restaurant_lat, lng: items[0].restaurant_lng },
-        { lat: addressLat, lng: addressLng }
+        { lat: Number(items[0].restaurant_lat), lng: Number(items[0].restaurant_lng) },
+        { lat: Number(addressLat), lng: Number(addressLng) }
       );
       const maxKm = effectiveRadiusMeters({ delivery_radius_km: items[0]?.restaurant_delivery_radius_km }) / 1000;
       if (km > maxKm) {

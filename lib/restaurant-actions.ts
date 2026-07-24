@@ -216,13 +216,21 @@ export async function updateRestaurantSettings(formData: FormData): Promise<Acti
   return { ok: true, data: undefined };
 }
 
-export async function toggleRestaurantOnline(isActive: boolean): Promise<ActionResult> {
+/**
+ * Toggle OPERATIONAL availability (online/offline).
+ *
+ * Previously wrote `is_active`, which is the ACCOUNT/LISTING flag — so an owner
+ * going offline for the evening deactivated their listing entirely, and the
+ * dashboard's two availability controls disagreed. Operational state is
+ * `is_online` (see deploy/supabase/47-restaurant-is-online.sql).
+ */
+export async function toggleRestaurantOnline(isOnline: boolean): Promise<ActionResult> {
   const { restaurantId } = await requireRestaurantId();
   const supabase = createServerClient();
 
   const { error } = await supabase
     .from('restaurants')
-    .update({ is_active: isActive })
+    .update({ is_online: isOnline })
     .eq('id', restaurantId);
 
   if (error) return fail(error.message);

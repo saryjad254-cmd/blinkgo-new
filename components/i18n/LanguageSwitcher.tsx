@@ -58,7 +58,7 @@ export function LanguageSwitcher({ className }: { className?: string }) {
       {open && (
         <div
           role="menu"
-          className="absolute end-0 mt-2 z-modal min-w-[220px] card-glass p-1.5 shadow-speed-xl animate-fade-in-down origin-top-end"
+          className="absolute end-0 mt-2 z-modal min-w-[200px] max-w-[calc(100vw-1.5rem)] card-glass p-1.5 shadow-speed-xl animate-fade-in-down origin-top-end"
         >
           <div className="px-3 py-2 mb-1">
             <p className="text-[10px] font-extrabold uppercase tracking-wider text-text-muted">

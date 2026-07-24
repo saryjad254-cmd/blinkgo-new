@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Clock, ChefHat, Package, Check, AlertCircle } from 'lucide-react';
 import { useRealtime } from '@/lib/realtime/use-realtime';
+import { elapsedInfo, formatDuration } from '@/lib/order-timing';
 
 interface Order {
   id: string;
@@ -119,8 +120,9 @@ export function KitchenView({ initialOrders }: KitchenViewProps) {
                   </div>
                 ) : (
                   colOrders.map((order) => {
-                    const elapsed = Math.floor((Date.now() - new Date(order.created_at).getTime()) / 60000);
-                    const isUrgent = elapsed > 20;
+                    const timing = elapsedInfo(order as any);
+                    const elapsed = timing.minutes ?? 0;
+                    const isUrgent = !timing.isStale && elapsed > 20;
                     return (
                       <div
                         key={order.id}
@@ -135,7 +137,7 @@ export function KitchenView({ initialOrders }: KitchenViewProps) {
                           <div className="flex items-center gap-1 text-xs text-zinc-500">
                             <Clock className="h-3 w-3" />
                             <span className={isUrgent ? 'font-bold text-rose-500' : ''}>
-                              {elapsed}m
+                              {timing.isStale ? '24h+' : formatDuration(elapsed)}
                             </span>
                           </div>
                         </div>

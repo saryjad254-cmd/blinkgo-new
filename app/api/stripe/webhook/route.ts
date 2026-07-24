@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getStripe, isStripeConfigured } from '@/lib/stripe/client';
 import type Stripe from 'stripe';
 import { createServiceClient } from '@/lib/supabase/service';
+import { logger } from '@/lib/logging';
 
 export const runtime = 'nodejs';
 export const dynamic = "force-dynamic";
@@ -52,6 +53,19 @@ export async function POST(req: NextRequest) {
         const intent = event.data.object as Stripe.PaymentIntent;
         const orderId = intent.metadata.order_id;
         if (orderId) {
+          // IDEMPOTENCY (v92): Stripe retries deliver the same event more than
+          // once. The order/payment UPDATEs below are naturally idempotent, but
+          // the tracking-event INSERT and the customer notification are not —
+          // a retry previously produced duplicate history rows and a second
+          // "payment received" message. Detect prior processing first and run
+          // the one-shot side-effects only when this is genuinely new.
+          const { data: prior } = await supabase
+            .from('orders')
+            .select('payment_status')
+            .eq('id', orderId)
+            .maybeSingle();
+          const alreadyPaid = prior?.payment_status === 'paid';
+
           await supabase
             .from('orders')
             .update({
@@ -70,20 +84,25 @@ export async function POST(req: NextRequest) {
             }).eq('stripe_payment_intent_id', intent.id);
           } catch (e) { /* table may not exist */ }
 
-          // Add tracking event
-          try {
-            await supabase.from('order_tracking_events').insert({
-              order_id: orderId,
-              event_type: 'payment',
-              metadata: { status: 'succeeded', amount: intent.amount },
-            });
-          } catch (e) { /* table may not exist */ }
+          // One-shot side-effects — skipped on a duplicate delivery.
+          if (!alreadyPaid) {
+            try {
+              await supabase.from('order_tracking_events').insert({
+                order_id: orderId,
+                event_type: 'payment',
+                metadata: { status: 'succeeded', amount: intent.amount },
+              });
+            } catch (e) { /* table may not exist */ }
 
-          // Send notifications
-          const { notifyOrderEvent } = await import('@/lib/notifications');
-          const { data: order } = await supabase.from('orders').select('id, customer_id, driver_id, restaurant_id').eq('id', orderId).single();
-          if (order) {
-            await notifyOrderEvent(order, 'order_accepted', { customer: 'Payment received' }, { customer: 'Your payment has been confirmed' });
+            const { notifyOrderEvent } = await import('@/lib/notifications');
+            const { data: order } = await supabase.from('orders').select('id, customer_id, driver_id, restaurant_id').eq('id', orderId).single();
+            if (order) {
+              await notifyOrderEvent(order, 'order_accepted', { customer: 'Payment received' }, { customer: 'Your payment has been confirmed' });
+            }
+          } else {
+            logger.info('Stripe webhook: duplicate payment_intent.succeeded ignored', {
+              order_id: orderId, event_id: event.id,
+            });
           }
         }
         break;

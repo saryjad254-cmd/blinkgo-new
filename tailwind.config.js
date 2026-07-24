@@ -113,10 +113,21 @@ module.exports = {
           900: '#7F1D1D',
         },
         // Brand color tokens (mirror of CSS vars for utility classes)
-        'brand-red': '#DC2626',
+        // FIX (v91): these were plain strings, so the ~370 existing usages of
+        // `brand-red-500` / `brand-yellow-500` resolved to NOTHING. Shades are
+        // aliases of the already-defined brand/accent scales — no new colours.
+        'brand-red': {
+          DEFAULT: '#DC2626',
+          50: '#FEF2F2', 100: '#FEE2E2', 200: '#FECACA', 300: '#FCA5A5', 400: '#F87171',
+          500: '#DC2626', 600: '#DC2626', 700: '#B91C1C', 800: '#991B1B', 900: '#7F1D1D',
+        },
         'brand-red-hover': '#B91C1C',
         'brand-red-active': '#991B1B',
-        'brand-yellow': '#F5B819',
+        'brand-yellow': {
+          DEFAULT: '#F5B819',
+          50: '#FFFBEB', 100: '#FEF3C7', 200: '#FDE68A', 300: '#FCD34D', 400: '#FBBF24',
+          500: '#F5B819', 600: '#D97706', 700: '#B45309', 800: '#92400E', 900: '#78350F',
+        },
         'brand-yellow-hover': '#D97706',
         'brand-yellow-active': '#B45309',
         'brand-black': '#0A0A0A',
@@ -138,6 +149,12 @@ module.exports = {
         },
         // Neutral: deep ink scale (rich blacks, premium contrast)
         ink: {
+          // FIX (v91): components use ink-1 / ink-2 / ink-3 (121 usages) but the
+          // scale defined only 0/50/100…900, so those classes resolved to
+          // nothing. Aliased to existing steps of this same scale.
+          1:    '#FAFAFA',
+          2:    '#A1A1AA',
+          3:    '#3F3F46',
           0:    '#FFFFFF',
           50:   '#FAFAFA',
           100:  '#F4F4F5',
@@ -151,10 +168,13 @@ module.exports = {
           900:  '#09090B',  // pure black for backgrounds
         },
         // Semantic
-        success: { DEFAULT: '#10B981', light: '#34D399', dark: '#059669' },
-        warning: { DEFAULT: '#F59E0B', light: '#FBBF24', dark: '#D97706' },
-        danger:  { DEFAULT: '#EF4444', light: '#F87171', dark: '#DC2626' },
-        info:    { DEFAULT: '#3B82F6', light: '#60A5FA', dark: '#2563EB' },
+        // FIX (v91): numeric shades added — components referenced `success-500`,
+        // `danger-500`, `info-500` etc., which were never defined and rendered
+        // colourless. Values reuse the existing DEFAULT/light/dark tokens.
+        success: { DEFAULT: '#10B981', light: '#34D399', dark: '#059669', 300: '#34D399', 400: '#34D399', 500: '#10B981', 600: '#059669', 700: '#059669' },
+        warning: { DEFAULT: '#F59E0B', light: '#FBBF24', dark: '#D97706', 300: '#FBBF24', 400: '#FBBF24', 500: '#F59E0B', 600: '#D97706', 700: '#D97706' },
+        danger:  { DEFAULT: '#EF4444', light: '#F87171', dark: '#DC2626', 300: '#F87171', 400: '#F87171', 500: '#EF4444', 600: '#DC2626', 700: '#DC2626' },
+        info:    { DEFAULT: '#3B82F6', light: '#60A5FA', dark: '#2563EB', 300: '#60A5FA', 400: '#60A5FA', 500: '#3B82F6', 600: '#2563EB', 700: '#2563EB' },
 
         // Premium accents (for order statuses, badges, special moments)
         rose:    { DEFAULT: '#FB7185', light: '#FDA4AF', dark: '#E11D48' },  // pink — for promotions/loved
@@ -215,6 +235,13 @@ module.exports = {
       // ════════════════════════════════════════════════════════════════
       // BORDER RADIUS — gentler scale, premium feel
       // ════════════════════════════════════════════════════════════════
+      borderColor: {
+        // FIX (v91): Tailwind's default border colour is #e5e7eb (near-white).
+        // On this dark theme any `border-2` with an unresolved colour class
+        // rendered a harsh white "wireframe" outline. Default to the theme token.
+        DEFAULT: 'var(--border)',
+      },
+
       borderRadius: {
         none: '0',
         xs:   '6px',

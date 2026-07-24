@@ -25,7 +25,7 @@ import { useOnlineStatus } from '@/lib/hooks/use-online-status';
 import { useRealtime } from '@/lib/realtime/use-realtime';
 import { haptic } from '@/lib/utils/haptics';
 import { playDriverSound } from '@/lib/utils/driver-sound';
-import { apiGet, apiPost } from '@/lib/api/client';
+import { apiGet, apiPatch, apiPost } from '@/lib/api/client';
 import { formatEUR } from '@/lib/format';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { StatCard } from '@/components/ui/Card';
@@ -142,22 +142,21 @@ export function RestaurantLiveDashboardV2({
     setActiveOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, status: 'confirmed' as const, accepted_at: new Date().toISOString() } : o))
     );
-    try {
-      await apiPost(`/api/restaurant/orders/${orderId}/accept`, {});
-    } catch {
-      // Refetch on failure
-      refetchOrders();
-    }
+    // Canonical lifecycle endpoint: validates the transition, stamps
+    // accepted_at, emits tracking + notifications. pending → confirmed.
+    const res = await apiPatch('/api/orders/status', { order_id: orderId, status: 'confirmed' });
+    if (!res.ok) refetchOrders();
   };
 
   const handleReject = async (orderId: string) => {
     haptic('warning');
     setActiveOrders((prev) => prev.filter((o) => o.id !== orderId));
-    try {
-      await apiPost(`/api/restaurant/orders/${orderId}/reject`, { reason: 'busy' });
-    } catch {
-      // ignore
-    }
+    // Reject = cancel the order (pending → cancelled is the only legal
+    // "refuse" transition in the lifecycle).
+    const res = await apiPatch('/api/orders/status', {
+      order_id: orderId, status: 'cancelled', metadata: { reason: 'restaurant_rejected' },
+    });
+    if (!res.ok) refetchOrders();
   };
 
   const handleStartPreparing = async (orderId: string) => {
@@ -165,11 +164,10 @@ export function RestaurantLiveDashboardV2({
     setActiveOrders((prev) =>
       prev.map((o) => (o.id === orderId ? { ...o, status: 'preparing' as const } : o))
     );
-    try {
-      await apiPost(`/api/restaurant/orders/${orderId}/start-preparing`, {});
-    } catch {
-      // ignore
-    }
+    // confirmed → preparing. Stamps prepared_at, which is what the prep timer
+    // measures from.
+    const res = await apiPatch('/api/orders/status', { order_id: orderId, status: 'preparing' });
+    if (!res.ok) refetchOrders();
   };
 
   const handleMarkReady = async (orderId: string) => {
@@ -177,11 +175,9 @@ export function RestaurantLiveDashboardV2({
     playDriverSound('arrived');
     setActiveOrders((prev) => prev.filter((o) => o.id !== orderId));
     setTodayCount((c) => c + 1);
-    try {
-      await apiPost(`/api/restaurant/orders/${orderId}/ready`, {});
-    } catch {
-      // ignore
-    }
+    // preparing → ready. Triggers driver auto-assignment server-side.
+    const res = await apiPatch('/api/orders/status', { order_id: orderId, status: 'ready' });
+    if (!res.ok) { setTodayCount((c) => Math.max(0, c - 1)); refetchOrders(); }
   };
 
   const refetchOrders = useCallback(async () => {
@@ -202,34 +198,27 @@ export function RestaurantLiveDashboardV2({
   const toggleOnline = async () => {
     const newState = !isOnline;
     setIsOnline(newState);
-    try {
-      await apiPost('/api/restaurant/online', { is_online: newState });
-      haptic('success');
-    } catch {
-      setIsOnline(!newState);
-    }
+    const res = await apiPost('/api/restaurant/online', { is_online: newState });
+    if (res.ok) haptic('success');
+    else setIsOnline(!newState); // roll back only on a real server failure
   };
 
   const togglePaused = async () => {
     const newState = !isPaused;
     setIsPaused(newState);
-    try {
-      await apiPost('/api/restaurant/paused', { is_paused: newState });
-      haptic('medium');
-    } catch {
-      setIsPaused(!newState);
-    }
+    // Implemented route is /pause and its contract is { paused }.
+    const res = await apiPost('/api/restaurant/pause', { paused: newState });
+    if (res.ok) haptic('medium');
+    else setIsPaused(!newState);
   };
 
   const toggleBusy = async () => {
     const newState = !busyMode;
     setBusyMode(newState);
-    try {
-      await apiPost('/api/restaurant/busy', { busy_mode: newState });
-      haptic('warning');
-    } catch {
-      setBusyMode(!newState);
-    }
+    // Implemented route is /busy-mode and its contract is { busy, minutes }.
+    const res = await apiPost('/api/restaurant/busy-mode', { busy: newState });
+    if (res.ok) haptic('warning');
+    else setBusyMode(!newState);
   };
 
   return (

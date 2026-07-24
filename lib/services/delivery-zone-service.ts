@@ -10,7 +10,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service';
-import { haversineDistance, effectiveRadiusMeters, DEFAULT_MAX_DELIVERY_RADIUS_M, type LatLng } from '@/lib/maps/distance';
+import { haversineDistance, effectiveRadiusMeters, isValidCoord, DEFAULT_MAX_DELIVERY_RADIUS_M, type LatLng } from '@/lib/maps/distance';
 import { isInZone, type DeliveryZone } from '@/lib/maps/zones';
 import { logger } from '@/lib/logging';
 
@@ -39,7 +39,10 @@ export async function checkDeliveryDistance(
   customerLocation: { lat: number; lng: number }
 ): Promise<DeliveryCheckResult> {
   // No restaurant coordinates → can't check
-  if (restaurant.latitude == null || restaurant.longitude == null) {
+  // PARITY FIX (v92): `== null` accepted 0/0 from restaurants that were never
+  // geocoded, producing a ~5688 km distance and rejecting every valid address.
+  // Unusable coordinates mean "cannot validate distance", not "too far".
+  if (!isValidCoord(restaurant.latitude, restaurant.longitude)) {
     return { ok: true };
   }
 

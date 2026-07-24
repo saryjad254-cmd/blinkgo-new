@@ -120,7 +120,7 @@ export function RestaurantSettingsForm({ restaurant }: { restaurant: Restaurant 
           className="w-4 h-4 rounded border-gray-300 text-brand focus:ring-brand"
         />
         <div>
-          <p className="font-medium text-gray-900 text-sm">المطعم نشط</p>
+          <p className="font-medium text-text text-sm">المطعم نشط</p>
           <p className="text-xs text-gray-500">يستقبل طلبات جديدة</p>
         </div>
       </label>

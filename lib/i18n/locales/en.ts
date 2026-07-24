@@ -2029,6 +2029,19 @@ common: {
     forecast: 'Forecast',
     reports: 'Reports',
   },
+  payments: {
+    initFailed: 'Payment could not be started. Please try again.',
+    declined: 'Your card was declined. Please use a different payment method.',
+    invalidCard: 'The card details are invalid. Please check your input.',
+    cancelled: 'The payment was cancelled.',
+    alreadyCompleted: 'This order has already been paid.',
+    configMissing: 'Payments are temporarily unavailable. Please contact support.',
+    networkError: 'Network error. Please check your connection and try again.',
+    retry: 'Retry payment',
+    succeeded: 'Payment successful!',
+    processing: 'Processing payment…',
+    genericFailed: 'The payment failed. Please try again.',
+  },
 };
 export default en;
 export type Translations = typeof en;

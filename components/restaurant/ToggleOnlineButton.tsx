@@ -54,7 +54,7 @@ export function ToggleOnlineButton({
         className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${
           active
             ? 'bg-green-600 hover:bg-green-700 text-white'
-            : 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+            : 'bg-bg-elevated hover:bg-ink-3 text-text-secondary'
         }`}
       >
         {pending ? (

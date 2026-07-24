@@ -176,6 +176,47 @@ export async function apiPost<T = unknown>(
 }
 
 /**
+ * PATCH helper — mirrors apiPost. Added so restaurant order actions can use
+ * the canonical `PATCH /api/orders/status` endpoint instead of duplicating
+ * order-lifecycle logic in bespoke routes.
+ */
+export async function apiPatch<T = unknown>(
+  url: string,
+  body?: unknown,
+  options: Omit<ApiClientOptions, 'skipCache'> = {}
+): Promise<ApiResponse<T>> {
+  const { timeout = 25_000, signal } = options;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  try {
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: body ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+    return (await res.json()) as ApiResponse<T>;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : 'Network error';
+    logger.warn('API PATCH failed', { url, error: message });
+    return {
+      ok: false,
+      error: { code: 'NETWORK', message, statusCode: 0 },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Invalidate cached GET response for a URL.
  * Call after a mutation that would change the response.
  */
