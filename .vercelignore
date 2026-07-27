@@ -1,0 +1,100 @@
+# ════════════════════════════════════════════════════════════════
+# BlinkGo Vercel Ignore
+# ════════════════════════════════════════════════════════════════
+# Files that should NOT be uploaded to Vercel.
+# This is independent of .gitignore — Vercel reads .vercelignore.
+# ════════════════════════════════════════════════════════════════
+
+# Build artifacts
+.next
+out
+build
+dist
+
+# Dependencies (Vercel installs these fresh)
+node_modules
+
+# Test files (not needed for build)
+coverage
+.nyc_output
+*.test.ts
+*.test.tsx
+*.spec.ts
+*.spec.tsx
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Local env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env*.local
+
+# IDE
+.idea
+.vscode
+*.swp
+.DS_Store
+
+# Vercel deployment metadata
+.vercel
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local Supabase
+supabase/.branches
+supabase/.temp
+
+# Test scripts (not needed for build, but safe to keep)
+# scripts/
+
+# Documentation (not needed for runtime)
+# *.md
+
+# CI/CD
+.github
+.git
+.gitignore
+.gitattributes
+.husky
+.commitlintrc*
+
+# Docker (not needed for Vercel)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Audit/Phase reports (not needed for runtime)
+*_REPORT.md
+*_SUMMARY.md
+PHASE_*.md
+AUDIT_*.md
+V*_RELEASE_*
+V*_AUDIT_*
+OPERATOR-*
+OPERATOR_*
+PRODUCTION_*
+REVIEW_*
+DESIGN_*
+SECURITY.md
+LAUNCH_*
+README.md
+CODE_*
+BUGFIX_*
+BLINKGO_*
+CLEANUP_*
+DELIVERABLE*.md
+deliverable-*.md
+deliverable*.md
+
+# Old test migration
+wesseling_migration.sql
+V*.md
