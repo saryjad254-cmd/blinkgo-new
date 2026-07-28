@@ -286,14 +286,33 @@ export class AuthService {
     });
     const payload = 'base64-' + Buffer.from(sessionJson, 'utf-8').toString('base64url');
 
-    if (payload.length <= 4096) {
+    // v86.1 fix — clear any pre-existing chunk cookies BEFORE writing.
+    //
+    // @supabase/ssr reads a session by combining `name` + `name.0` + `name.1`…
+    // If a previous session was written in chunked form (or a prior visitor's
+    // chunked cookie survives), a later single-cookie write to `name` leaves
+    // those `name.N` chunks in the jar. On the next request the library can
+    // surface the STALE chunks, so `getUser()` resolves an OLD identity — e.g.
+    // a leftover `customer` session — and the role check then fails with
+    // `?error=insufficient_permissions` even though login just succeeded.
+    // Always wipe the base + the first 5 chunk slots (the library only reads 5)
+    // so exactly one canonical cookie survives.
+    for (let i = 0; i < 5; i++) {
+      cookieStore.set(`${projectCookieName}.${i}`, '', { ...cookieBase, maxAge: 0 });
+    }
+
+    // Chunk size must match @supabase/ssr's MAX_CHUNK_SIZE (3180) so that a
+    // chunked write is reassembled correctly by the library's reader, which
+    // only fetches `name` + `name.0`..`name.4`.
+    const MAX_CHUNK_SIZE = 3180;
+    if (payload.length <= MAX_CHUNK_SIZE) {
       cookieStore.set(projectCookieName, payload, cookieBase);
     } else {
+      // Clear the base cookie and write chunks the library can recombine.
       cookieStore.set(projectCookieName, '', { ...cookieBase, maxAge: 0 });
-      const chunkSize = 4096;
-      const chunkCount = Math.ceil(payload.length / chunkSize);
+      const chunkCount = Math.ceil(payload.length / MAX_CHUNK_SIZE);
       for (let i = 0; i < chunkCount; i++) {
-        const chunk = payload.slice(i * chunkSize, (i + 1) * chunkSize);
+        const chunk = payload.slice(i * MAX_CHUNK_SIZE, (i + 1) * MAX_CHUNK_SIZE);
         cookieStore.set(`${projectCookieName}.${i}`, chunk, { ...cookieBase, httpOnly: true });
       }
     }
