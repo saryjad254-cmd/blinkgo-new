@@ -227,7 +227,7 @@ export async function proxy(request: NextRequest) {
   const legalGate = checkLegalLaunchGate();
   const legalGateAccess = [
     '/legal', '/login', '/api/auth', '/api/health', '/admin',
-    '/api/admin', '/api/integrations', '/api/automation', '/api/webhooks',
+    '/api/admin', '/api/integrations', '/api/automation', '/api/webhooks', '/api/cron',
   ].some((prefix) => request.nextUrl.pathname === prefix || request.nextUrl.pathname.startsWith(`${prefix}/`));
   if (!legalGate.ok && !legalGateAccess) {
     if (request.nextUrl.pathname.startsWith('/api/')) {

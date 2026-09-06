@@ -9,6 +9,8 @@ const schedulerMigration = readFileSync(
   resolve('supabase/migrations/20260906023000_supabase_background_scheduler.sql'),
   'utf8',
 );
+const proxySource = readFileSync(resolve('proxy.ts'), 'utf8');
+assert.match(proxySource, /['"]\/api\/cron['"]/, 'Authenticated background jobs must bypass only the storefront launch gate');
 const configured = new Map();
 for (const match of schedulerMigration.matchAll(
   /cron\.schedule\('[^']+','([^']+)',\$job\$SELECT public\.invoke_blinkgo_cron\('([^']+)'\);\$job\$\)/g,
