@@ -1,12 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
 import { computeHeatmap, computeSupplyDemandTimeseries } from '@/lib/analytics/marketplace-health';
+import { validateLocation } from '@/lib/driver/dispatch-policy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const auth = await requireApiRole(['admin']);
   if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
@@ -15,31 +16,38 @@ export async function GET(req: NextRequest) {
     const days = 30;
     const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    const { data: orders } = await db.from('orders').select('*')
-      .gte('created_at', start.toISOString());
+    const [orderResult, driverResult] = await Promise.all([
+      db.from('orders')
+        .select('restaurant_id, customer_latitude, customer_longitude, total, created_at')
+        .gte('created_at', start.toISOString()),
+      db.from('driver_status').select('driver_id, is_online, updated_at').eq('is_online', true),
+    ]);
+    if (orderResult.error) throw orderResult.error;
+    if (driverResult.error) throw driverResult.error;
+    const orders = orderResult.data ?? [];
+    const onlineDrivers = driverResult.data ?? [];
 
-    const { data: restaurants } = await db.from('restaurants').select('id, is_active, lat, lng');
-    const { data: drivers } = await db.from('drivers').select('id, is_active, is_online');
-
-    // Compute heatmap from order delivery coordinates (fall back to 0,0 if missing)
-    const orderPoints = (orders || []).map((o) => ({
-      lat: o.delivery_lat ?? 50.83, // Bonn area default
-      lng: o.delivery_lng ?? 6.97,
-      total: o.total ?? 0,
-      created_at: o.created_at,
-    }));
+    // Missing coordinates are excluded; analytics must never invent demand locations.
+    const orderPoints = orders.flatMap((order) => {
+      const location = validateLocation(order.customer_latitude, order.customer_longitude);
+      return location.ok ? [{
+        lat: location.lat,
+        lng: location.lng,
+        total: Number(order.total) || 0,
+        created_at: order.created_at,
+        restaurant_id: order.restaurant_id,
+      }] : [];
+    });
 
     const heatmap = computeHeatmap(orderPoints);
     const supplyDemand = computeSupplyDemandTimeseries(
-      orderPoints.map((o) => ({ created_at: o.created_at, restaurant_id: o.lat.toString() })),
-      (drivers || [])
-        .filter((d) => d.is_online)
-        .map((d) => ({ id: d.id, online_at: new Date().toISOString() })),
+      orders.map((order) => ({ created_at: order.created_at, restaurant_id: order.restaurant_id })),
+      onlineDrivers.map((driver) => ({ id: driver.driver_id, online_at: driver.updated_at })),
       60
     );
 
-    const totalSupply = (drivers || []).filter((d) => d.is_online).length;
-    const totalDemand = (orders || []).length;
+    const totalSupply = onlineDrivers.length;
+    const totalDemand = orders.length;
     const ratio = totalSupply > 0 ? totalDemand / totalSupply : 0;
 
     return NextResponse.json({
@@ -52,6 +60,8 @@ export async function GET(req: NextRequest) {
         status: ratio > 2 ? 'undersupply' : ratio < 0.5 ? 'oversupply' : 'balanced',
       },
       heatmap: heatmap.slice(0, 100),
+      geolocated_orders: orderPoints.length,
+      ungeolocated_orders: Math.max(0, orders.length - orderPoints.length),
       timeseries: supplyDemand.slice(-48), // last 48 hours
       recommendations: ratio > 2
         ? ['Activate surge pricing', 'Send push notification to inactive drivers', 'Recruit drivers in this zone']

@@ -7,7 +7,8 @@ import { safeErrorMessage } from '@/lib/api/safe-error';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const auth = await requireApiRole(['admin', 'super_admin']);
   if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
@@ -32,7 +33,7 @@ export async function PATCH(req: NextRequest, { params }: { params: { id: string
     // request body into the update payload.
     const safeUpdates: Record<string, unknown> = {};
     if (typeof body.full_name === 'string') {
-      safeUpdates.full_name = body.full_name.slice(0, 100);
+      safeUpdates.name = body.full_name.slice(0, 100);
     }
     if (typeof body.phone === 'string') {
       safeUpdates.phone = body.phone.slice(0, 20);

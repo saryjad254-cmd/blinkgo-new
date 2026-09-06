@@ -2,56 +2,27 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useEffect, useState } from 'react';
 import LayoutDashboard from 'lucide-react/dist/esm/icons/layout-dashboard';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
 import UtensilsCrossed from 'lucide-react/dist/esm/icons/utensils-crossed';
 import Settings from 'lucide-react/dist/esm/icons/settings';
-import Flame from 'lucide-react/dist/esm/icons/flame';
 import ChefHat from 'lucide-react/dist/esm/icons/chef-hat';
+import Bell from 'lucide-react/dist/esm/icons/bell';
 import { LogoutButton } from '@/components/shared/LogoutButton';
 import { LanguageSwitcher } from '@/components/i18n/LanguageSwitcher';
-import { createBrowserClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/cn';
+import { useI18n } from '@/lib/i18n/I18nProvider';
+import { BlinkLogo } from '@/components/brand/BlinkLogo';
 
 const T = {
-  de: { brand: 'BlinkGo', subtitle: 'Restaurant-Panel', dashboard: 'Dashboard', orders: 'Bestellungen', kitchen: 'Küche', menu: 'Menü', settings: 'Einstellungen' },
-  ar: { brand: 'BlinkGo', subtitle: 'لوحة المطعم', dashboard: 'الرئيسية', orders: 'الطلبات', kitchen: 'المطبخ', menu: 'القائمة', settings: 'الإعدادات' },
-  en: { brand: 'BlinkGo', subtitle: 'Restaurant Panel', dashboard: 'Dashboard', orders: 'Orders', kitchen: 'Kitchen', menu: 'Menu', settings: 'Settings' },
+  de: { brand: 'BlinkGo', subtitle: 'Restaurant-Panel', dashboard: 'Dashboard', orders: 'Bestellungen', kitchen: 'Küche', menu: 'Menü', settings: 'Einstellungen', notifications: 'Benachrichtigungen' },
+  ar: { brand: 'BlinkGo', subtitle: 'لوحة المطعم', dashboard: 'الرئيسية', orders: 'الطلبات', kitchen: 'المطبخ', menu: 'القائمة', settings: 'الإعدادات', notifications: 'الإشعارات' },
+  en: { brand: 'BlinkGo', subtitle: 'Restaurant Panel', dashboard: 'Dashboard', orders: 'Orders', kitchen: 'Kitchen', menu: 'Menu', settings: 'Settings', notifications: 'Notifications' },
 };
 
-function detectLocale(): 'de' | 'ar' | 'en' {
-  if (typeof window === 'undefined') return 'de';
-  const cookie = document.cookie.split(';').find((c) => c.trim().startsWith('blinkgo-locale='));
-  if (!cookie) return 'de';
-  const value = cookie.split('=')[1]?.trim();
-  if (value === 'ar') return 'ar';
-  if (value === 'en') return 'en';
-  return 'de';
-}
-
-const NAV_KEYS = {
-  '/restaurant/dashboard': 'dashboard',
-  '/restaurant/orders': 'orders',
-  '/restaurant/menu': 'menu',
-  '/restaurant/settings': 'settings',
-};
-
-export function RestaurantNav() {
+export function RestaurantNav({ user }: { user: { email: string; role: string } }) {
   const pathname = usePathname();
-  const [user, setUser] = useState<{ email: string; role: string } | null>(null);
-  const [locale, setLocale] = useState<'de' | 'ar' | 'en'>('de');
-
-  useEffect(() => {
-    setLocale(detectLocale());
-    const sb = createBrowserClient();
-    sb.auth.getUser().then(async ({ data }) => {
-      if (data.user) {
-        const { data: u } = await sb.from('users').select('email, role').eq('id', data.user.id).single();
-        setUser(u as any);
-      }
-    });
-  }, []);
+  const { locale } = useI18n();
 
   const t = T[locale];
   const dir = locale === 'ar' ? 'rtl' : 'ltr';
@@ -70,14 +41,9 @@ export function RestaurantNav() {
       <nav className="hidden md:block sticky top-0 z-30 bg-bg/80 backdrop-blur-xl border-b border-edge-light" dir={dir}>
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <Link href="/restaurant/dashboard" className="flex items-center gap-3 transition-transform hover:scale-105">
-              <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-brand-yellow via-brand-yellow-hover to-brand-yellow-active flex items-center justify-center shadow-[0_4px_12px_-2px_rgba(245,184,25,0.5)] overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-0.5 bg-brand-red/40" />
-                <div className="absolute top-1/2 left-0 w-full h-0.5 bg-brand-red/30" />
-                <span className="font-black italic text-brand-black text-sm">B</span>
-              </div>
+            <Link href="/restaurant/dashboard" className="flex items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc107]/70" aria-label={`${t.brand} · ${t.subtitle}`}>
+              <BlinkLogo variant="horizontal" size="sm" priority />
               <div className="leading-tight">
-                <span className="font-extrabold text-white block">{t.brand}</span>
                 <span className="text-[10px] text-text-muted">{t.subtitle}</span>
               </div>
             </Link>
@@ -89,6 +55,7 @@ export function RestaurantNav() {
                   <Link
                     key={l.href}
                     href={l.href}
+                    aria-current={active ? 'page' : undefined}
                     className={cn(
                       'inline-flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-bold transition-all',
                       active ? 'bg-brand-red-500/15 text-brand-red-400' : 'text-text-secondary hover:text-white hover:bg-surface-elevated'
@@ -101,8 +68,11 @@ export function RestaurantNav() {
               })}
             </div>
             <div className="flex items-center gap-2">
+              <Link href="/restaurant/notifications" aria-label={t.notifications} aria-current={pathname === '/restaurant/notifications' ? 'page' : undefined} className={cn('grid size-10 place-items-center rounded-xl transition-colors', pathname === '/restaurant/notifications' ? 'bg-brand-red-500/15 text-brand-red-400' : 'text-text-secondary hover:bg-surface-elevated hover:text-white')}>
+                <Bell className="size-5" />
+              </Link>
               <LanguageSwitcher />
-              {user && <LogoutButton email={user.email} role={user.role} />}
+              <LogoutButton email={user.email} role={user.role} />
             </div>
           </div>
         </div>
@@ -111,23 +81,22 @@ export function RestaurantNav() {
       {/* MOBILE TOP HEADER */}
       <header className="md:hidden sticky top-0 z-30 bg-bg/95 backdrop-blur-xl border-b border-edge-light">
         <div className="px-4 py-3 flex items-center justify-between min-h-[56px]">
-          <Link href="/restaurant/dashboard" className="flex items-center gap-2">
-            <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-brand-yellow via-brand-yellow-hover to-brand-yellow-active flex items-center justify-center overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-0.5 bg-brand-red/40" />
-              <span className="font-black italic text-brand-black text-sm">B</span>
-            </div>
-            <span className="font-extrabold text-white">{t.brand}</span>
+          <Link href="/restaurant/dashboard" className="flex min-h-11 items-center rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#ffc107]/70" aria-label={`${t.brand} · ${t.subtitle}`}>
+            <BlinkLogo variant="horizontal" size="sm" priority />
           </Link>
           <div className="flex items-center gap-2">
+            <Link href="/restaurant/notifications" aria-label={t.notifications} aria-current={pathname === '/restaurant/notifications' ? 'page' : undefined} className={cn('grid size-11 place-items-center rounded-xl transition-colors', pathname === '/restaurant/notifications' ? 'bg-brand-red-500/15 text-brand-red-400' : 'text-text-secondary hover:bg-surface-elevated hover:text-white')}>
+              <Bell className="size-5" />
+            </Link>
             <LanguageSwitcher />
-            {user && <LogoutButton variant="icon" email={user.email} role={user.role} />}
+            <LogoutButton variant="icon" email={user.email} role={user.role} />
           </div>
         </div>
       </header>
 
       {/* MOBILE BOTTOM TAB BAR — premium, unified iconography */}
       <nav className="md:hidden fixed bottom-0 inset-x-0 z-sticky bg-bg-elevated/85 backdrop-blur-2xl border-t border-edge pb-safe-bottom">
-        <div className="grid grid-cols-4 max-w-screen-sm mx-auto">
+        <div className="mx-auto grid max-w-screen-sm grid-cols-5">
           {links.map((l) => {
             const Icon = l.icon;
             const active = pathname === l.href || pathname.startsWith(`${l.href}/`);

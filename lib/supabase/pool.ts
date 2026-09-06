@@ -40,8 +40,8 @@ export function getServiceClient(): SupabaseClient {
  * Get a request-scoped server client.
  * Reads cookies from next/headers for authentication.
  */
-export function getServerClient() {
-  const cookieStore = cookies();
+export async function getServerClient() {
+  const cookieStore = await cookies();
 
   return createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

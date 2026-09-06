@@ -72,9 +72,7 @@ REVOKE ALL ON FUNCTION public.dispatch_scheduled_orders() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.dispatch_scheduled_orders() TO service_role;
 
 COMMENT ON FUNCTION public.dispatch_scheduled_orders() IS
-  'Finds scheduled orders whose scheduled_for has passed (with a 2-minute ' ||
-  'grace window), transitions them from pending → confirmed, and returns ' ||
-  'the dispatched orders so the caller can fire notifications.';
+  'Finds scheduled orders whose scheduled_for has passed (with a 2-minute grace window), transitions them from pending to confirmed, and returns the dispatched orders so the caller can fire notifications.';
 
 -- Try to install a pg_cron job. Many hosted Supabase projects have it
 -- enabled; if not, the worker is a no-op and the HTTP fallback

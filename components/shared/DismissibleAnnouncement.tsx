@@ -4,6 +4,7 @@ import { useState, useCallback, useEffect } from 'react';
 import X from 'lucide-react/dist/esm/icons/x';
 import Megaphone from 'lucide-react/dist/esm/icons/megaphone';
 import { cn } from '@/lib/cn';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 
 interface Props {
   audience: 'customer' | 'driver' | 'restaurant' | 'admin' | 'restaurant_owner';
@@ -19,7 +20,32 @@ interface Props {
  * - Keyboard accessible (button + Escape)
  */
 export function DismissibleAnnouncement({ audience, initiallyDismissed }: Props) {
+  const { locale } = useI18n();
   const [dismissed, setDismissed] = useState(initiallyDismissed);
+
+  const messages = {
+    de: {
+      customer: 'Live-Verfügbarkeit und Lieferkosten werden vor der Bestellung klar angezeigt.',
+      driver: 'Sicher unterwegs: Prüfe vor deiner Schicht Dokumente, Akku und Navigation.',
+      restaurant: 'Neue Bestellungen und Statusänderungen erscheinen direkt im Restaurant-Portal.',
+      restaurant_owner: 'Neue Bestellungen und Statusänderungen erscheinen direkt im Restaurant-Portal.',
+      admin: 'Betriebsstatus und offene Vorgänge regelmäßig prüfen.',
+    },
+    ar: {
+      customer: 'يتم عرض التوفر وتكاليف التوصيل بوضوح قبل تأكيد الطلب.',
+      driver: 'قيادة آمنة: تحقق من المستندات والبطارية والملاحة قبل بدء الوردية.',
+      restaurant: 'تظهر الطلبات الجديدة وتغييرات الحالة مباشرة في بوابة المطعم.',
+      restaurant_owner: 'تظهر الطلبات الجديدة وتغييرات الحالة مباشرة في بوابة المطعم.',
+      admin: 'راجع حالة التشغيل والمهام المفتوحة بانتظام.',
+    },
+    en: {
+      customer: 'Live availability and delivery costs are shown clearly before checkout.',
+      driver: 'Ride safely: check documents, battery and navigation before your shift.',
+      restaurant: 'New orders and status changes appear directly in the restaurant portal.',
+      restaurant_owner: 'New orders and status changes appear directly in the restaurant portal.',
+      admin: 'Review operating status and open actions regularly.',
+    },
+  } as const;
 
   const handleDismiss = useCallback(() => {
     setDismissed(true);
@@ -52,7 +78,7 @@ export function DismissibleAnnouncement({ audience, initiallyDismissed }: Props)
       <div className="flex items-center gap-2.5 flex-1 min-w-0">
         <Megaphone className="w-4 h-4 flex-shrink-0" />
         <p className="text-xs sm:text-sm font-bold truncate">
-          🎉 SCHNELL. ZUVERLÄSSIG. FÜR DICH. — Kostenlose Lieferung für Neukunden!
+          {messages[locale][audience]}
         </p>
       </div>
       <button

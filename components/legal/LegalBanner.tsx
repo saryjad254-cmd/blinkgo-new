@@ -11,7 +11,7 @@
  */
 'use client';
 
-import { useT } from '@/lib/i18n/I18nProvider';
+import { safeT, useI18n } from '@/lib/i18n/I18nProvider';
 
 const FALLBACK = {
   de: {
@@ -29,13 +29,12 @@ const FALLBACK = {
 };
 
 export function LegalBanner() {
-  const tr = useT() as any;
+  const { locale, t: tr } = useI18n();
   // useT() returns the translations object. New keys are optional
   // and may not exist yet, so we always fall back to FALLBACK.
-  const locale: 'de' | 'ar' | 'en' = (tr?.common?.locale === 'ar' || tr?.common?.locale === 'en') ? tr.common.locale : 'de';
   const fb = FALLBACK[locale] || FALLBACK.de;
-  const title = (tr as any)?.legal?.banner?.title || fb.title;
-  const body = (tr as any)?.legal?.banner?.body || fb.body;
+  const title = safeT(tr, 'legal.banner.title', fb.title);
+  const body = safeT(tr, 'legal.banner.body', fb.body);
 
   return (
     <div

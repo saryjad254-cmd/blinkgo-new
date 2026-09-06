@@ -26,12 +26,14 @@
  */
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const { CUSTOMER_TERMS_VERSION, PRIVACY_NOTICE_VERSION } = require('./legal-versions-test-helper');
+const TEST_IP = process.env.TEST_IP || '10.42.1.1';
 const COOKIES = {};
 const ACCOUNTS = {
   customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  restaurant: { email: 'restaurant@blinkgo.de', password: 'DemoRestaurant!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  driver: { email: 'driver@blinkgo.com', password: 'BlinkGoDriver2026!' },
+  restaurant: { email: 'wesseling@blinkgo.de', password: 'BlinkGoWesseling2026!' },
+  admin: { email: 'admin@blinkgo.com', password: 'BlinkGoAdmin2026!' },
 };
 
 let passed = 0, failed = 0;
@@ -67,14 +69,18 @@ function cookieHeader() {
 
 async function f(path, init = {}, opts = {}) {
   const headers = { // Use a unique x-forwarded-for so per-IP rate limits don't cascade
-  'Content-Type': 'application/json', 'Origin': BASE, 'x-forwarded-for': '10.42.1.1', ...(init.headers || {}) };
+  'Content-Type': 'application/json', 'Origin': BASE, 'x-forwarded-for': TEST_IP, 'x-blinkgo-test-run': 'local-e2e', ...(init.headers || {}) };
   if (Object.keys(COOKIES).length > 0) headers['Cookie'] = cookieHeader();
   const res = await fetch(BASE + path, { ...init, headers });
   if (opts.captureCookies !== false) setCookies(res.headers);
   const text = await res.text();
+  const isJson = (res.headers.get('content-type') || '').includes('application/json');
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = { _raw: text?.slice(0, 200) }; }
-  return { status: res.status, ok: res.ok, json };
+  if (json?.ok === true && Object.prototype.hasOwnProperty.call(json, 'data')) json = json.data;
+  // A rendered Next.js 404 page can be HTTP 200 in development. API tests
+  // must reject HTML so a missing route can never look like a passing API.
+  return { status: res.status, ok: res.ok && isJson, json };
 }
 
 function clearCookies() {
@@ -86,14 +92,8 @@ async function login(role) {
   const { ok, json } = await f('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify(ACCOUNTS[role]),
-  }, { captureCookies: false });
-  if (!ok) throw new Error(`Login ${role} failed: ${JSON.stringify(json)}`);
-  // Now actually log in with cookie capture
-  clearCookies();
-  await f('/api/auth/login', {
-    method: 'POST',
-    body: JSON.stringify(ACCOUNTS[role]),
   });
+  if (!ok) throw new Error(`Login ${role} failed: ${JSON.stringify(json)}`);
   return true;
 }
 
@@ -109,6 +109,14 @@ async function run() {
   record('Search returns restaurants', search.ok && Array.isArray(search.json?.restaurants));
   const restaurant = search.json?.restaurants?.[0];
   record('Has a restaurant to test with', !!restaurant, restaurant?.name);
+  record(
+    'Search contract normalizes map and delivery fields',
+    !!restaurant
+      && Number.isFinite(restaurant.latitude)
+      && Number.isFinite(restaurant.longitude)
+      && Array.isArray(restaurant.cuisines)
+      && Number.isFinite(restaurant.delivery_time_min),
+  );
 
   // ── 2. Search with filters ──
   const searchFiltered = await f('/api/search?cuisine=' + encodeURIComponent('Burger'), {}, { captureCookies: false });
@@ -139,15 +147,16 @@ async function run() {
   // ── 8. Get restaurant details (browse) ──
   console.log('\n► Customer: view restaurant');
   if (restaurant) {
-    const detail = await f(`/api/restaurants/${restaurant.id}/products`, {}, { captureCookies: false });
-    record('View restaurant products', detail.ok);
+    const detail = await f(`/api/restaurants/${restaurant.id}`, {}, { captureCookies: false });
+    record('View restaurant details', detail.ok && detail.json?.restaurant?.id === restaurant.id);
 
-    // ── 9. Get product list ──
-    if (detail.json?.products?.[0]) {
-      const product = detail.json.products[0];
-      record('Restaurant has products', !!product);
-      record('Product has price > 0', Number(product.price) > 0);
-    }
+    // Product discovery has its own canonical endpoint. Search results may
+    // intentionally omit products when the query is empty, so using the
+    // bestsellers contract here mirrors the restaurant page and checkout.
+    const menu = await f(`/api/products/bestsellers?restaurant_id=${restaurant.id}`, {}, { captureCookies: false });
+    const restaurantProducts = menu.json?.bestsellers || menu.json?.products || [];
+    record('Restaurant has products', restaurantProducts.length > 0);
+    record('Product has price > 0', Number(restaurantProducts[0]?.price) > 0);
   }
 
   // ── 10. Favorites ──
@@ -188,15 +197,22 @@ async function run() {
   // ── 13. Place order ──
   console.log('\n► Customer: place order');
   if (restaurant) {
-    // Get a product
-    const detail = await f(`/api/restaurants/${restaurant.id}/products`, {}, { captureCookies: false });
-    const product = detail.json?.products?.[0];
+    const bestsellers = await f(`/api/products/bestsellers?restaurant_id=${restaurant.id}`, {}, { captureCookies: false });
+    const product = (bestsellers.json?.bestsellers || bestsellers.json?.products || [])
+      .find((p) => p.is_available !== false && p.is_active !== false);
+    record('Product selected for checkout', !!product, product?.name);
     if (product) {
+      const selectedModifiers = Object.fromEntries((product.modifiers || [])
+        .filter((modifier) => modifier.required && Number(modifier.min_select || 0) > 0)
+        .map((modifier) => [modifier.id, (modifier.options || []).slice(0, Number(modifier.min_select)).map((option) => option.id)]));
+      const unitPrice = Number(product.discount_price ?? product.price ?? 0);
+      const minimumOrder = Number(restaurant.minimum_order ?? restaurant.min_order_amount ?? 0);
+      const quantity = unitPrice > 0 ? Math.max(2, Math.ceil((minimumOrder + 0.01) / unitPrice)) : 2;
       const order = await f('/api/orders', {
         method: 'POST',
         body: JSON.stringify({
           restaurant_id: restaurant.id,
-          items: [{ product_id: product.id, quantity: 1 }],
+          items: [{ product_id: product.id, quantity, configuration: { selected_modifiers: selectedModifiers } }],
           payment_method: 'cash',
           delivery_address: { address: 'Test Street 1, Bonn', lat: 50.7374, lng: 7.0982, notes: '' },
           tip: 2.00,
@@ -377,7 +393,16 @@ async function run() {
   const newEmail = `test_${Date.now()}@blinkgo-test.de`;
   const reg = await f('/api/auth/register', {
     method: 'POST',
-    body: JSON.stringify({ email: newEmail, password: 'TestPass!2024', name: 'Test User' }),
+    body: JSON.stringify({
+      email: newEmail,
+      password: 'TestPass!2024',
+      name: 'Test User',
+      role: 'customer',
+      acceptedTerms: true,
+      termsVersion: CUSTOMER_TERMS_VERSION,
+      privacyVersion: PRIVACY_NOTICE_VERSION,
+      locale: 'de',
+    }),
   }, { captureCookies: false });
   record('Register new account', reg.ok || reg.json?.error === 'EMAIL_TAKEN', reg.json?.error || 'ok');
 

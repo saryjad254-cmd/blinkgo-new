@@ -7,10 +7,10 @@ import Calendar from 'lucide-react/dist/esm/icons/calendar';
 import Save from 'lucide-react/dist/esm/icons/save';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import Users from 'lucide-react/dist/esm/icons/users';
-import Edit3 from 'lucide-react/dist/esm/icons/edit-3';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import Check from 'lucide-react/dist/esm/icons/check';
 import X from 'lucide-react/dist/esm/icons/x';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 interface Driver {
   id: string;
@@ -50,13 +50,19 @@ export default function AdminDriverHoursPage() {
   const [locale, setLocale] = useState<'de' | 'ar' | 'en'>('de');
 
   useEffect(() => {
-    // Get locale from cookie
-    const match = document.cookie.split(';').find((c) => c.trim().startsWith('blinkgo-locale='));
-    if (match) {
-      const value = match.split('=')[1]?.trim();
-      if (value === 'ar' || value === 'en') setLocale(value as 'ar' | 'en');
-    }
-    loadDrivers();
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const match = document.cookie.split(';').find((c) => c.trim().startsWith('blinkgo-locale='));
+      if (match) {
+        const value = match.split('=')[1]?.trim();
+        if (value === 'ar' || value === 'en') setLocale(value as 'ar' | 'en');
+      }
+      void loadDrivers();
+    });
+    return () => { cancelled = true; };
+    // Initial account load only; subsequent driver changes use the selector.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadDrivers() {
@@ -129,10 +135,10 @@ export default function AdminDriverHoursPage() {
         });
         setTimeout(() => setSaveMessage(null), 4000);
       } else {
-        setSaveMessage({ type: 'error', text: data.error || STRINGS.saveFailed });
+        setSaveMessage({ type: 'error', text: extractErrorMessage(data, STRINGS.saveFailed) });
       }
-    } catch (e: any) {
-      setSaveMessage({ type: 'error', text: e.message || STRINGS.saveFailed });
+    } catch (error: unknown) {
+      setSaveMessage({ type: 'error', text: extractErrorMessage(error, STRINGS.saveFailed) });
     } finally {
       setSaving(false);
     }

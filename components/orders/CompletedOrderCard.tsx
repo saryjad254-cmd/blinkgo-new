@@ -6,7 +6,6 @@ import { useRouter } from 'next/navigation';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import RotateCw from 'lucide-react/dist/esm/icons/rotate-cw';
-import Plus from 'lucide-react/dist/esm/icons/plus';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import { useCart } from '@/lib/cart-store';
 import { StatusBadge } from '@/components/shared/StatusBadge';
@@ -64,8 +63,11 @@ export function CompletedOrderCard({ order, locale, t }: CompletedOrderCardProps
       const res = await fetch(`/api/orders/${order.id}/reorder`, { method: 'POST' });
       if (!res.ok) throw new Error('reorder failed');
       const data = await res.json();
-      // Map items to cart shape
+      // Map items to cart shape. Reorder preserves notes (special_instructions)
+      // for backward compat; full modifier restoration will come from a
+      // future /api/orders/[id]/reorder enhancement.
       for (const it of data.items ?? []) {
+        const notes = it.special_instructions || it.notes || undefined;
         addToCart(
           {
             product_id: it.product_id ?? it.id,
@@ -76,6 +78,8 @@ export function CompletedOrderCard({ order, locale, t }: CompletedOrderCardProps
             restaurant_name: restaurantName,
             restaurant_lat: data.order?.restaurant_latitude ?? undefined,
             restaurant_lng: data.order?.restaurant_longitude ?? undefined,
+            configuration: notes ? { notes } : undefined,
+            config_summary: notes || undefined,
           },
           it.quantity ?? 1,
         );

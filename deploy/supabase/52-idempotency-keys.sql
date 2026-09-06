@@ -36,8 +36,7 @@ CREATE TABLE IF NOT EXISTS public.idempotency_keys (
 
 -- Index for the lookup path (key + scope + expiry).
 CREATE INDEX IF NOT EXISTS idx_idempotency_keys_lookup
-  ON public.idempotency_keys (key, scope)
-  WHERE expires_at > now();
+  ON public.idempotency_keys (key, scope, expires_at);
 
 -- Background cleanup. The next scheduled cron job can call
 -- `cleanup_idempotency_keys()` to drop expired rows.
@@ -71,9 +70,7 @@ CREATE POLICY idempotency_keys_service_all ON public.idempotency_keys
   WITH CHECK (true);
 
 COMMENT ON TABLE public.idempotency_keys IS
-  'Persistent idempotency cache for state-mutating endpoints. Survives across ' ||
-  'serverless instances. Scoped per (key, scope) so the same client-generated ' ||
-  'key cannot be reused across different endpoints.';
+  'Persistent idempotency cache for state-mutating endpoints. Survives across serverless instances. Scoped per (key, scope) so the same client-generated key cannot be reused across different endpoints.';
 
 COMMENT ON FUNCTION public.cleanup_idempotency_keys() IS
   'Drops expired idempotency keys. Call from a daily cron to bound table size.';

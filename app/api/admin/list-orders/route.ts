@@ -1,21 +1,18 @@
 /**
  * Admin: List all recent orders with full details (debug)
  */
-import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { requireAdminRole } from '@/lib/rbac';
 import { createServiceClient } from '@/lib/supabase/service';
-import { getApiUserWithRole } from '@/lib/auth-helper';
 import { safeErrorMessage } from '@/lib/api/safe-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const auth = await requireAdminRole(request, 'admin');
+  if (auth instanceof NextResponse) return auth;
   try {
-    const auth = await getApiUserWithRole();
-    if (!auth || auth.profile?.role !== 'admin') {
-      return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 });
-    }
     const supabase = createServiceClient();
 
     const { data, error } = await supabase
@@ -26,8 +23,22 @@ export async function GET() {
 
     if (error) return NextResponse.json({ ok: false, error: safeErrorMessage(error) }, { status: 500 });
 
-    return NextResponse.json({ ok: true, orders: data });
-  } catch (err: any) {
-    return NextResponse.json({ ok: false, error: safeErrorMessage(err) }, { status: 500 });
+    // Keep the response contract intentionally narrow even if an emulator or a
+    // future database adapter returns more columns than requested. Order list
+    // endpoints must never serialize joined user/auth records by accident.
+    const orders = (data ?? []).map((order) => ({
+      id: order.id,
+      order_number: order.order_number,
+      status: order.status,
+      driver_id: order.driver_id,
+      restaurant_id: order.restaurant_id,
+      customer_id: order.customer_id,
+      created_at: order.created_at,
+      updated_at: order.updated_at,
+    }));
+
+    return NextResponse.json({ ok: true, orders });
+  } catch (error: unknown) {
+    return NextResponse.json({ ok: false, error: safeErrorMessage(error) }, { status: 500 });
   }
 }

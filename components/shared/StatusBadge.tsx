@@ -7,8 +7,7 @@ import ChefHat from 'lucide-react/dist/esm/icons/chef-hat';
 import Package from 'lucide-react/dist/esm/icons/package';
 import Truck from 'lucide-react/dist/esm/icons/truck';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
-import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
-import RotateCcw from 'lucide-react/dist/esm/icons/rotate-ccw';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useI18n, type Locale } from '@/lib/i18n/I18nProvider';
 
@@ -24,7 +23,7 @@ interface StatusBadgeProps {
   className?: string;
 }
 
-const statusConfig: Record<Status, { label: { ar: string; de: string; en: string }; bg: string; text: string; dot: string; icon: any; animate?: string }> = {
+const statusConfig: Record<Status, { label: { ar: string; de: string; en: string }; bg: string; text: string; dot: string; icon: LucideIcon; animate?: string }> = {
   pending: {
     label: { ar: 'قيد الانتظار', de: 'Wartend', en: 'Pending' },
     bg: 'bg-warning/10 border-warning/30',
@@ -107,7 +106,6 @@ export const StatusBadge = memo(function StatusBadge({
   size = 'md',
   withDot = true,
   withIcon = false,
-  pulse: _pulse, // ignore
   className = '',
 }: StatusBadgeProps) {
   // Map common aliases

@@ -87,7 +87,9 @@ export function TipSelector({
 
   useEffect(() => {
     if (customMode && customText === '' && tip > 0 && !isPercentActive) {
-      setCustomText(String(tip));
+      let cancelled = false;
+      queueMicrotask(() => { if (!cancelled) setCustomText(String(tip)); });
+      return () => { cancelled = true; };
     }
   }, [customMode]); // eslint-disable-line
 

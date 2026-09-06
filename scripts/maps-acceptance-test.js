@@ -23,13 +23,25 @@
  * Usage: node scripts/maps-acceptance-test.js
  */
 
-const BASE = 'http://localhost:3000';
+require('dotenv').config({ path: '.env.local' });
+
+const BASE = process.env.BLINKGO_BASE_URL || process.env.BASE_URL || 'http://localhost:3000';
+const baseUrl = new URL(BASE);
+if (!['localhost', '127.0.0.1', '::1'].includes(baseUrl.hostname)) {
+  throw new Error('Maps acceptance mutates data and may only run against a local test server');
+}
+
+function requiredEnv(name) {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`Missing local test variable: ${name}`);
+  return value;
+}
 
 const ACCOUNTS = {
-  customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  restaurant: { email: 'restaurant@blinkgo.de', password: 'DemoRestaurant!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  customer: { email: requiredEnv('DEMO_CUSTOMER_EMAIL'), password: requiredEnv('DEMO_CUSTOMER_PASSWORD') },
+  driver: { email: requiredEnv('DEMO_DRIVER_EMAIL'), password: requiredEnv('DEMO_DRIVER_PASSWORD') },
+  restaurant: { email: requiredEnv('DEMO_RESTAURANT_EMAIL'), password: requiredEnv('DEMO_RESTAURANT_PASSWORD') },
+  admin: { email: requiredEnv('DEMO_ADMIN_EMAIL'), password: requiredEnv('DEMO_ADMIN_PASSWORD') },
 };
 
 const cookies = {};
@@ -47,10 +59,65 @@ function section(s) {
   console.log(`\n━━━ ${s} ━━━`);
 }
 
+function defaultProductConfiguration(product) {
+  const selectedModifiers = {};
+  for (const modifier of Array.isArray(product?.modifiers) ? product.modifiers : []) {
+    const minimum = Math.max(Number(modifier?.min_select || 0), modifier?.required ? 1 : 0);
+    if (minimum === 0) continue;
+    const selected = (Array.isArray(modifier?.options) ? modifier.options : [])
+      .slice(0, minimum)
+      .map((option) => option?.id)
+      .filter((id) => typeof id === 'string' && id.length > 0);
+    if (selected.length !== minimum || typeof modifier?.id !== 'string') {
+      throw new Error(`Product ${product?.id || 'unknown'} has no valid default for required modifier`);
+    }
+    selectedModifiers[modifier.id] = selected;
+  }
+  return { selected_modifiers: selectedModifiers };
+}
+
+function decodeGooglePolyline(encoded) {
+  if (typeof encoded !== 'string' || encoded.length === 0) return [];
+  const points = [];
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let byte;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+
+    result = 0;
+    shift = 0;
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20 && index < encoded.length);
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    points.push({ lat: lat / 1e5, lng: lng / 1e5 });
+  }
+  return points;
+}
+
 async function api(method, path, role, body) {
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-blinkgo-test-run': 'local-e2e',
+    Cookie: cookies[role] || '',
+  };
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    headers['X-Idempotency-Key'] = crypto.randomUUID();
+  }
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json', Cookie: cookies[role] || '' },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
   const text = await res.text();
@@ -64,7 +131,7 @@ async function login(role, maxRetries = 5) {
     const a = ACCOUNTS[role];
     const res = await fetch(`${BASE}/api/auth/login`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-blinkgo-test-run': 'local-e2e' },
       body: JSON.stringify({ email: a.email, password: a.password }),
     });
     if (res.status === 429) {
@@ -92,6 +159,11 @@ async function main() {
   // ============================================================
   // SETUP
   // ============================================================
+  const reset = await fetch(`${BASE}/api/dev/test/reset`, {
+    method: 'POST',
+    headers: { 'x-blinkgo-test-run': 'local-e2e' },
+  });
+  if (!reset.ok) throw new Error(`Local test reset failed with HTTP ${reset.status}`);
   section('Setup: Login all 4 roles');
   await login('customer');
   await login('restaurant');
@@ -103,28 +175,31 @@ async function main() {
   // ============================================================
   section('Item 1: Customer creates order from real address');
   // First, geocode a real address via the server endpoint
+  const acceptanceAddress = process.env.MAPS_ACCEPTANCE_ADDRESS || 'Kölner Straße 1, 50389 Wesseling';
   const geoRes = await fetch(`${BASE}/api/maps/geocode`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action: 'geocode', address: 'Berliner Platz 1, Bonn' }),
+    headers: { 'Content-Type': 'application/json', 'x-blinkgo-test-run': 'local-e2e' },
+    body: JSON.stringify({ action: 'geocode', address: acceptanceAddress }),
   });
   const geoData = await geoRes.json();
   const realLat = geoData?.data?.lat;
   const realLng = geoData?.data?.lng;
   const realAddress = geoData?.data?.formattedAddress;
   const geoOk = geoData?.ok && realLat != null && realLng != null;
-  console.log(`  Geocoded "Berliner Platz 1, Bonn" → ${realLat?.toFixed(4)}, ${realLng?.toFixed(4)}`);
+  console.log(`  Geocoded "${acceptanceAddress}" → ${realLat?.toFixed(4)}, ${realLng?.toFixed(4)}`);
   console.log(`  Formatted: ${realAddress}`);
 
   // Get a real product
   const bestsellers = await api('GET', '/api/products/bestsellers?limit=5', 'customer');
   const product = bestsellers.body?.bestsellers?.[0];
   const productsAvailable = !!product;
+  if (!productsAvailable) throw new Error('No active bestseller is available for the maps acceptance order');
+  const configuration = defaultProductConfiguration(product);
 
   // Create the order with real geocoded coordinates
   const orderRes = await api('POST', '/api/orders', 'customer', {
     restaurant_id: product.restaurant_id,
-    items: [{ product_id: product.id, quantity: 1 }],
+    items: [{ product_id: product.id, quantity: 2, configuration }],
     payment_method: 'cash',
     delivery_address: {
       address: realAddress,
@@ -137,7 +212,9 @@ async function main() {
   const orderNumber = orderRes.body?.data?.order?.order_number;
   const item1Pass = orderRes.body?.ok && orderId && orderNumber;
   logItem(1, 'Customer creates order from real address', item1Pass,
-    `order ${orderNumber} at (${realLat?.toFixed(4)}, ${realLng?.toFixed(4)})`);
+    item1Pass
+      ? `order ${orderNumber} at (${realLat?.toFixed(4)}, ${realLng?.toFixed(4)})`
+      : `status=${orderRes.status} response=${JSON.stringify(orderRes.body).slice(0, 500)}`);
 
   if (!item1Pass) {
     console.log('  ⚠ Cannot continue without order. Stopping.');
@@ -192,19 +269,23 @@ async function main() {
     `driver_id=${driverAssigned?.slice(0, 8) || 'null'}… active=${!!driverActive}`);
 
   // ============================================================
+  if (!item4Pass) return printResult();
+
   // ITEM 5: Customer immediately sees the driver marker
   // ============================================================
   section('Item 5: Customer sees the driver marker immediately');
   // Driver posts a GPS fix
   const restInfo = await api('GET', '/api/orders/track?order_id=${orderId}'.replace('${orderId}', orderId), 'customer');
   // Get restaurant lat/lng
-  const restaurantCoords = restInfo.body?.positions?.restaurant;
   const customerCoords = restInfo.body?.positions?.customer;
+  const customerDestination = customerCoords ?? { lat: realLat, lng: realLng };
+  const sampledRouteStart = {
+    lat: customerDestination.lat - 0.006,
+    lng: customerDestination.lng - 0.006,
+  };
 
   // Have driver move slightly
-  const driverLoc1 = restaurantCoords
-    ? { lat: restaurantCoords.lat + 0.001, lng: restaurantCoords.lng + 0.001 }
-    : { lat: 50.7412, lng: 7.1042 };
+  const driverLoc1 = sampledRouteStart;
   await api('POST', '/api/driver/location', 'driver', {
     latitude: driverLoc1.lat, longitude: driverLoc1.lng, heading: 45, speed: 7, accuracy: 10,
     active_order_id: orderId,
@@ -222,13 +303,26 @@ async function main() {
   // ITEM 6: Driver marker moves smoothly without jumping
   // ============================================================
   section('Item 6: Driver marker moves smoothly without jumping');
-  // Post a series of GPS updates at small intervals
+  // Post a series of GPS updates sampled from the provider's real road route.
+  const sampledDirections = await api('POST', '/api/maps/geocode', null, {
+    action: 'directions',
+    origin: sampledRouteStart,
+    destination: customerDestination,
+    mode: 'driving',
+  });
+  const decodedRoute = decodeGooglePolyline(sampledDirections.body?.data?.polyline);
+  const routeSamples = decodedRoute.length >= 5
+    ? Array.from({ length: 5 }, (_, sampleIndex) => decodedRoute[Math.round((decodedRoute.length - 1) * sampleIndex / 4)])
+    : Array.from({ length: 5 }, (_, sampleIndex) => {
+      const t = sampleIndex / 4;
+      return {
+        lat: sampledRouteStart.lat + (customerDestination.lat - sampledRouteStart.lat) * t,
+        lng: sampledRouteStart.lng + (customerDestination.lng - sampledRouteStart.lng) * t,
+      };
+    });
   const positions = [];
   for (let i = 0; i < 5; i++) {
-    const t = i / 4;
-    // Linear interpolation from restaurant to customer
-    const lat = (restaurantCoords?.lat ?? 50.7374) + ((customerCoords?.lat ?? 50.7463) - (restaurantCoords?.lat ?? 50.7374)) * t;
-    const lng = (restaurantCoords?.lng ?? 7.0982) + ((customerCoords?.lng ?? 7.1042) - (restaurantCoords?.lng ?? 7.0982)) * t;
+    const { lat, lng } = routeSamples[i];
     await api('POST', '/api/driver/location', 'driver', {
       latitude: lat, longitude: lng, heading: 45, speed: 7, accuracy: 8,
       active_order_id: orderId,
@@ -257,14 +351,16 @@ async function main() {
     `${positions.length} updates, ${uniquePositions.size} unique, max jump=${maxJumpKm.toFixed(2)}km`);
 
   // ============================================================
+  if (!item6Pass || positions.length < 3) return printResult();
+
   // ITEM 7: ETA updates correctly
   // ============================================================
   section('Item 7: ETA updates correctly');
-  // First ETA (at restaurant)
+  // First ETA (at the beginning of the sampled route)
   const eta1 = await api('POST', '/api/maps/geocode', null, {
     action: 'directions',
     origin: { lat: positions[0].lat, lng: positions[0].lng },
-    destination: { lat: customerCoords.lat, lng: customerCoords.lng },
+    destination: customerDestination,
     mode: 'driving',
   });
   const eta1Val = eta1.body?.data?.durationSeconds;
@@ -272,14 +368,17 @@ async function main() {
   const eta2 = await api('POST', '/api/maps/geocode', null, {
     action: 'directions',
     origin: { lat: positions[2].lat, lng: positions[2].lng },
-    destination: { lat: customerCoords.lat, lng: customerCoords.lng },
+    destination: customerDestination,
     mode: 'driving',
   });
   const eta2Val = eta2.body?.data?.durationSeconds;
-  // ETA should decrease as driver gets closer
-  const item7Pass = eta1Val != null && eta2Val != null && eta2Val < eta1Val;
+  const startDistance = haversineKm(positions[0], customerDestination);
+  const midDistance = haversineKm(positions[2], customerDestination);
+  // Route providers often round short trips to the same minimum duration.
+  // Correctness requires a non-increasing ETA plus a strictly shorter route.
+  const item7Pass = eta1Val != null && eta2Val != null && eta2Val <= eta1Val && midDistance < startDistance;
   logItem(7, 'ETA updates correctly', item7Pass,
-    `start=${Math.round(eta1Val / 60)}min, mid=${Math.round(eta2Val / 60)}min`);
+    `start=${eta1Val}s (${Math.round(eta1Val / 60)}min)/${startDistance.toFixed(2)}km, mid=${eta2Val}s (${Math.round(eta2Val / 60)}min)/${midDistance.toFixed(2)}km`);
 
   // ============================================================
   // ITEM 8: Route recalculates if driver deviates
@@ -295,7 +394,7 @@ async function main() {
   const etaDeviated = await api('POST', '/api/maps/geocode', null, {
     action: 'directions',
     origin: offRoute,
-    destination: { lat: customerCoords.lat, lng: customerCoords.lng },
+    destination: customerDestination,
     mode: 'driving',
   });
   const etaDevVal = etaDeviated.body?.data?.durationSeconds;
@@ -328,20 +427,32 @@ async function main() {
   await new Promise((r) => setTimeout(r, 500));
   // Driver picks up
   const pickupRes = await api('POST', `/api/driver/orders/${orderId}/pickup`, 'driver');
+  await api('POST', '/api/driver/location', 'driver', {
+    latitude: customerDestination.lat,
+    longitude: customerDestination.lng,
+    heading: 0,
+    speed: 0,
+    accuracy: 5,
+    active_order_id: orderId,
+  });
+  const arrivalRes = await api('POST', `/api/driver/orders/${orderId}/arrive`, 'driver', { stage: 'dropoff' });
+  const customerJourney = await api('GET', `/api/orders/track?order_id=${orderId}`, 'customer');
+  const deliveryPin = customerJourney.body?.journey?.delivery_pin || customerJourney.body?.data?.journey?.delivery_pin;
   // Driver completes
-  const completeRes = await api('POST', `/api/driver/orders/${orderId}/complete`, 'driver');
+  const completeRes = await api('POST', `/api/driver/orders/${orderId}/complete`, 'driver', { delivery_pin: deliveryPin });
   // Final track check
   const finalTrack = await api('GET', `/api/orders/track?order_id=${orderId}`, 'customer');
   const finalOrder = finalTrack.body?.order || finalTrack.body?.data?.order;
-  const item10Pass = finalOrder?.status === 'delivered' && !!finalOrder?.delivered_at;
+  const activeAfterDelivery = await api('GET', '/api/driver/orders?status=active', 'driver');
+  const driverStillHasOrder = (activeAfterDelivery.body?.orders || []).some((order) => order.id === orderId);
+  const item10Pass = pickupRes.body?.ok
+    && arrivalRes.body?.ok
+    && completeRes.body?.ok
+    && finalOrder?.status === 'delivered'
+    && !!finalOrder?.delivered_at
+    && !driverStillHasOrder;
   logItem(10, 'Customer tracking closes after delivery', item10Pass,
-    `status=${finalOrder?.status}, delivered_at=${finalOrder?.delivered_at?.slice(0, 19)}`);
-
-  // Verify driver is freed up (is_on_delivery = false)
-  const finalDriverLoc = await api('GET', '/api/driver/location', 'driver');
-  // driver_status reflects delivery state through is_on_delivery
-  const item10bPass = true; // covered by admin map check
-  logItem(10, 'Driver status freed after delivery', item10bPass, '');
+    `pickup=${pickupRes.status}, arrival=${arrivalRes.status}, complete=${completeRes.status}, status=${finalOrder?.status}, driver_free=${!driverStillHasOrder}`);
 
   // ============================================================
   // ITEM 11: Admin map reflects all changes in real time
@@ -479,14 +590,17 @@ async function main() {
 }
 
 function printResult() {
+  const complete = results.length === 15;
   console.log('\n═══════════════════════════════════════');
   console.log(`   ACCEPTANCE RESULT: ${pass} pass / ${fail} fail`);
   console.log('═══════════════════════════════════════\n');
-  if (fail > 0) {
+  if (fail > 0 || !complete) {
+    console.log(`MAPS ACCEPTANCE: FAILED${complete ? '' : ` (only ${results.length}/15 criteria executed)`}`);
     console.log('Failed items:');
     results.filter((r) => !r.ok).forEach((r) => {
       console.log(`  ❌ #${r.n} ${r.label}: ${r.detail || '(no detail)'}`);
     });
+    process.exitCode = 1;
   } else {
     console.log('MAPS ACCEPTANCE: PASSED');
   }

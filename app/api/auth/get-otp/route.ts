@@ -8,7 +8,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getLatestOTP } from '@/lib/otp-store';
-import { ok, fail, withErrorHandling } from '@/lib/api/response';
+import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { ValidationError, NotFoundError } from '@/lib/errors';

@@ -8,6 +8,36 @@ import { createServiceClient } from '@/lib/supabase/service';
 
 export const dynamic = 'force-dynamic';
 
+type OperationBody = Record<string, unknown>;
+type DriverStatusRow = {
+  driver_id: string;
+  is_on_delivery: boolean;
+  current_order_id: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  updated_at: string;
+  users: { name?: string; email?: string; phone?: string } | Array<{ name?: string; email?: string; phone?: string }> | null;
+};
+type PendingOrderRow = {
+  id: string;
+  order_number: string;
+  status: string;
+  total: number | string;
+  created_at: string;
+  driver_id: string | null;
+  customers: { name?: string } | Array<{ name?: string }> | null;
+  restaurants: { name?: string } | Array<{ name?: string }> | null;
+};
+
+function relation<T>(value: T | T[] | null): T | null {
+  return Array.isArray(value) ? value[0] ?? null : value;
+}
+
+function requiredString(body: OperationBody, key: string): string | null {
+  const value = body[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
 /**
  * POST /api/admin/operations/tools
  * Body: { action, ...params }
@@ -18,40 +48,59 @@ export async function POST(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const body = await request.json();
-    const action = body.action as string;
+    const rawBody: unknown = await request.json().catch(() => null);
+    const body: OperationBody = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as OperationBody
+      : {};
+    const action = requiredString(body, 'action');
+    const reason = typeof body.reason === 'string' ? body.reason.trim().slice(0, 500) : '';
 
     if (action === 'reassign_order') {
-      if (!body.orderId || !body.driverId) {
+      const orderId = requiredString(body, 'orderId');
+      const driverId = requiredString(body, 'driverId');
+      if (!orderId || !driverId) {
         return NextResponse.json({ ok: false, error: 'orderId and driverId required' }, { status: 400 });
       }
-      const data = await reassignOrderToDriver(body.orderId, body.driverId, auth.user.id);
+      if (reason.length < 5) return NextResponse.json({ ok: false, error: 'Reason required (min 5 chars)' }, { status: 400 });
+      const data = await reassignOrderToDriver(orderId, driverId, auth.user.id, reason);
+      if (!data.ok) return NextResponse.json({ ok: false, error: data.error }, { status: 409 });
       return NextResponse.json({ ok: true, data });
     }
 
     if (action === 'emergency_cancel') {
-      if (!body.orderId) {
+      const orderId = requiredString(body, 'orderId');
+      if (!orderId) {
         return NextResponse.json({ ok: false, error: 'orderId required' }, { status: 400 });
       }
-      const data = await emergencyCancelOrder(body.orderId, auth.user.id, body.reason ?? 'admin_cancelled');
+      if (reason.length < 5) return NextResponse.json({ ok: false, error: 'Reason required (min 5 chars)' }, { status: 400 });
+      const data = await emergencyCancelOrder(orderId, auth.user.id, reason);
+      if (!data.ok) return NextResponse.json({ ok: false, error: data.error }, { status: 409 });
       return NextResponse.json({ ok: true, data });
     }
 
     if (action === 'pause_restaurant' || action === 'resume_restaurant') {
-      if (!body.restaurantId) {
+      const restaurantId = requiredString(body, 'restaurantId');
+      if (!restaurantId) {
         return NextResponse.json({ ok: false, error: 'restaurantId required' }, { status: 400 });
       }
+      if (reason.length < 5) return NextResponse.json({ ok: false, error: 'Reason required (min 5 chars)' }, { status: 400 });
       const paused = action === 'pause_restaurant';
-      const data = await setRestaurantPaused(body.restaurantId, paused, auth.user.id);
+      const data = await setRestaurantPaused(restaurantId, paused, auth.user.id, reason);
+      if (!data.ok) return NextResponse.json({ ok: false, error: data.error }, { status: 409 });
       return NextResponse.json({ ok: true, data });
     }
 
     if (action === 'broadcast') {
-      if (!body.title || !body.body) {
+      const title = requiredString(body, 'title')?.slice(0, 120);
+      const message = requiredString(body, 'body')?.slice(0, 1000);
+      if (!title || !message) {
         return NextResponse.json({ ok: false, error: 'title and body required' }, { status: 400 });
       }
       const svc = createServiceClient();
-      const audience = body.audience ?? 'all';
+      const requestedAudience = requiredString(body, 'audience') ?? 'all';
+      const audience = ['all', 'customers', 'drivers', 'restaurants', 'admins'].includes(requestedAudience)
+        ? requestedAudience
+        : 'all';
       let query = svc.from('users').select('id').eq('is_active', true);
       if (audience === 'customers') query = query.eq('role', 'customer');
       else if (audience === 'drivers') query = query.eq('role', 'driver');
@@ -65,8 +114,8 @@ export async function POST(request: NextRequest) {
       const notifications = users.map((u) => ({
         user_id: u.id,
         type: 'admin_broadcast',
-        title: body.title,
-        body: body.body,
+        title,
+        body: message,
         data: { broadcast_by: auth.user.id, audience },
         is_read: false,
       }));
@@ -81,14 +130,14 @@ export async function POST(request: NextRequest) {
         actorId: auth.user.id,
         actorName: auth.user.name,
         action: 'admin.broadcast',
-        metadata: { audience, count: inserted, title: body.title },
+        metadata: { audience, count: inserted, title },
       });
       return NextResponse.json({ ok: true, count: inserted });
     }
 
     return NextResponse.json({ ok: false, error: 'Unknown action' }, { status: 400 });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: safeErrorMessage(e?.message ?? e) }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ ok: false, error: safeErrorMessage(error) }, { status: 500 });
   }
 }
 
@@ -122,11 +171,11 @@ export async function GET(request: NextRequest) {
         `)
         .eq('is_online', true);
       if (error) throw new Error(error.message);
-      const drivers = (data ?? []).map((d: any) => ({
+      const drivers = (data as DriverStatusRow[] | null ?? []).map((d) => ({
         id: d.driver_id,
-        name: d.users?.name ?? '—',
-        email: d.users?.email,
-        phone: d.users?.phone,
+        name: relation(d.users)?.name ?? '—',
+        email: relation(d.users)?.email,
+        phone: relation(d.users)?.phone,
         is_on_delivery: d.is_on_delivery,
         current_order_id: d.current_order_id,
         latitude: d.latitude,
@@ -148,21 +197,21 @@ export async function GET(request: NextRequest) {
         .order('created_at', { ascending: true })
         .limit(100);
       if (error) throw new Error(error.message);
-      const orders = (data ?? []).map((o: any) => ({
+      const orders = (data as PendingOrderRow[] | null ?? []).map((o) => ({
         id: o.id,
         order_number: o.order_number,
         status: o.status,
         total: Number(o.total),
         created_at: o.created_at,
-        customer_name: o.customers?.name,
-        restaurant_name: o.restaurants?.name,
+        customer_name: relation(o.customers)?.name,
+        restaurant_name: relation(o.restaurants)?.name,
         driver_id: o.driver_id,
       }));
       return NextResponse.json({ ok: true, orders });
     }
 
     return NextResponse.json({ ok: false, error: 'list param required' }, { status: 400 });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: safeErrorMessage(e?.message ?? e) }, { status: 500 });
+  } catch (error: unknown) {
+    return NextResponse.json({ ok: false, error: safeErrorMessage(error) }, { status: 500 });
   }
 }

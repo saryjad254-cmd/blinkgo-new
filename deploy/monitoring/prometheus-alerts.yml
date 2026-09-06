@@ -24,7 +24,7 @@ groups:
           runbook: "docs/runbooks/instance-down.md"
 
       - alert: BlinkGoHighErrorRate
-        expr: rate(http_errors_total[5m]) / rate(http_requests_total[5m]) > 0.05
+        expr: sum(rate(http_errors_total[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1) > 0.05
         for: 5m
         labels:
           severity: critical
@@ -35,7 +35,7 @@ groups:
           runbook: "docs/runbooks/high-error-rate.md"
 
       - alert: BlinkGoSlowResponses
-        expr: histogram_quantile(0.95, rate(http_request_duration_ms_bucket[5m])) > 2000
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_ms_bucket[5m]))) > 2000
         for: 5m
         labels:
           severity: warning
@@ -86,7 +86,7 @@ groups:
           summary: "High memory usage ({{ $value }}MB)"
 
       - alert: ProcessRestarting
-        expr: rate(process_start_time_seconds[5m]) > 0
+        expr: changes(process_start_time_seconds[10m]) > 0
         for: 1m
         labels:
           severity: critical

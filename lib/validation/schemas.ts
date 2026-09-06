@@ -69,6 +69,9 @@ const CartItemSchema = z.object({
   product_id: UuidSchema,
   quantity: z.number().int().min(1).max(50),
   notes: z.string().max(500).optional(),
+  configuration: z.object({
+    substitution_preference: z.enum(['best_match', 'contact_me', 'refund_item']).optional(),
+  }).optional(),
 });
 
 export const OrderCreateSchema = z.object({

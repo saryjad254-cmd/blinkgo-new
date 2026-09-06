@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useT } from '@/lib/i18n/I18nProvider';
+import { tr, useI18n } from '@/lib/i18n/I18nProvider';
 
 const FALLBACK_LINKS = {
   de: {
@@ -42,16 +42,20 @@ const FALLBACK_LINKS = {
 };
 
 export function LegalFooter({ locale = 'de' }: { locale?: 'de' | 'ar' | 'en' }) {
-  const tr = useT() as any;
-  const detected: 'de' | 'ar' | 'en' = (tr?.common?.locale === 'ar' || tr?.common?.locale === 'en') ? tr.common.locale : locale;
-  const fb: typeof FALLBACK_LINKS.de = (FALLBACK_LINKS as any)[detected] || FALLBACK_LINKS.de;
+  const { locale: contextLocale, t } = useI18n();
+  const detected = contextLocale || locale;
+  const fb: typeof FALLBACK_LINKS.de = FALLBACK_LINKS[detected] || FALLBACK_LINKS.de;
+  const translated = (path: string, fallback: string) => {
+    const value = tr(t, path);
+    return value === path ? fallback : value;
+  };
   const labels = {
-    impressum: (tr as any)?.legal?.link?.impressum || fb.impressum,
-    datenschutz: (tr as any)?.legal?.link?.datenschutz || fb.datenschutz,
-    agb: (tr as any)?.legal?.link?.agb || fb.agb,
-    widerruf: (tr as any)?.legal?.link?.widerruf || fb.widerruf,
-    cookies: (tr as any)?.legal?.link?.cookies || fb.cookies,
-    dataRequest: (tr as any)?.legal?.link?.dataRequest || fb.dataRequest,
+    impressum: translated('legal.link.impressum', fb.impressum),
+    datenschutz: translated('legal.link.datenschutz', fb.datenschutz),
+    agb: translated('legal.link.agb', fb.agb),
+    widerruf: translated('legal.link.widerruf', fb.widerruf),
+    cookies: translated('legal.link.cookies', fb.cookies),
+    dataRequest: translated('legal.link.dataRequest', fb.dataRequest),
     rightsReserved: fb.rightsReserved,
     draft: fb.draft,
   };
@@ -62,7 +66,9 @@ export function LegalFooter({ locale = 'de' }: { locale?: 'de' | 'ar' | 'en' }) 
   // before paint and the text is identical for the first frame.
   const [year, setYear] = useState<number | null>(null);
   useEffect(() => {
-    setYear(new Date().getFullYear());
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setYear(new Date().getFullYear()); });
+    return () => { cancelled = true; };
   }, []);
   const links = [
     { href: '/legal/impressum', label: labels.impressum },

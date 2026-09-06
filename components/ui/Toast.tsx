@@ -1,12 +1,13 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
 import Info from 'lucide-react/dist/esm/icons/info';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import X from 'lucide-react/dist/esm/icons/x';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/cn';
 
 type ToastType = 'success' | 'error' | 'info' | 'warning';
@@ -32,7 +33,7 @@ interface ToastContextValue {
 
 const ToastContext = createContext<ToastContextValue | null>(null);
 
-const typeStyles: Record<ToastType, { border: string; icon: any; iconColor: string; bar: string }> = {
+const typeStyles: Record<ToastType, { border: string; icon: LucideIcon; iconColor: string; bar: string }> = {
   success: { border: 'border-success/30', icon: CheckCircle2, iconColor: 'text-success', bar: 'bg-success' },
   error:   { border: 'border-danger/30',  icon: XCircle,      iconColor: 'text-danger',  bar: 'bg-danger' },
   info:    { border: 'border-info/30',    icon: Info,         iconColor: 'text-info',    bar: 'bg-info' },
@@ -65,9 +66,6 @@ export function ToastProvider({
   maxToasts?: number;
 }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => { setMounted(true); }, []);
 
   const dismiss = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -94,7 +92,7 @@ export function ToastProvider({
   return (
     <ToastContext.Provider value={api}>
       {children}
-      {mounted && toasts.length > 0 && createPortal(
+      {toasts.length > 0 && typeof document !== 'undefined' && createPortal(
         <div
           className={cn(
             'fixed z-toast left-0 right-0 px-4 pointer-events-none',

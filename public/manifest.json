@@ -1,13 +1,15 @@
 {
-  "name": "BlinkGo - Food Delivery",
+  "name": "BlinkGo – Schnell. Zuverlässig. Für dich.",
   "short_name": "BlinkGo",
-  "description": "BlinkGo - Food delivery platform for customers, drivers, and restaurants",
-  "start_url": "/",
+  "id": "/",
+  "description": "BlinkGo verbindet Restaurants, Märkte, Shops, Kundinnen und Kunden sowie Fahrer in Deutschland.",
+  "start_url": "/home?source=pwa",
   "display": "standalone",
-  "background_color": "#0f172a",
-  "theme_color": "#f59e0b",
+  "background_color": "#08090B",
+  "theme_color": "#E10600",
   "orientation": "portrait",
   "scope": "/",
+  "prefer_related_applications": false,
   "lang": "de",
   "dir": "ltr",
   "categories": [
@@ -17,25 +19,25 @@
   ],
   "icons": [
     {
-      "src": "/brand/icon-192.png",
+      "src": "/brand/blinkgo-app-icon-maskable-192-v2.png",
       "sizes": "192x192",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "maskable"
     },
     {
-      "src": "/brand/icon-512.png",
+      "src": "/brand/blinkgo-app-icon-maskable-512-v2.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "maskable"
     },
     {
-      "src": "/brand/icon-192.png",
+      "src": "/brand/blinkgo-app-icon-192-v2.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/brand/icon-512.png",
+      "src": "/brand/blinkgo-app-icon-512-v2.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
@@ -43,45 +45,45 @@
   ],
   "shortcuts": [
     {
-      "name": "Search Restaurants",
-      "short_name": "Search",
+      "name": "Restaurants suchen",
+      "short_name": "Suchen",
       "url": "/search",
       "icons": [
         {
-          "src": "/brand/icon-192.png",
+          "src": "/brand/blinkgo-app-icon-192-v2.png",
           "sizes": "192x192"
         }
       ]
     },
     {
-      "name": "My Orders",
-      "short_name": "Orders",
+      "name": "Meine Bestellungen",
+      "short_name": "Bestellungen",
       "url": "/orders",
       "icons": [
         {
-          "src": "/brand/icon-192.png",
+          "src": "/brand/blinkgo-app-icon-192-v2.png",
           "sizes": "192x192"
         }
       ]
     },
     {
-      "name": "Driver Dashboard",
-      "short_name": "Drive",
-      "url": "/driver/dashboard",
+      "name": "Warenkorb öffnen",
+      "short_name": "Warenkorb",
+      "url": "/cart",
       "icons": [
         {
-          "src": "/brand/icon-192.png",
+          "src": "/brand/blinkgo-app-icon-192-v2.png",
           "sizes": "192x192"
         }
       ]
     },
     {
-      "name": "Admin Panel",
-      "short_name": "Admin",
-      "url": "/admin",
+      "name": "Mein BlinkGo Profil",
+      "short_name": "Profil",
+      "url": "/profile",
       "icons": [
         {
-          "src": "/brand/icon-192.png",
+          "src": "/brand/blinkgo-app-icon-192-v2.png",
           "sizes": "192x192"
         }
       ]

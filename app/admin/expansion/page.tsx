@@ -1,12 +1,12 @@
 import { requireRole } from '@/lib/rbac';
 import { createServerClient } from '@/lib/supabase/server';
-import { ExpansionDashboard } from '@/components/admin/ExpansionDashboard';
+import { ExpansionDashboard, type ExpansionRequest } from '@/components/admin/ExpansionDashboard';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ExpansionPage() {
   await requireRole('admin');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
 
   const { data: requests, error } = await supabase
     .from('expansion_requests')
@@ -16,7 +16,7 @@ export default async function ExpansionPage() {
 
   return (
     <ExpansionDashboard
-      requests={(requests || []) as any[]}
+      requests={(requests || []) as ExpansionRequest[]}
       loadError={error?.message || null}
     />
   );

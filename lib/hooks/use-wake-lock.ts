@@ -81,11 +81,11 @@ export function useWakeLock(enabled: boolean = true): UseWakeLockResult {
   // Auto-acquire/release based on enabled flag
   useEffect(() => {
     isMountedRef.current = true;
-    if (enabled) {
-      request();
-    } else {
-      release();
-    }
+    queueMicrotask(() => {
+      if (!isMountedRef.current) return;
+      if (enabled) void request();
+      else void release();
+    });
     return () => {
       isMountedRef.current = false;
       release();

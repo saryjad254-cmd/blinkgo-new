@@ -1,6 +1,7 @@
 'use client';
 
 import { type CSSProperties } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import Store from 'lucide-react/dist/esm/icons/store';
 import Home from 'lucide-react/dist/esm/icons/home';
 import Truck from 'lucide-react/dist/esm/icons/truck';
@@ -8,7 +9,6 @@ import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
 import Pill from 'lucide-react/dist/esm/icons/pill';
 import Package from 'lucide-react/dist/esm/icons/package';
-import UserIcon from 'lucide-react/dist/esm/icons/user';
 import { cn } from '@/lib/cn';
 
 /**
@@ -44,7 +44,7 @@ interface BlinkMapMarkerProps {
   ariaLabel?: string;
 }
 
-const config: Record<MarkerType, { Icon: any; bg: string; ring: string; text: string; label: string }> = {
+const config: Record<MarkerType, { Icon: LucideIcon; bg: string; ring: string; text: string; label: string }> = {
   restaurant: {
     Icon: Store,
     bg: 'bg-brand-red',

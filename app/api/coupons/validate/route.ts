@@ -4,7 +4,7 @@
  * Body: { code, order_amount, restaurant_id? }
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { ok, fail, withErrorHandling } from '@/lib/api/response';
+import { ok, withErrorHandling } from '@/lib/api/response';
 import { CouponService } from '@/lib/services/coupon-service';
 import { ValidationError } from '@/lib/errors';
 import { requireApiRole } from '@/lib/auth-helper';

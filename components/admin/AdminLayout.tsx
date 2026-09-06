@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import LayoutDashboard from 'lucide-react/dist/esm/icons/layout-dashboard';
@@ -16,20 +16,18 @@ import Settings from 'lucide-react/dist/esm/icons/settings';
 import LogOut from 'lucide-react/dist/esm/icons/log-out';
 import Menu from 'lucide-react/dist/esm/icons/menu';
 import X from 'lucide-react/dist/esm/icons/x';
-import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import Ticket from 'lucide-react/dist/esm/icons/ticket';
 import Megaphone from 'lucide-react/dist/esm/icons/megaphone';
 import Award from 'lucide-react/dist/esm/icons/award';
 import BarChart3 from 'lucide-react/dist/esm/icons/bar-chart-3';
-import Activity from 'lucide-react/dist/esm/icons/activity';
-import Globe from 'lucide-react/dist/esm/icons/globe';
-import Mail from 'lucide-react/dist/esm/icons/mail';
-import Calendar from 'lucide-react/dist/esm/icons/calendar';
-import UserCog from 'lucide-react/dist/esm/icons/user-cog';
+import UserPlus from 'lucide-react/dist/esm/icons/user-plus';
 import Database from 'lucide-react/dist/esm/icons/database';
-import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
 import Radio from 'lucide-react/dist/esm/icons/radio';
+import Package from 'lucide-react/dist/esm/icons/package';
+import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
+import ToggleLeft from 'lucide-react/dist/esm/icons/toggle-left';
 import { cn } from '@/lib/cn';
+import { BlinkLogo } from '@/components/brand/BlinkLogo';
 
 export interface AdminUser {
   id?: string;
@@ -44,9 +42,10 @@ interface NavItem {
   label: string;
   labelAr: string;
   labelEn?: string;
-  icon: any;
+  icon: React.ComponentType<{ className?: string }>;
   badge?: number | string;
   permission?: 'super_admin' | 'admin' | 'manager';
+  requiredPermission?: 'payment_support';
 }
 
 interface NavSection {
@@ -69,6 +68,10 @@ export function AdminLayout({
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
+  const [trustedPermissions, setTrustedPermissions] = useState<string[]>([]);
+  const sidebarRef = useRef<HTMLElement>(null);
+  const sidebarOpenTriggerRef = useRef<HTMLButtonElement>(null);
+  const sidebarCloseRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const check = () => setIsMobile(window.innerWidth < 1024);
@@ -77,10 +80,55 @@ export function AdminLayout({
     return () => window.removeEventListener('resize', check);
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/auth/me')
+      .then((response) => response.json())
+      .then((payload) => {
+        if (cancelled) return;
+        const data = payload?.data ?? payload;
+        setTrustedPermissions(Array.isArray(data?.user?.permissions) ? data.user.permissions : []);
+      })
+      .catch(() => { if (!cancelled) setTrustedPermissions([]); });
+    return () => { cancelled = true; };
+  }, []);
+
   // Close sidebar on route change (mobile)
   useEffect(() => {
-    setSidebarOpen(false);
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setSidebarOpen(false); });
+    return () => { cancelled = true; };
   }, [pathname]);
+
+  useEffect(() => {
+    if (!sidebarRef.current) return;
+    sidebarRef.current.inert = isMobile && !sidebarOpen;
+  }, [isMobile, sidebarOpen]);
+
+  useEffect(() => {
+    if (!isMobile || !sidebarOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const returnTarget = sidebarOpenTriggerRef.current;
+    document.body.style.overflow = 'hidden';
+    const frame = requestAnimationFrame(() => sidebarCloseRef.current?.focus());
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); setSidebarOpen(false); return; }
+      if (event.key !== 'Tab') return;
+      const focusable = Array.from(sidebarRef.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])') ?? []);
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener('keydown', onKeyDown);
+      requestAnimationFrame(() => returnTarget?.focus());
+    };
+  }, [isMobile, sidebarOpen]);
 
   const isAr = locale === 'ar';
 
@@ -120,6 +168,14 @@ export function AdminLayout({
       titleAr: 'المستخدمون',
       titleEn: 'Users',
       items: [
+        {
+          href: '/admin/onboarding',
+          label: 'Erstellen & einrichten',
+          labelEn: 'Create & onboard',
+          labelAr: 'الإنشاء والتجهيز',
+          icon: UserPlus,
+          permission: 'admin',
+        },
         {
           href: '/admin/users',
           label: 'Kunden',
@@ -164,6 +220,20 @@ export function AdminLayout({
           icon: ShoppingBag,
         },
         {
+          href: '/admin/delays',
+          label: 'Verzögerungen',
+          labelEn: 'Delays',
+          labelAr: 'التأخيرات',
+          icon: AlertTriangle,
+        },
+        {
+          href: '/admin/products',
+          label: 'Produkte & Freigaben',
+          labelEn: 'Products & approvals',
+          labelAr: 'المنتجات والموافقات',
+          icon: Package,
+        },
+        {
           href: '/admin/map',
           label: 'Live-Karte',
           labelEn: 'Live map',
@@ -197,6 +267,7 @@ export function AdminLayout({
           labelEn: 'Refunds',
           labelAr: 'الاستردادات',
           icon: DollarSign,
+          requiredPermission: 'payment_support',
         },
       ],
     },
@@ -257,6 +328,14 @@ export function AdminLayout({
           permission: 'super_admin',
         },
         {
+          href: '/admin/feature-flags',
+          label: 'Feature-Steuerung',
+          labelEn: 'Feature controls',
+          labelAr: 'التحكم بالميزات',
+          icon: ToggleLeft,
+          permission: 'manager',
+        },
+        {
           href: '/admin/audit',
           label: 'Audit-Log',
           labelEn: 'Audit log',
@@ -273,6 +352,7 @@ export function AdminLayout({
     .map((section) => ({
       ...section,
       items: section.items.filter((item) => {
+        if (item.requiredPermission && user.role !== 'super_admin' && !trustedPermissions.includes(item.requiredPermission)) return false;
         if (!item.permission) return true;
         if (user.role === 'super_admin') return true;
         if (item.permission === 'admin' && user.role === 'admin') return true;
@@ -345,6 +425,12 @@ export function AdminLayout({
 
       {/* Sidebar */}
       <aside
+        ref={sidebarRef}
+        id="admin-sidebar"
+        role={isMobile ? 'dialog' : undefined}
+        aria-modal={isMobile && sidebarOpen ? true : undefined}
+        aria-hidden={isMobile && !sidebarOpen ? true : undefined}
+        aria-label={isMobile ? (locale === 'ar' ? 'قائمة الإدارة' : locale === 'en' ? 'Admin menu' : 'Admin-Menü') : undefined}
         className={cn(
           'fixed lg:sticky top-0 z-50 h-screen w-72 flex-shrink-0',
           'bg-gradient-to-b from-ink-900 via-ink-800 to-ink-900',
@@ -356,12 +442,10 @@ export function AdminLayout({
       >
         {/* Logo */}
         <div className="px-5 py-5 border-b border-edge flex items-center justify-between">
-          <Link href="/admin" className="flex items-center gap-2.5 group">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active flex items-center justify-center shadow-glow group-hover:scale-105 transition-transform">
-              <span className="text-white font-extrabold text-lg">B</span>
-            </div>
-            <div>
-              <p className="font-extrabold text-base text-white leading-none">BlinkGo</p>
+          <Link href="/admin" aria-label="BlinkGo Admin" className="group flex min-h-11 items-center gap-2.5 rounded-xl">
+            <BlinkLogo variant="horizontal" size="sm" priority className="transition-transform group-hover:scale-[1.02]" />
+            <div className="min-w-0">
+              <p className="sr-only">BlinkGo</p>
               <p className="text-[10px] text-text-muted uppercase tracking-wider mt-0.5">
                 {isAr ? 'لوحة الإدارة' : locale === 'en' ? 'Admin Panel' : 'Admin Panel'}
               </p>
@@ -369,8 +453,10 @@ export function AdminLayout({
           </Link>
           {isMobile && (
             <button
+              ref={sidebarCloseRef}
               type="button"
               onClick={() => setSidebarOpen(false)}
+              aria-label={locale === 'ar' ? 'إغلاق القائمة' : locale === 'en' ? 'Close menu' : 'Menü schließen'}
               className="lg:hidden w-9 h-9 rounded-lg bg-ink-700 flex items-center justify-center text-text-secondary"
             >
               <X className="w-4 h-4" />
@@ -464,8 +550,12 @@ export function AdminLayout({
         <header className="sticky top-0 z-30 bg-bg/80 backdrop-blur-xl border-b border-edge">
           <div className="px-4 lg:px-8 h-16 flex items-center gap-3">
             <button
+              ref={sidebarOpenTriggerRef}
               type="button"
               onClick={() => setSidebarOpen(true)}
+              aria-label={locale === 'ar' ? 'فتح القائمة' : locale === 'en' ? 'Open menu' : 'Menü öffnen'}
+              aria-expanded={sidebarOpen}
+              aria-controls="admin-sidebar"
               className="lg:hidden w-10 h-10 rounded-xl bg-ink-700 flex items-center justify-center text-text-secondary"
             >
               <Menu className="w-4 h-4" />

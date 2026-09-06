@@ -13,9 +13,9 @@ interface Props {
   variant?: 'button' | 'icon' | 'menu-item';
 }
 
-export function LogoutButton({ email, role, variant = 'button' }: Props) {
+export function LogoutButton({ variant = 'button' }: Props) {
   const router = useRouter();
-  const { locale, t } = useI18n();
+  const { locale } = useI18n();
   const [loading, setLoading] = useState(false);
 
   async function logout() {

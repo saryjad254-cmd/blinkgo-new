@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Settings from 'lucide-react/dist/esm/icons/settings';
 import Database from 'lucide-react/dist/esm/icons/database';
 import Mail from 'lucide-react/dist/esm/icons/mail';
 import Globe from 'lucide-react/dist/esm/icons/globe';
@@ -12,6 +11,7 @@ import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
 import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
+import type { LucideIcon } from 'lucide-react';
 
 const T = {
   de: {
@@ -209,7 +209,7 @@ function ServiceCard({
   koLabel,
   loading,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   status: 'ok' | 'down' | 'unknown';
   detail?: string;

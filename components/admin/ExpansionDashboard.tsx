@@ -1,19 +1,13 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Download from 'lucide-react/dist/esm/icons/download';
 import Search from 'lucide-react/dist/esm/icons/search';
-import Filter from 'lucide-react/dist/esm/icons/filter';
-import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
 import Mail from 'lucide-react/dist/esm/icons/mail';
-import Phone from 'lucide-react/dist/esm/icons/phone';
-import Calendar from 'lucide-react/dist/esm/icons/calendar';
-import User from 'lucide-react/dist/esm/icons/user';
-import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import { cn } from '@/lib/cn';
 
-interface ExpansionRequest {
+export interface ExpansionRequest {
   id: string;
   address: string;
   city: string;
@@ -139,8 +133,10 @@ export function ExpansionDashboard({ requests, loadError }: ExpansionDashboardPr
   const [search, setSearch] = useState('');
 
   // SSR safe: only read cookie after mount
-  useMemo(() => {
-    if (typeof window !== 'undefined') setLocale(getLocaleFromCookie());
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setLocale(getLocaleFromCookie()); });
+    return () => { cancelled = true; };
   }, []);
 
   const t = COPY[locale];
@@ -350,7 +346,7 @@ export function ExpansionDashboard({ requests, loadError }: ExpansionDashboardPr
                     {r.email && <span className="truncate max-w-[120px]">✉️ {r.email}</span>}
                   </div>
                   {r.notes && (
-                    <p className="mt-2 text-xs text-text-muted italic line-clamp-2">"{r.notes}"</p>
+                    <p className="mt-2 text-xs text-text-muted italic line-clamp-2">{'"'}{r.notes}{'"'}</p>
                   )}
                 </div>
               </div>

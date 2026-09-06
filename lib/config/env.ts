@@ -33,9 +33,11 @@ const EnvSchema = z.object({
   
   // Google Maps (OPTIONAL)
   NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: z.string().optional(),
+  NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID: z.string().optional(),
   
   // Email (OPTIONAL)
   RESEND_API_KEY: z.string().optional(),
+  RESEND_WEBHOOK_SECRET: z.string().optional(),
   
   // Security
   ALLOWED_ORIGINS: z.string().optional(),
@@ -70,7 +72,9 @@ function loadEnv(): Env {
     STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY,
     NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY,
+    NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID: process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID,
     RESEND_API_KEY: process.env.RESEND_API_KEY,
+    RESEND_WEBHOOK_SECRET: process.env.RESEND_WEBHOOK_SECRET,
     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
     ENABLE_AUDIT_LOG: process.env.ENABLE_AUDIT_LOG,
     ENABLE_RATE_LIMITING: process.env.ENABLE_RATE_LIMITING,
@@ -80,13 +84,20 @@ function loadEnv(): Env {
   const result = EnvSchema.safeParse(raw);
   
   if (!result.success) {
-    // Don't fail in dev - log and use defaults
-    if (process.env.NODE_ENV === 'production') {
-      const errors = result.error.errors.map((e) => `  - ${e.path.join('.')}: ${e.message}`).join('\n');
-      throw new Error(`Invalid environment configuration:\n${errors}`);
-    }
-    // In dev, return what we can
-    return raw as unknown as Env;
+    // Keep builds and public/error pages available even when an operator has
+    // not provisioned external services yet. Individual integrations reject
+    // requests with an explicit 503 at runtime instead of crashing on import.
+    return {
+      ...raw,
+      NEXT_PUBLIC_SUPABASE_URL: raw.NEXT_PUBLIC_SUPABASE_URL || 'https://placeholder.supabase.co',
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: raw.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'placeholder-anon-key-for-build-only',
+      SUPABASE_SERVICE_ROLE_KEY: raw.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-service-key-for-build-only',
+      SUPABASE_DB_NAME: raw.SUPABASE_DB_NAME || 'postgres',
+      NODE_ENV: raw.NODE_ENV || 'development',
+      ENABLE_AUDIT_LOG: raw.ENABLE_AUDIT_LOG !== 'false',
+      ENABLE_RATE_LIMITING: raw.ENABLE_RATE_LIMITING !== 'false',
+      LOG_LEVEL: raw.LOG_LEVEL || 'info',
+    } as Env;
   }
   
   cachedEnv = result.data;

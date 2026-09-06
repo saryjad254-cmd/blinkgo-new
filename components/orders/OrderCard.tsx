@@ -9,6 +9,7 @@ import HelpCircle from 'lucide-react/dist/esm/icons/help-circle';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import Store from 'lucide-react/dist/esm/icons/store';
 import Package from 'lucide-react/dist/esm/icons/package';
+import Navigation from 'lucide-react/dist/esm/icons/navigation';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { useState } from 'react';
 
@@ -35,6 +36,7 @@ const COPY = {
     from: 'von',
     viewOrder: 'Bestellung ansehen',
     orderId: 'Bestellung',
+    track: 'Verfolgen',
   },
   ar: {
     reorder: 'إعادة الطلب',
@@ -44,6 +46,7 @@ const COPY = {
     from: 'من',
     viewOrder: 'عرض الطلب',
     orderId: 'طلب',
+    track: 'تتبّع',
   },
   en: {
     reorder: 'Reorder',
@@ -53,13 +56,13 @@ const COPY = {
     from: 'from',
     viewOrder: 'View order',
     orderId: 'Order',
+    track: 'Track',
   },
 };
 
 function formatDate(iso: string, locale: 'de' | 'ar' | 'en'): string {
   const d = new Date(iso);
   const now = new Date();
-  const diff = (now.getTime() - d.getTime()) / 1000;
   const isToday = d.toDateString() === now.toDateString();
   const yesterday = new Date(now);
   yesterday.setDate(now.getDate() - 1);
@@ -92,6 +95,10 @@ export function OrderCard({ order, locale }: OrderCardProps) {
   const [imageError, setImageError] = useState(false);
 
   const cover = order.restaurant?.cover_url;
+  const normalizedStatus = order.status.toLowerCase();
+  const isActive = ['pending', 'confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivering', 'on_the_way'].includes(normalizedStatus);
+  const canReorder = ['delivered', 'cancelled'].includes(normalizedStatus);
+  const canRate = normalizedStatus === 'delivered';
 
   return (
     <article
@@ -173,32 +180,36 @@ export function OrderCard({ order, locale }: OrderCardProps) {
             {t.viewOrder}
             <ChevronRight className="w-3.5 h-3.5 rtl:rotate-180" strokeWidth={2.5} />
           </Link>
-          {order.restaurant?.id && (
-            <button
-              type="button"
-              onClick={() => {
-                // Reorder: navigate to restaurant page
-                if (typeof window !== 'undefined') {
-                  window.location.href = `/restaurants/${order.restaurant!.id}`;
-                }
-              }}
+          {isActive && (
+            <Link
+              href={`/orders/${order.id}/track`}
+              className="inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-xl bg-brand-red-500/10 hover:bg-brand-red-500/20 border border-brand-red-500/30 text-xs font-bold text-brand-red-400 transition-all"
+              title={t.track}
+            >
+              <Navigation className="w-3.5 h-3.5" strokeWidth={2.5} />
+              <span className="hidden sm:inline">{t.track}</span>
+            </Link>
+          )}
+          {canReorder && order.restaurant?.id && (
+            <Link
+              href={`/restaurants/${order.restaurant.id}`}
               className="inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-xl bg-bg-elevated/60 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-xs font-bold text-text-secondary hover:text-text transition-all"
               title={t.reorder}
             >
               <RefreshCw className="w-3.5 h-3.5" strokeWidth={2.5} />
               <span className="hidden sm:inline">{t.reorder}</span>
-            </button>
+            </Link>
           )}
-          <Link
+          {canRate && <Link
             href={`/orders/${order.id}#rate`}
             className="inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-xl bg-bg-elevated/60 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-xs font-bold text-text-secondary hover:text-text transition-all"
             title={t.rate}
           >
             <Star className="w-3.5 h-3.5" strokeWidth={2.5} />
             <span className="hidden sm:inline">{t.rate}</span>
-          </Link>
+          </Link>}
           <Link
-            href="/help"
+            href={`/help?order=${encodeURIComponent(order.id)}`}
             className="inline-flex items-center justify-center gap-1.5 h-9 px-3 rounded-xl bg-bg-elevated/60 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-xs font-bold text-text-secondary hover:text-text transition-all"
             title={t.help}
           >

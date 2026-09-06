@@ -35,21 +35,24 @@ function applyTheme(resolved: 'light' | 'dark') {
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>('system');
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
-  const [mounted, setMounted] = useState(false);
 
   // Initialize from localStorage
   useEffect(() => {
-    setMounted(true);
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
-      const initial: Theme = stored && ['light', 'dark', 'system'].includes(stored) ? stored : 'dark';
-      setThemeState(initial);
-      const resolved = initial === 'system' ? getSystemTheme() : initial;
-      setResolvedTheme(resolved);
-      applyTheme(resolved);
-    } catch {
-      // ignore
-    }
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
+        const initial: Theme = stored && ['light', 'dark', 'system'].includes(stored) ? stored : 'dark';
+        setThemeState(initial);
+        const resolved = initial === 'system' ? getSystemTheme() : initial;
+        setResolvedTheme(resolved);
+        applyTheme(resolved);
+      } catch {
+        // ignore
+      }
+    });
+    return () => { cancelled = true; };
   }, []);
 
   // Listen to system theme changes

@@ -12,7 +12,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { isValidUuid } from '@/lib/validation';
 import { ok, withErrorHandling } from '@/lib/api/response';
-import { withSecurity } from '@/lib/api/security';
+import type { ApiResponse } from '@/lib/api/response';
+import { withSecurity, type HandlerContext } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { logger } from '@/lib/logging';
 import { recordAudit } from '@/lib/audit/audit-trail';
@@ -22,7 +23,7 @@ export const dynamic = 'force-dynamic';
 
 async function toggleFavorite(
   req: NextRequest,
-  ctx: { auth: { user: { id: string; role: string; [k: string]: any } } },
+  ctx: HandlerContext,
 ): Promise<NextResponse> {
   return withErrorHandling(async () => {
     const body = await req.json().catch(() => ({}));
@@ -34,7 +35,7 @@ async function toggleFavorite(
     // SECURITY: use the authenticated client (cookie-bound) so the user_id
     // is forced to ctx.auth.user.id — never trust body-supplied identity.
     const { createServerClient } = await import('@/lib/supabase/server');
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
 
     // Check if already favorited
     const { data: existing, error: checkError } = await supabase
@@ -89,8 +90,7 @@ async function toggleFavorite(
 export async function POST(req: NextRequest) {
   return withSecurity(
     secureRoute('moderate', ['customer', 'admin', 'super_admin', 'manager']),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    toggleFavorite as any,
+    async (ctx) => toggleFavorite(req, ctx) as Promise<NextResponse<ApiResponse<unknown>>>,
   )(req) as unknown as NextResponse;
 }
 

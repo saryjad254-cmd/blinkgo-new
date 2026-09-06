@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import X from 'lucide-react/dist/esm/icons/x';
 import { cn } from '@/lib/cn';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 

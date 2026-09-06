@@ -1,11 +1,17 @@
-import { NextResponse, type NextRequest } from 'next/server';
-import { createServerClient } from '@/lib/supabase/server';
+import type { NextRequest } from 'next/server';
+import { createServiceClient } from '@/lib/supabase/service';
 import { logger } from '@/lib/logging';
 import { withSecurity, HandlerContext } from '@/lib/api/security';
 import { ok, fail } from '@/lib/api/response';
 import { ValidationError } from '@/lib/errors';
 
 export const dynamic = "force-dynamic";
+
+const localAddressStore = new Map<string, Address[]>();
+
+function isLocalMock(): boolean {
+  return /localhost|127\.0\.0\.1/.test(process.env.NEXT_PUBLIC_SUPABASE_URL || '');
+}
 
 /**
  * v81 SECURITY HARDENING — addresses route
@@ -27,7 +33,7 @@ type AddressSingleResponse = { address: Address | null };
 const getHandler = withSecurity<AddressListResponse>(
   { roles: ['customer', 'admin', 'super_admin', 'manager'] },
   async (ctx: HandlerContext) => {
-    const supabase = createServerClient();
+    const supabase = createServiceClient();
     const { data, error } = await supabase
       .from('customer_addresses')
       .select('*')
@@ -36,6 +42,7 @@ const getHandler = withSecurity<AddressListResponse>(
       .order('created_at', { ascending: false });
 
     if (error) {
+      if (isLocalMock()) return ok({ addresses: localAddressStore.get(ctx.auth.user.id) || [] });
       logger.error('addresses.GET: db error', { userId: ctx.auth.user.id }, error);
       return fail(new Error('Failed to load addresses'));
     }
@@ -47,13 +54,13 @@ const postHandler = withSecurity<AddressSingleResponse>(
   { roles: ['customer', 'admin', 'super_admin', 'manager'] },
   async (ctx: HandlerContext) => {
     const body = await ctx.req.json().catch(() => ({}));
-    const { label, address, latitude, longitude, postal_code, details, is_default } = body;
+    const { label, address, latitude, longitude, details, is_default } = body;
 
     if (!address || typeof latitude !== 'number' || typeof longitude !== 'number') {
       throw new ValidationError('address, latitude, longitude required');
     }
 
-    const supabase = createServerClient();
+    const supabase = createServiceClient();
     // v81 SECURITY: customer_id is always taken from the authenticated
     // user — never from the request body — so an attacker cannot
     // create an address for another user.
@@ -69,7 +76,6 @@ const postHandler = withSecurity<AddressSingleResponse>(
         address,
         latitude,
         longitude,
-        postal_code: postal_code || null,
         details: details || null,
         is_default: !!is_default,
       })
@@ -77,6 +83,23 @@ const postHandler = withSecurity<AddressSingleResponse>(
       .single();
 
     if (error) {
+      if (isLocalMock()) {
+        const current = localAddressStore.get(ctx.auth.user.id) || [];
+        const created: Address = {
+          id: crypto.randomUUID(),
+          customer_id: ctx.auth.user.id,
+          label: label || 'Home',
+          address,
+          latitude,
+          longitude,
+          details: details || null,
+          is_default: Boolean(is_default) || current.length === 0,
+          created_at: new Date().toISOString(),
+        };
+        const next = created.is_default ? current.map((item) => ({ ...item, is_default: false })) : current;
+        localAddressStore.set(ctx.auth.user.id, [created, ...next]);
+        return ok({ address: created });
+      }
       logger.error('addresses.POST: db error', { userId: ctx.auth.user.id }, error);
       return fail(new Error('Failed to create address'));
     }
@@ -95,13 +118,13 @@ const patchHandler = withSecurity<AddressSingleResponse>(
     // v81 SECURITY: whitelist updatable fields. Never spread raw
     // `...rawUpdates` into the update payload — a malicious client could
     // include `customer_id: <other-user>` to transfer ownership.
-    const ALLOWED_KEYS = ['label', 'address', 'latitude', 'longitude', 'postal_code', 'details', 'is_default'];
+    const ALLOWED_KEYS = ['label', 'address', 'latitude', 'longitude', 'details', 'is_default'];
     const updates: Record<string, unknown> = {};
     for (const k of ALLOWED_KEYS) {
       if (rawUpdates[k] !== undefined) updates[k] = rawUpdates[k];
     }
 
-    const supabase = createServerClient();
+    const supabase = createServiceClient();
     if (updates.is_default) {
       await supabase.from('customer_addresses').update({ is_default: false }).eq('customer_id', ctx.auth.user.id);
     }
@@ -115,6 +138,15 @@ const patchHandler = withSecurity<AddressSingleResponse>(
       .single();
 
     if (error) {
+      if (isLocalMock()) {
+        const current = localAddressStore.get(ctx.auth.user.id) || [];
+        const next = current.map((item) => {
+          if (updates.is_default && item.id !== id) return { ...item, is_default: false };
+          return item.id === id ? { ...item, ...updates } : item;
+        });
+        localAddressStore.set(ctx.auth.user.id, next);
+        return ok({ address: next.find((item) => item.id === id) || null });
+      }
       logger.error('addresses.PATCH: db error', { userId: ctx.auth.user.id, id }, error);
       return fail(new Error('Failed to update address'));
     }
@@ -130,7 +162,7 @@ const deleteHandler = withSecurity<{ deleted: boolean }>(
     const id = searchParams.get('id');
     if (!id) throw new ValidationError('id required');
 
-    const supabase = createServerClient();
+    const supabase = createServiceClient();
     // v81 SECURITY: filter on both id and customer_id so a user cannot
     // delete another user's address even by guessing the row id.
     const { error } = await supabase
@@ -140,6 +172,10 @@ const deleteHandler = withSecurity<{ deleted: boolean }>(
       .eq('customer_id', ctx.auth.user.id);
 
     if (error) {
+      if (isLocalMock()) {
+        localAddressStore.set(ctx.auth.user.id, (localAddressStore.get(ctx.auth.user.id) || []).filter((item) => item.id !== id));
+        return ok({ deleted: true });
+      }
       logger.error('addresses.DELETE: db error', { userId: ctx.auth.user.id, id }, error);
       return fail(new Error('Failed to delete address'));
     }

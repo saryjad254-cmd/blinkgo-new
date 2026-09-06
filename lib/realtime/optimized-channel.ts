@@ -9,8 +9,9 @@
  *  - Bandwidth optimization (only subscribe to needed events)
  */
 
-import { createClient, RealtimeChannel, RealtimeClient } from '@supabase/supabase-js';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { logger } from '@/lib/logging/logger';
+import { createBrowserClient } from '@/lib/supabase/client';
 
 interface ChannelOptions {
   /** Channel name for reuse */
@@ -27,12 +28,12 @@ interface ChannelOptions {
   reconnect?: boolean;
 }
 
-type ChangeHandler = (payload: any) => void;
+type RealtimeRow = Record<string, unknown>;
+type RealtimePayload = RealtimePostgresChangesPayload<RealtimeRow>;
+type ChangeHandler = (payload: RealtimePayload) => void;
 
 class ChannelManager {
   private channels = new Map<string, ManagedChannel>();
-  private reconnectTimers = new Map<string, NodeJS.Timeout>();
-
   get(opts: ChannelOptions): ManagedChannel {
     const key = opts.name;
     let ch = this.channels.get(key);
@@ -52,7 +53,7 @@ class ChannelManager {
   }
 
   releaseAll() {
-    for (const [name, ch] of this.channels) {
+    for (const ch of this.channels.values()) {
       ch.close();
     }
     this.channels.clear();
@@ -63,7 +64,8 @@ class ManagedChannel {
   private channel: RealtimeChannel | null = null;
   private handlers = new Set<ChangeHandler>();
   private debounceTimer: NodeJS.Timeout | null = null;
-  private pendingPayloads: any[] = [];
+  private pendingPayloads: RealtimePayload[] = [];
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 10;
   private reconnectDelay = 1000; // Start at 1s, exponential backoff
@@ -84,11 +86,7 @@ class ManagedChannel {
     if (typeof window === 'undefined') return;
 
     try {
-      const client = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-        { realtime: { params: { eventsPerSecond: 10 } } },
-      );
+      const client = createBrowserClient();
 
       const filter = this.opts.filter ?? '';
       const events = this.opts.events ?? ['INSERT', 'UPDATE', 'DELETE'];
@@ -102,7 +100,7 @@ class ManagedChannel {
 
       for (const event of events) {
         this.channel.on(
-          'postgres_changes' as any,
+          'postgres_changes',
           { event, schema: 'public', table: this.opts.table, filter },
           (payload) => this.handlePayload(payload),
         );
@@ -123,7 +121,7 @@ class ManagedChannel {
     }
   }
 
-  private handlePayload(payload: any) {
+  private handlePayload(payload: RealtimePayload) {
     if (!this.opts.debounceMs || this.opts.debounceMs <= 0) {
       this.dispatch(payload);
       return;
@@ -139,7 +137,7 @@ class ManagedChannel {
     }, this.opts.debounceMs);
   }
 
-  private dispatch(payload: any) {
+  private dispatch(payload: RealtimePayload) {
     for (const h of this.handlers) {
       try {
         h(payload);
@@ -155,7 +153,7 @@ class ManagedChannel {
       logger.warn('Realtime max reconnect attempts reached', { channel: this.opts.name });
       return;
     }
-    if (!this.opts.reconnect) return;
+    if (this.opts.reconnect === false || this.reconnectTimer) return;
 
     const delay = Math.min(30000, this.reconnectDelay * Math.pow(2, this.reconnectAttempts));
     this.reconnectAttempts++;
@@ -166,8 +164,13 @@ class ManagedChannel {
       delay_ms: delay,
     });
 
-    setTimeout(() => {
-      this.close();
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      if (this.closed) return;
+      if (this.channel) {
+        void this.channel.unsubscribe();
+        this.channel = null;
+      }
       this.connect();
     }, delay);
   }
@@ -182,6 +185,11 @@ class ManagedChannel {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.pendingPayloads = [];
   }
 }
 

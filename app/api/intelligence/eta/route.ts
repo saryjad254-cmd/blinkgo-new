@@ -9,6 +9,7 @@ import { predictETA } from '@/lib/intelligence/eta-predictor';
 import type { LatLng } from '@/lib/delivery-zone';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { AuthenticationError, ValidationError } from '@/lib/errors';
+import { validateLocation } from '@/lib/driver/dispatch-policy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -22,9 +23,27 @@ interface RequestBody {
   customer_lng?: number;
 }
 
+type RestaurantRelation = {
+  id: string;
+  latitude: number | null;
+  longitude: number | null;
+  owner_id: string | null;
+};
+
+function relation<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
+}
+
+function requiredLocation(lat: unknown, lng: unknown, label: string): LatLng {
+  const result = validateLocation(lat, lng);
+  if (!result.ok) throw new ValidationError(`${label} coordinates invalid: ${result.reason}`);
+  return { lat: result.lat, lng: result.lng };
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const serviceClient = createServiceClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new AuthenticationError();
@@ -56,18 +75,17 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (!order) throw new ValidationError('Order not found');
       const isCustomer = order.customer_id === user.id;
       const isDriver = order.driver_id === user.id;
-      const isRestaurantOwner = !!(order.restaurant as any)?.owner_id
-        && (order.restaurant as any).owner_id === user.id;
+      const rest = relation(order.restaurant as RestaurantRelation | RestaurantRelation[] | null);
+      const isRestaurantOwner = !!rest?.owner_id && rest.owner_id === user.id;
       const isAdmin = callerRole === 'admin' || callerRole === 'super_admin';
       if (!isCustomer && !isDriver && !isRestaurantOwner && !isAdmin) {
         throw new ValidationError('Not authorized for this order');
       }
-      const rest = order.restaurant as any;
-      if (!rest?.latitude || !rest?.longitude) {
+      if (rest?.latitude == null || rest.longitude == null) {
         throw new ValidationError('Restaurant location missing');
       }
-      restaurantLoc = { lat: Number(rest.latitude), lng: Number(rest.longitude) };
-      customerLoc = { lat: Number(order.customer_latitude), lng: Number(order.customer_longitude) };
+      restaurantLoc = requiredLocation(rest.latitude, rest.longitude, 'restaurant');
+      customerLoc = requiredLocation(order.customer_latitude, order.customer_longitude, 'customer');
       historicalPrepMin = undefined;
       prepVarianceMin = undefined;
 
@@ -91,8 +109,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         .eq('id', body.restaurant_id)
         .single();
       if (!rest) throw new ValidationError('Restaurant not found');
-      restaurantLoc = { lat: Number(rest.latitude), lng: Number(rest.longitude) };
-      customerLoc = { lat: body.customer_lat, lng: body.customer_lng };
+      restaurantLoc = requiredLocation(rest.latitude, rest.longitude, 'restaurant');
+      customerLoc = requiredLocation(body.customer_lat, body.customer_lng, 'customer');
       historicalPrepMin = undefined;
       prepVarianceMin = undefined;
     }
@@ -107,10 +125,9 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       driverSpeedFactor = 0.8 + (r - 3) * 0.2;
     }
 
-    const driverLoc: LatLng | null =
-      body.driver_lat != null && body.driver_lng != null
-        ? { lat: body.driver_lat, lng: body.driver_lng }
-        : null;
+    const driverLoc: LatLng | null = body.driver_lat != null && body.driver_lng != null
+      ? requiredLocation(body.driver_lat, body.driver_lng, 'driver')
+      : null;
 
     const prediction = predictETA({
       driverLocation: driverLoc,

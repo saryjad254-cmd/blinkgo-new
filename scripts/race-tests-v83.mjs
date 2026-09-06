@@ -92,7 +92,7 @@ console.log('\n=== V83 Race Condition Tests ===\n');
 {
   // WF-D: cron endpoint
   const r = await fetch(`${BASE}/api/cron/scheduled-orders`, { method: 'POST' });
-  record('V83-D4 cron endpoint returns 200/401', [200, 401].includes(r.status), `status=${r.status}`);
+  record('V83-D4 cron endpoint fails closed without auth', [401, 403, 503].includes(r.status), `status=${r.status}`);
 }
 {
   // WF-E: webhook signature verification (missing signature)

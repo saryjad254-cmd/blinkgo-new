@@ -6,6 +6,7 @@ import Check from 'lucide-react/dist/esm/icons/check';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { cn } from '@/lib/cn';
+import { useRouter } from 'next/navigation';
 
 /**
  * Language switcher — always shows all three options (DE / AR / EN).
@@ -20,6 +21,7 @@ import { cn } from '@/lib/cn';
  */
 export function LanguageSwitcher({ className }: { className?: string }) {
   const { locale, setLocale } = useI18n();
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -99,6 +101,7 @@ export function LanguageSwitcher({ className }: { className?: string }) {
                 onClick={() => {
                   setLocale(opt.code as Locale);
                   setOpen(false);
+                  router.refresh();
                 }}
                 className={cn(
                   'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-bold transition-all duration-150',

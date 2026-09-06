@@ -7,38 +7,35 @@ import { createServerClient } from '@/lib/supabase/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
-import { requireApiRole } from '@/lib/auth-helper';
-import { AuthenticationError, AuthorizationError } from '@/lib/errors';
+import type { ApiResponse } from '@/lib/api/response';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
-  return (await withSecurity(
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  return await withSecurity(
     secureRoute('lenient', ['driver', 'admin', 'super_admin', 'manager']),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async () => driverWorkingHours() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+    async (ctx) => await driverWorkingHours(ctx.auth.user.id) as NextResponse<ApiResponse<unknown>>,
+  )(req) as NextResponse;
 }
 
-async function driverWorkingHours(): Promise<NextResponse> {
+async function driverWorkingHours(userId: string): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const user = await requireApiRole(['driver', 'admin', 'super_admin', 'manager']);
-    if (!user) throw new AuthenticationError();
-
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data, error } = await supabase
       .from('driver_working_hours')
       .select('*')
-      .eq('driver_id', user.id)
+      .eq('driver_id', userId)
       .order('day_of_week', { ascending: true });
 
     if (!error && data && data.length > 0) {
       return ok({ hours: data, using_defaults: false });
     }
 
-    const meta = user.email ? (await supabase.auth.getUser()).data.user?.user_metadata : null;
-    const hours = (meta as any)?.working_hours;
+    const meta = (await supabase.auth.getUser()).data.user?.user_metadata;
+    const hours = meta && typeof meta === 'object'
+      ? (meta as Record<string, unknown>).working_hours
+      : undefined;
     if (Array.isArray(hours) && hours.length === 7) {
       return ok({ hours, using_defaults: false, source: 'metadata' });
     }

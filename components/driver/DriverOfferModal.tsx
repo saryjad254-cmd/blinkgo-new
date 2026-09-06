@@ -14,13 +14,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import Navigation2 from 'lucide-react/dist/esm/icons/navigation-2';
 import Package from 'lucide-react/dist/esm/icons/package';
 import X from 'lucide-react/dist/esm/icons/x';
 import Check from 'lucide-react/dist/esm/icons/check';
 import Clock from 'lucide-react/dist/esm/icons/clock';
-import Wallet from 'lucide-react/dist/esm/icons/wallet';
-import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
+import type { LucideIcon } from 'lucide-react';
 import { useT } from '@/lib/i18n/I18nProvider';
 import { haptic } from '@/lib/utils/haptics';
 import { playDriverSound } from '@/lib/utils/driver-sound';
@@ -52,7 +50,7 @@ export function DriverOfferModal({ offer, onAccept, onSkip, timeoutSec = 30, bus
   const t = useT();
   const [remaining, setRemaining] = useState(timeoutSec);
   const acceptedRef = useRef(false);
-  const startTimeRef = useRef(Date.now());
+  const startTimeRef = useRef(0);
 
   // Audio + haptic on mount
   useEffect(() => {
@@ -185,7 +183,7 @@ export function DriverOfferModal({ offer, onAccept, onSkip, timeoutSec = 30, bus
   );
 }
 
-function RoutePoint({ icon: Icon, label, sublabel, distance, color }: { icon: any; label: string; sublabel: string; distance: string; color: string }) {
+function RoutePoint({ icon: Icon, label, sublabel, distance, color }: { icon: LucideIcon; label: string; sublabel: string; distance: string; color: string }) {
   return (
     <div className="flex items-start gap-3">
       <div className={`p-2 rounded-full bg-bg-elevated ${color}`}>

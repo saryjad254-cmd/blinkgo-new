@@ -9,6 +9,7 @@ import type { AutomationRule } from './types';
 
 export const defaultRules: AutomationRule[] = [
   {
+    id: '68000000-0000-4000-8000-000000000001',
     name: 'Auto-pause restaurant with low SLA',
     description: 'Pause restaurant if SLA compliance drops below 50% over 30 minutes',
     enabled: true,
@@ -25,6 +26,7 @@ export const defaultRules: AutomationRule[] = [
     cooldown_minutes: 60,
   },
   {
+    id: '68000000-0000-4000-8000-000000000002',
     name: 'Alert on driver shortage',
     description: 'Notify admins when active drivers < 2 for 15 minutes',
     enabled: true,
@@ -40,6 +42,7 @@ export const defaultRules: AutomationRule[] = [
     max_executions_per_hour: 4,
   },
   {
+    id: '68000000-0000-4000-8000-000000000003',
     name: 'Detect unusual cancellation spike',
     description: 'Trigger when 5+ cancellations happen in 30 minutes',
     enabled: true,
@@ -55,6 +58,7 @@ export const defaultRules: AutomationRule[] = [
     max_executions_per_hour: 2,
   },
   {
+    id: '68000000-0000-4000-8000-000000000004',
     name: 'Critical incident escalation',
     description: 'Escalate critical payment failures to on-call',
     enabled: true,
@@ -70,6 +74,7 @@ export const defaultRules: AutomationRule[] = [
     max_executions_per_hour: 10,
   },
   {
+    id: '68000000-0000-4000-8000-000000000005',
     name: 'Daily operational report',
     description: 'Generate and email daily operational report at 1 AM',
     enabled: true,

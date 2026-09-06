@@ -16,10 +16,12 @@ export interface EmailMessage {
   reply_to?: string;
   attachments?: EmailAttachment[];
   tags?: Record<string, string>;
-  metadata?: Record<string, any>;
+  metadata?: Record<string, unknown>;
+  /** Stable key used by providers to prevent duplicate transactional sends. */
+  idempotency_key?: string;
   // Template ID (if provider supports templates)
   template_id?: string;
-  template_data?: Record<string, any>;
+  template_data?: Record<string, unknown>;
   // Scheduling (ISO timestamp)
   schedule_at?: string;
 }

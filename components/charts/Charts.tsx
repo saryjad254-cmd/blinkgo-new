@@ -13,7 +13,7 @@ export interface BarSeries {
   label: string;
   value: number;
   color?: string;
-  metadata?: any;
+  metadata?: unknown;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -140,7 +140,7 @@ export function LineChart({
     [formatValue, locale],
   );
 
-  const { path, area, max, points, gridLines } = useMemo(() => {
+  const { path, area, points, gridLines } = useMemo(() => {
     if (data.length === 0) return { path: '', area: '', max: 0, points: [], gridLines: [] };
     const max = Math.max(1, ...data.map((d) => d.value));
     const min = Math.min(0, ...data.map((d) => d.value));

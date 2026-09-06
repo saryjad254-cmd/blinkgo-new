@@ -14,6 +14,7 @@ import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import { useToast } from '@/components/ui/Toast';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { cn } from '@/lib/cn';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 interface Props {
   orderId: string;
@@ -105,7 +106,7 @@ export function CancelOrderButton({ orderId, orderStatus, className }: Props) {
         if (json?.error?.code === 'CANCEL_TOO_LATE') {
           toast({ type: 'error', message: t.tooLate });
         } else {
-          throw new Error(json.error?.message || json.error || t.error);
+          throw new Error(extractErrorMessage(json, t.error));
         }
         setOpen(false);
         return;
@@ -114,8 +115,8 @@ export function CancelOrderButton({ orderId, orderStatus, className }: Props) {
       toast({ type: 'success', message: t.success });
       setOpen(false);
       router.refresh();
-    } catch (e: any) {
-      toast({ type: 'error', message: e?.message || t.error });
+    } catch (error: unknown) {
+      toast({ type: 'error', message: extractErrorMessage(error, t.error) });
     } finally {
       setSubmitting(false);
     }

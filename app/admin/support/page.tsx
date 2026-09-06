@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminSupportPage() {
   const adminUser = await requireRole('admin');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: tickets } = await supabase
     .from('support_tickets')
     .select('*, users!support_tickets_user_id_fkey(name, email, role)')

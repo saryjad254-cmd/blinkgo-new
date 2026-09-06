@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import Power from 'lucide-react/dist/esm/icons/power';
+import { useState } from 'react';
 import PowerOff from 'lucide-react/dist/esm/icons/power-off';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import Zap from 'lucide-react/dist/esm/icons/zap';
@@ -10,6 +9,7 @@ import { motion } from 'framer-motion';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { useToast } from '@/components/ui/Toast';
 import { cn } from '@/lib/cn';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 const LABELS = {
   de: {
@@ -70,10 +70,10 @@ export function OnlineToggle({ initialOnline = false }: { initialOnline?: boolea
 
       if (error) throw error;
       setOnline(!online);
-    } catch (err: any) {
+    } catch (err: unknown) {
       // v82: surface via toast instead of native alert() so the message
       // is styled, localisable, and doesn't block the UI.
-      toastError(err?.message ?? t.failed);
+      toastError(extractErrorMessage(err, t.failed));
     } finally {
       setLoading(false);
     }

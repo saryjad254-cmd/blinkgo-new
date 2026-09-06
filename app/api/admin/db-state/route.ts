@@ -8,12 +8,12 @@ import { ok, withErrorHandling } from '@/lib/api/response';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => dbState() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function dbState(): Promise<NextResponse> {
@@ -26,8 +26,8 @@ async function dbState(): Promise<NextResponse> {
     const summary = (users?.users || []).map((u) => ({
       id: u.id,
       email: u.email,
-      role: u.user_metadata?.role || 'unknown',
-      is_active: u.user_metadata?.is_active !== false,
+      role: u.app_metadata?.app_role || 'unknown',
+      is_active: u.app_metadata?.is_active !== false,
     }));
     return ok({ users: summary, count: summary.length });
   });

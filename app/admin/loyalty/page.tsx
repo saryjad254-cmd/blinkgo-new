@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminLoyaltyPage() {
   const user = await requireRole('admin');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: profile } = await supabase.from('users').select('name, email, role').eq('id', user.id).single();
   const { data: balances } = await supabase
     .from('loyalty_points')
@@ -30,7 +30,7 @@ export default async function AdminLoyaltyPage() {
     gold: balances?.filter((b) => b.tier === 'gold').length ?? 0,
     platinum: balances?.filter((b) => b.tier === 'platinum').length ?? 0,
   };
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale: Locale = getServerLocale(cookieHeader);
   return (
     <AdminLoyaltyClient

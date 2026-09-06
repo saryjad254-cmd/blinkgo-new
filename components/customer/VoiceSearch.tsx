@@ -1,7 +1,6 @@
 'use client';
 
 import Mic from 'lucide-react/dist/esm/icons/mic';
-import MicOff from 'lucide-react/dist/esm/icons/mic-off';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import { useState } from 'react';
 import { useI18n } from '@/lib/i18n/I18nProvider';
@@ -13,13 +12,29 @@ interface Props {
   size?: 'sm' | 'md';
 }
 
+interface SpeechRecognitionErrorEventLike { error: string }
+interface SpeechRecognitionResultEventLike { results: { [index: number]: { [index: number]: { transcript: string } } } }
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  maxAlternatives: number;
+  onstart: (() => void) | null;
+  onerror: ((event: SpeechRecognitionErrorEventLike) => void) | null;
+  onresult: ((event: SpeechRecognitionResultEventLike) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+}
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+type SpeechWindow = Window & { webkitSpeechRecognition?: SpeechRecognitionConstructor; SpeechRecognition?: SpeechRecognitionConstructor };
+
 export function VoiceSearch({ onResult, className, size = 'md' }: Props) {
   const { t } = useI18n();
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   function start() {
-    const SR = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+    const speechWindow = window as SpeechWindow;
+    const SR = speechWindow.webkitSpeechRecognition || speechWindow.SpeechRecognition;
     if (!SR) {
       setError(t.nav.voiceNotSupported);
       setTimeout(() => setError(null), 3000);
@@ -37,15 +52,15 @@ export function VoiceSearch({ onResult, className, size = 'md' }: Props) {
       setError(null);
     };
 
-    recognition.onerror = (e: any) => {
+    recognition.onerror = (event) => {
       setListening(false);
-      if (e.error === 'no-speech') setError(t.nav.voiceNoSpeech);
+      if (event.error === 'no-speech') setError(t.nav.voiceNoSpeech);
       else setError(t.nav.voiceFailed);
       setTimeout(() => setError(null), 3000);
     };
 
-    recognition.onresult = (e: any) => {
-      const transcript = e.results[0][0].transcript;
+    recognition.onresult = (event) => {
+      const transcript = event.results[0][0].transcript;
       onResult?.(transcript);
     };
 
@@ -53,7 +68,7 @@ export function VoiceSearch({ onResult, className, size = 'md' }: Props) {
 
     try {
       recognition.start();
-    } catch (err) {
+    } catch {
       setError(t.nav.voiceFailed);
       setTimeout(() => setError(null), 3000);
     }
@@ -71,7 +86,7 @@ export function VoiceSearch({ onResult, className, size = 'md' }: Props) {
           listening
             ? "bg-danger text-white animate-pulse"
             : "bg-surface-elevated text-text-secondary hover:text-brand-red-500 hover:bg-brand-red-500/10",
-          size === 'sm' ? "w-7 h-7" : "w-9 h-9"
+          size === 'sm' ? "w-9 h-9" : "w-11 h-11"
         )}
       >
         {listening ? (

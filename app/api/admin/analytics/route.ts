@@ -83,9 +83,9 @@ export async function GET(request: NextRequest) {
       activeCustomers,
       totalCustomers: users?.length ?? 0,
     });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: error instanceof Error ? error.message : 'Server error' },
       { status: 500 },
     );
   }

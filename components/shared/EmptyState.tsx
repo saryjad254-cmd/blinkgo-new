@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn';
-import type { ReactNode } from 'react';
+import { isValidElement, type ElementType, type ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 // v82 perf: replace dynamic `require('lucide-react')` with explicit per-icon
 // imports. The old code pulled the ENTIRE 5000+ icon library (~545KB
@@ -19,7 +20,7 @@ import Utensils from 'lucide-react/dist/esm/icons/utensils';
 import Wallet from 'lucide-react/dist/esm/icons/wallet';
 import MessageCircle from 'lucide-react/dist/esm/icons/message-circle';
 
-const ICON_REGISTRY: Record<string, any> = {
+const ICON_REGISTRY: Record<string, LucideIcon> = {
   ShoppingBag,
   Search,
   Inbox,
@@ -55,29 +56,16 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   if (!v || typeof v !== 'object') return false;
   if (Array.isArray(v)) return false;
   // React elements have a $$typeof symbol (REACT_ELEMENT_TYPE or REACT_FORWARD_REF_TYPE)
-  if ((v as any).$$typeof) return false;
+  if ('$$typeof' in v) return false;
   // Function components and forwardRef components are functions
   if (typeof v === 'function') return false;
   return true;
 }
 
-function isReactElement(v: any): boolean {
-  return !!(v && typeof v === 'object' && v.$$typeof);
-}
-
-function renderIcon(icon: any): ReactNode {
+function renderIcon(icon: ReactNode | ElementType): ReactNode {
   if (!icon) return null;
   // If it's already a React element, return as-is
-  if (isReactElement(icon)) return icon;
-  // If it's a function (forwardRef or function component), call it
-  if (typeof icon === 'function') {
-    try {
-      const Element = icon;
-      return <Element className="w-8 h-8" strokeWidth={2} />;
-    } catch {
-      return null;
-    }
-  }
+  if (isValidElement(icon)) return icon;
   // If a string name was passed (e.g. icon="Wallet"), resolve it via the
   // static ICON_REGISTRY. The old `require('lucide-react')` here pulled
   // the entire icon library into every consumer — see components/shared/EmptyState.tsx header.
@@ -85,6 +73,11 @@ function renderIcon(icon: any): ReactNode {
     const Cmp = ICON_REGISTRY[icon];
     if (Cmp) return <Cmp className="w-8 h-8" strokeWidth={2} />;
     return null;
+  }
+  // Function components and React forwardRef components are valid element types.
+  if (typeof icon === 'function' || (typeof icon === 'object' && '$$typeof' in icon)) {
+    const Element = icon as ElementType;
+    return <Element className="w-8 h-8" strokeWidth={2} />;
   }
   return icon;
 }
@@ -124,7 +117,7 @@ function ActionRenderer({ action }: { action?: ReactNode | ActionObject }) {
     typeof action === 'string' ||
     typeof action === 'number' ||
     typeof action === 'boolean' ||
-    isReactElement(action) ||
+    isValidElement(action) ||
     !isPlainObject(action)
   ) {
     return <>{action as ReactNode}</>;

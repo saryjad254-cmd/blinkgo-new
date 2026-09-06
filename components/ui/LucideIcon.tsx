@@ -6,15 +6,16 @@ type LucideProps = SVGProps<SVGSVGElement> & {
   strokeWidth?: number | string;
 };
 
-type LucideIcon = ComponentType<LucideProps>;
+export type LucideIconType = ComponentType<LucideProps>;
 
 interface LucideIconProps {
-  icon: LucideIcon;
+  icon: LucideIconType;
   size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl' | number;
   /** Stroke width — defaults to 2 for consistent world-class feel */
   strokeWidth?: number;
   /** Color override (e.g. 'currentColor' uses text color) */
   className?: string;
+  color?: string;
   /** Optional aria label for accessibility */
   ariaLabel?: string;
 }
@@ -41,7 +42,7 @@ const SIZE_MAP: Record<string, string> = {
  *        <LucideIcon icon={MapPin} size={20} strokeWidth={1.75} />
  */
 export const LucideIcon = forwardRef<SVGSVGElement, LucideIconProps>(function LucideIcon(
-  { icon: IconComponent, size = 'md', strokeWidth = 2, className = '', ariaLabel },
+  { icon: IconComponent, size = 'md', strokeWidth = 2, className = '', color, ariaLabel },
   ref,
 ) {
   if (!IconComponent) return null;
@@ -52,6 +53,7 @@ export const LucideIcon = forwardRef<SVGSVGElement, LucideIconProps>(function Lu
       ref={ref}
       className={cn('flex-shrink-0', sizeClass, className)}
       strokeWidth={strokeWidth}
+      color={color}
       size={sizeProp}
       aria-hidden={ariaLabel ? undefined : true}
       aria-label={ariaLabel}
@@ -66,6 +68,7 @@ export function RawLucideIcon({
   size = 'md',
   strokeWidth = 2,
   className = '',
+  color,
   ariaLabel,
 }: LucideIconProps): ReactNode {
   if (!IconComponent) return null;
@@ -75,6 +78,7 @@ export function RawLucideIcon({
     <IconComponent
       className={cn('flex-shrink-0', sizeClass, className)}
       strokeWidth={strokeWidth}
+      color={color}
       size={sizeProp}
       aria-hidden={ariaLabel ? undefined : true}
       aria-label={ariaLabel}

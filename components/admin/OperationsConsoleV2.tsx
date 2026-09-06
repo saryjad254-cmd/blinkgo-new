@@ -14,51 +14,36 @@
  * - Command palette (Cmd-K) for quick navigation
  */
 
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useEffect, useState, useMemo, type ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import Activity from 'lucide-react/dist/esm/icons/activity';
 import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
 import Clock from 'lucide-react/dist/esm/icons/clock';
-import Users from 'lucide-react/dist/esm/icons/users';
 import Store from 'lucide-react/dist/esm/icons/store';
 import Bike from 'lucide-react/dist/esm/icons/bike';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import DollarSign from 'lucide-react/dist/esm/icons/dollar-sign';
 import Search from 'lucide-react/dist/esm/icons/search';
-import Filter from 'lucide-react/dist/esm/icons/filter';
-import Radio from 'lucide-react/dist/esm/icons/radio';
-import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import Bell from 'lucide-react/dist/esm/icons/bell';
 import Volume2 from 'lucide-react/dist/esm/icons/volume-2';
 import VolumeX from 'lucide-react/dist/esm/icons/volume-x';
-import BarChart3 from 'lucide-react/dist/esm/icons/bar-chart-3';
 import Target from 'lucide-react/dist/esm/icons/target';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import Eye from 'lucide-react/dist/esm/icons/eye';
-import Send from 'lucide-react/dist/esm/icons/send';
-import Megaphone from 'lucide-react/dist/esm/icons/megaphone';
-import Pause from 'lucide-react/dist/esm/icons/pause';
-import Play from 'lucide-react/dist/esm/icons/play';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
-import XCircle from 'lucide-react/dist/esm/icons/x-circle';
-import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import Zap from 'lucide-react/dist/esm/icons/zap';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
 import Timer from 'lucide-react/dist/esm/icons/timer';
-import TrendingDown from 'lucide-react/dist/esm/icons/trending-down';
 import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
-import Wifi from 'lucide-react/dist/esm/icons/wifi';
 import WifiOff from 'lucide-react/dist/esm/icons/wifi-off';
-import Coffee from 'lucide-react/dist/esm/icons/coffee';
 import { useT } from '@/lib/i18n/I18nProvider';
 import { useOnlineStatus } from '@/lib/hooks/use-online-status';
+import { useLiveNow } from '@/lib/hooks/use-live-now';
 import { useRealtime } from '@/lib/realtime/use-realtime';
 import { haptic } from '@/lib/utils/haptics';
 import { playDriverSound } from '@/lib/utils/driver-sound';
-import { apiGet, apiPost } from '@/lib/api/client';
+import { apiGet } from '@/lib/api/client';
 import { formatEUR } from '@/lib/format';
 import Link from 'next/link';
 
-interface LiveKPIs {
+export interface LiveKPIs {
   activeOrders: number;
   onlineDrivers: number;
   onlineRestaurants: number;
@@ -69,7 +54,7 @@ interface LiveKPIs {
   cancelRateToday: number;
 }
 
-interface DriverStatus {
+export interface DriverStatus {
   id: string;
   name: string;
   status: 'online' | 'on_delivery' | 'idle' | 'offline';
@@ -79,7 +64,7 @@ interface DriverStatus {
   total_today: number;
 }
 
-interface RestaurantStatus {
+export interface RestaurantStatus {
   id: string;
   name: string;
   is_online: boolean;
@@ -92,7 +77,7 @@ interface RestaurantStatus {
   rating: number;
 }
 
-interface Incident {
+export interface Incident {
   id: string;
   type: 'order_late' | 'driver_offline' | 'restaurant_offline' | 'system_alert';
   message: string;
@@ -108,6 +93,22 @@ interface OperationsConsoleV2Props {
   initialIncidents: Incident[];
 }
 
+type RealtimeRecord = Record<string, unknown>;
+
+function asRealtimeRecord(value: unknown): RealtimeRecord {
+  return value && typeof value === 'object' ? value as RealtimeRecord : {};
+}
+
+function incidentSeverity(value: unknown): Incident['severity'] {
+  return value === 'high' || value === 'low' ? value : 'medium';
+}
+
+function incidentType(value: unknown): Incident['type'] {
+  return value === 'order_late' || value === 'driver_offline' || value === 'restaurant_offline'
+    ? value
+    : 'system_alert';
+}
+
 export function OperationsConsoleV2({
   initialKPIs,
   initialDrivers,
@@ -119,19 +120,11 @@ export function OperationsConsoleV2({
   const [drivers, setDrivers] = useState(initialDrivers);
   const [restaurants, setRestaurants] = useState(initialRestaurants);
   const [incidents, setIncidents] = useState(initialIncidents);
-  const [selectedOrder, setSelectedOrder] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'late' | 'unassigned' | 'pending'>('all');
+  const [filterStatus, setFilterStatus] = useState<'all' | 'late' | 'pending'>('all');
   const [audioOn, setAudioOn] = useState(true);
-  const [, setTick] = useState(0);
+  const nowMs = useLiveNow(30_000);
   const online = useOnlineStatus();
-  const previousIncidentsRef = useRef(0);
-
-  // Refresh tick every 30s
-  useEffect(() => {
-    const id = setInterval(() => setTick((t) => t + 1), 30_000);
-    return () => clearInterval(id);
-  }, []);
 
   // Realtime: orders
   useRealtime({
@@ -141,19 +134,20 @@ export function OperationsConsoleV2({
         table: 'orders',
         event: '*',
         onChange: (payload) => {
-          const o = payload.new as any;
+          const order = asRealtimeRecord(payload.new);
           if (payload.eventType === 'INSERT') {
             setKpis((k) => ({ ...k, activeOrders: k.activeOrders + 1, totalOrdersToday: k.totalOrdersToday + 1 }));
             if (audioOn) playDriverSound('offer');
           } else if (payload.eventType === 'UPDATE') {
-            if (o.status === 'cancelled') {
+            if (order.status === 'cancelled') {
               setKpis((k) => ({ ...k, activeOrders: Math.max(0, k.activeOrders - 1) }));
             }
-            if (o.status === 'delivered') {
+            if (order.status === 'delivered') {
+              const total = typeof order.total === 'number' ? order.total : 0;
               setKpis((k) => ({
                 ...k,
                 activeOrders: Math.max(0, k.activeOrders - 1),
-                totalRevenueToday: k.totalRevenueToday + (o.total ?? 0),
+                totalRevenueToday: k.totalRevenueToday + total,
               }));
             }
           }
@@ -170,14 +164,21 @@ export function OperationsConsoleV2({
         table: 'security_audit_log',
         event: 'INSERT',
         onChange: (payload) => {
-          const e = payload.new as any;
-          if (['high', 'medium'].includes(e.severity ?? '')) {
+          const event = asRealtimeRecord(payload.new);
+          const severity = incidentSeverity(event.severity);
+          if (event.severity === 'high' || event.severity === 'medium') {
             setIncidents((prev) => [
-              { id: e.id, type: e.event_type ?? 'system_alert', message: e.message ?? 'Security event', severity: e.severity ?? 'medium', created_at: e.created_at },
+              {
+                id: typeof event.id === 'string' ? event.id : crypto.randomUUID(),
+                type: incidentType(event.event_type),
+                message: typeof event.message === 'string' ? event.message : 'Security event',
+                severity,
+                created_at: typeof event.created_at === 'string' ? event.created_at : new Date().toISOString(),
+              },
               ...prev.slice(0, 49),
             ]);
             if (audioOn) playDriverSound('warning');
-            if (e.severity === 'high') haptic('error');
+            if (severity === 'high') haptic('error');
           }
         },
       },
@@ -189,9 +190,9 @@ export function OperationsConsoleV2({
     const interval = setInterval(async () => {
       try {
         const [kpiRes, drvRes, restRes] = await Promise.all([
-          apiGet<any>('/api/admin/operations?type=kpis', { cacheTtl: 0 }),
-          apiGet<any>('/api/admin/operations?type=drivers', { cacheTtl: 0 }),
-          apiGet<any>('/api/admin/operations?type=restaurants', { cacheTtl: 0 }),
+          apiGet<LiveKPIs>('/api/admin/operations?type=kpis', { cacheTtl: 0 }),
+          apiGet<DriverStatus[]>('/api/admin/operations?type=drivers', { cacheTtl: 0 }),
+          apiGet<RestaurantStatus[]>('/api/admin/operations?type=restaurants', { cacheTtl: 0 }),
         ]);
         if (kpiRes.ok && kpiRes.data) setKpis(kpiRes.data);
         if (drvRes.ok && drvRes.data) setDrivers(drvRes.data);
@@ -202,26 +203,6 @@ export function OperationsConsoleV2({
     }, 30_000);
     return () => clearInterval(interval);
   }, []);
-
-  // Quick actions
-  const handleReassign = async (orderId: string, driverId: string) => {
-    haptic('medium');
-    try {
-      await apiPost(`/api/admin/orders/${orderId}/reassign`, { driver_id: driverId });
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleCancel = async (orderId: string, reason: string) => {
-    haptic('warning');
-    if (!confirm(`Bestellung ${orderId} stornieren? Grund: ${reason}`)) return;
-    try {
-      await apiPost(`/api/admin/orders/${orderId}/cancel`, { reason });
-    } catch {
-      // ignore
-    }
-  };
 
   const filteredDrivers = useMemo(() => {
     if (!searchTerm) return drivers;
@@ -282,7 +263,7 @@ export function OperationsConsoleV2({
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <MiniKpi icon={Timer} label="Ø Zubereitung" value={`${kpis.avgPrepMin} min`} />
           <MiniKpi icon={TrendingUp} label="Stornierungsrate" value={`${kpis.cancelRateToday.toFixed(1)}%`} tone={kpis.cancelRateToday > 5 ? 'danger' : 'success'} />
-          <MiniKpi icon={Zap} label="Aktive Vorfälle" value={String(incidents.filter(i => Date.now() - new Date(i.created_at).getTime() < 600_000).length)} tone="warning" />
+          <MiniKpi icon={Zap} label="Aktive Vorfälle" value={String(incidents.filter(i => nowMs > 0 && nowMs - new Date(i.created_at).getTime() < 600_000).length)} tone="warning" />
           <MiniKpi icon={Target} label="Lieferquote" value={`${(100 - kpis.cancelRateToday).toFixed(1)}%`} />
         </div>
 
@@ -364,7 +345,7 @@ export function OperationsConsoleV2({
             </header>
             <div className="space-y-2 max-h-[600px] overflow-y-auto">
               {incidents.map((i) => (
-                <IncidentRow key={i.id} i={i} />
+                <IncidentRow key={i.id} i={i} nowMs={nowMs} />
               ))}
               {incidents.length === 0 && (
                 <div className="text-center py-8 text-ink-2 text-sm">Alles ruhig ✨</div>
@@ -378,7 +359,7 @@ export function OperationsConsoleV2({
 }
 
 // Components
-function KpiCard({ icon: Icon, label, value, tone, sublabel }: { icon: any; label: string; value: any; tone: 'primary' | 'info' | 'success' | 'warning' | 'tip' | 'neutral' | 'danger'; sublabel?: string }) {
+function KpiCard({ icon: Icon, label, value, tone, sublabel }: { icon: LucideIcon; label: string; value: ReactNode; tone: 'primary' | 'info' | 'success' | 'warning' | 'tip' | 'neutral' | 'danger'; sublabel?: string }) {
   const tones = {
     primary: 'bg-gradient-to-br from-brand-primary/10 to-brand-premium/10 text-brand-primary',
     info: 'bg-info-500/10 text-info-700',
@@ -400,7 +381,7 @@ function KpiCard({ icon: Icon, label, value, tone, sublabel }: { icon: any; labe
   );
 }
 
-function MiniKpi({ icon: Icon, label, value, tone }: { icon: any; label: string; value: string; tone?: 'success' | 'warning' | 'danger' }) {
+function MiniKpi({ icon: Icon, label, value, tone }: { icon: LucideIcon; label: string; value: string; tone?: 'success' | 'warning' | 'danger' }) {
   const colors = {
     success: 'text-success-700',
     warning: 'text-warning-700',
@@ -427,7 +408,7 @@ function RestaurantRow({ r }: { r: RestaurantStatus }) {
   }[status];
   return (
     <Link
-      href={`/admin/restaurants/${r.id}`}
+      href={`/admin/restaurants?q=${encodeURIComponent(r.name)}`}
       className="block p-2.5 rounded-xl bg-bg-elevated hover:bg-bg-card transition-colors active:scale-[0.98]"
     >
       <div className="flex items-center justify-between gap-2 mb-1">
@@ -453,7 +434,7 @@ function DriverRow({ d }: { d: DriverStatus }) {
   }[d.status];
   return (
     <Link
-      href={`/admin/drivers/${d.id}`}
+      href={`/admin/drivers?q=${encodeURIComponent(d.name)}`}
       className="flex items-center gap-2.5 p-2.5 rounded-xl bg-bg-elevated hover:bg-bg-card transition-colors active:scale-[0.98]"
     >
       <div className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${statusConfig.color}`} />
@@ -469,14 +450,14 @@ function DriverRow({ d }: { d: DriverStatus }) {
   );
 }
 
-function IncidentRow({ i }: { i: Incident }) {
+function IncidentRow({ i, nowMs }: { i: Incident; nowMs: number }) {
   const toneConfig = {
     low: { color: 'bg-ink-2/10 text-ink-1', icon: Activity },
     medium: { color: 'bg-warning-500/15 text-warning-700', icon: AlertCircle },
     high: { color: 'bg-danger-500/15 text-danger-700', icon: AlertTriangle },
   }[i.severity];
   const Icon = toneConfig.icon;
-  const ageMin = Math.floor((Date.now() - new Date(i.created_at).getTime()) / 60_000);
+  const ageMin = nowMs > 0 ? Math.floor((nowMs - new Date(i.created_at).getTime()) / 60_000) : 0;
   return (
     <div className={`p-2.5 rounded-xl ${toneConfig.color}`}>
       <div className="flex items-start gap-2">

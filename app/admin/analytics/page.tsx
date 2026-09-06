@@ -1,22 +1,13 @@
 import { requireRole } from '@/lib/rbac';
 import { createServerClient } from '@/lib/supabase/server';
-import { cookies } from 'next/headers';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { RestaurantAnalytics } from '@/components/admin/RestaurantAnalytics';
-import type { Locale } from '@/lib/i18n/server-translations';
 
 export const revalidate = 300; // 5 min cache for analytics
 export const dynamic = 'force-dynamic';
 
-function detectLocale(): Locale {
-  const c = cookies().get('blinkgo-locale')?.value;
-  if (c === 'ar') return 'ar';
-  if (c === 'en') return 'en';
-  return 'de';
-}
-
 async function getAnalyticsData(periodDays: 7 | 30) {
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const now = new Date();
   const startDate = new Date(now);
   startDate.setDate(startDate.getDate() - periodDays);
@@ -24,10 +15,10 @@ async function getAnalyticsData(periodDays: 7 | 30) {
   prevStartDate.setDate(prevStartDate.getDate() - periodDays);
 
   // Aggregate queries
-  const [ordersRes, prevOrdersRes, customersRes, hourlyRes, topRestaurantsRes, peakRes] = await Promise.all([
+  const [ordersRes, prevOrdersRes, customersRes, hourlyRes, topRestaurantsRes] = await Promise.all([
     supabase
       .from('orders')
-      .select('id, total, status, customer_id, created_at')
+      .select('id, total, status, customer_id, restaurant_id, created_at')
       .gte('created_at', startDate.toISOString())
       .neq('status', 'cancelled'),
     supabase
@@ -48,9 +39,9 @@ async function getAnalyticsData(periodDays: 7 | 30) {
       .neq('status', 'cancelled'),
     supabase
       .from('restaurants')
-      .select('id, name, rating, today_revenue, today_orders_count')
-      .order('today_revenue', { ascending: false })
-      .limit(10),
+      .select('id, name, rating')
+      .eq('is_active', true)
+      .limit(500),
     supabase
       .from('orders')
       .select('created_at')
@@ -61,7 +52,7 @@ async function getAnalyticsData(periodDays: 7 | 30) {
   const orders = ordersRes.data ?? [];
   const prevOrders = prevOrdersRes.data ?? [];
   const hourly = hourlyRes.data ?? [];
-  const customers = new Set((customersRes.data ?? []).map((o: any) => o.customer_id).filter(Boolean));
+  const customers = new Set((customersRes.data ?? []).map((order) => order.customer_id).filter(Boolean));
 
   // Aggregate by day
   const revenueByDay: Record<string, { revenue: number; orders: number }> = {};
@@ -110,13 +101,25 @@ async function getAnalyticsData(periodDays: 7 | 30) {
   const prevOrderCount = prevOrders.length;
   const prevAvgOrder = prevOrderCount > 0 ? prevRevenue / prevOrderCount : 0;
 
-  const topRestaurants = (topRestaurantsRes.data ?? []).map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    revenue: r.today_revenue ?? 0,
-    orders: r.today_orders_count ?? 0,
-    rating: Number(r.rating ?? 5),
-  }));
+  const restaurantTotals = new Map<string, { revenue: number; orders: number }>();
+  for (const order of orders) {
+    if (!order.restaurant_id) continue;
+    const current = restaurantTotals.get(order.restaurant_id) ?? { revenue: 0, orders: 0 };
+    current.revenue += Number(order.total ?? 0);
+    current.orders += 1;
+    restaurantTotals.set(order.restaurant_id, current);
+  }
+  const topRestaurants = (topRestaurantsRes.data ?? [])
+    .map((restaurant) => ({
+      id: restaurant.id,
+      name: restaurant.name,
+      revenue: restaurantTotals.get(restaurant.id)?.revenue ?? 0,
+      orders: restaurantTotals.get(restaurant.id)?.orders ?? 0,
+      rating: Number(restaurant.rating ?? 0),
+    }))
+    .filter((restaurant) => restaurant.orders > 0)
+    .sort((a, b) => b.revenue - a.revenue)
+    .slice(0, 10);
 
   return {
     period_days: periodDays,
@@ -142,7 +145,6 @@ async function getAnalyticsData(periodDays: 7 | 30) {
 
 export default async function AdminAnalyticsPage() {
   await requireRole('admin');
-  const locale = detectLocale();
   let data;
   try {
     data = await getAnalyticsData(7);

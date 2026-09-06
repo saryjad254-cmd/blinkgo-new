@@ -43,15 +43,47 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@supabase/ssr';
+import { createServerClient, type CookieOptions } from '@supabase/ssr';
+import type { PostgrestError, Session, User } from '@supabase/supabase-js';
 import { createServiceClient } from '@/lib/supabase/service';
 import { withErrorHandling } from '@/lib/api/response';
 import { logger } from '@/lib/logging';
 import { getCanonicalBaseUrl, safeNextPath } from '@/lib/auth/redirect-url';
+import { getRoleHomePath } from '@/lib/auth/role-routing';
 import { authTrace, AUTH_SOURCES } from '@/lib/diagnostic';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+interface OAuthExchangeData {
+  session: Session | null;
+  user: User | null;
+}
+
+interface ExchangeFailure {
+  name: string;
+  message: string;
+}
+
+interface UserProfile {
+  id: string;
+  email: string;
+  name: string;
+  role: string;
+  is_active: boolean;
+  is_verified: boolean;
+  restaurant_id?: string | null;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
 
 function getServiceClient() {
   return createServiceClient();
@@ -110,7 +142,7 @@ function createOAuthServerClient(req: NextRequest, res: NextResponse) {
           }));
         },
         setAll(
-          cookiesToSet: { name: string; value: string; options: Record<string, unknown> }[],
+          cookiesToSet: { name: string; value: string; options: CookieOptions }[],
         ) {
           cookiesToSet.forEach(({ name, value, options }) => {
             // Preserve the EXACT options @supabase/ssr wants, and ALSO
@@ -118,11 +150,20 @@ function createOAuthServerClient(req: NextRequest, res: NextResponse) {
             // sent over HTTPS. We merge in this order so the Supabase
             // options WIN (the library knows what it's doing), but we
             // ensure `secure` is set if Supabase didn't explicitly set it.
-            const opts: Record<string, unknown> = { ...(options || {}) };
-            if (process.env.NODE_ENV === 'production' && opts.secure === undefined) {
-              opts.secure = true;
-            }
-            res.cookies.set(name, value, opts as any);
+            const sameSite = options.sameSite === true
+              ? 'strict'
+              : options.sameSite === 'lax' || options.sameSite === 'strict' || options.sameSite === 'none'
+                ? options.sameSite
+                : undefined;
+            res.cookies.set(name, value, {
+              domain: options.domain,
+              path: options.path,
+              expires: options.expires,
+              httpOnly: options.httpOnly,
+              maxAge: typeof options.maxAge === 'number' ? options.maxAge : undefined,
+              sameSite,
+              secure: process.env.NODE_ENV === 'production' ? true : options.secure,
+            });
           });
         },
       },
@@ -211,14 +252,16 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     );
     const supabase = createOAuthServerClient(req, draftResponse);
 
-    let sessionData: any = null;
-    let sessionErr: any = null;
+    let sessionData: OAuthExchangeData | null = null;
+    let sessionErr: ExchangeFailure | null = null;
     try {
       const result = await supabase.auth.exchangeCodeForSession(code);
-      sessionData = result.data;
-      sessionErr = result.error;
-    } catch (e: any) {
-      sessionErr = { name: 'ExchangeException', message: e?.message || String(e) };
+      sessionData = { session: result.data.session, user: result.data.user };
+      sessionErr = result.error
+        ? { name: result.error.name, message: result.error.message }
+        : null;
+    } catch (error: unknown) {
+      sessionErr = { name: 'ExchangeException', message: errorMessage(error) };
     }
 
     if (sessionErr || !sessionData?.session) {
@@ -233,13 +276,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           err: sessionErr?.message,
         });
         const direct = await exchangeCodeForSessionDirect(code, manualVerifier);
-        if (direct.data?.session) {
+        const recoveredSession = direct.data?.session;
+        if (recoveredSession) {
           sessionData = direct.data;
           sessionErr = null;
           // Manually write the session cookie in the EXACT format
           // @supabase/ssr expects. This is a STRING (JSON-stringified
           // session) base64-encoded with the `base64-` prefix.
-          writeSessionCookieManually(draftResponse, storageKey, sessionData.session);
+          writeSessionCookieManually(draftResponse, storageKey, recoveredSession);
         }
       }
     }
@@ -289,7 +333,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
       .eq('id', userId)
       .maybeSingle();
 
-    let profile = existingUser;
+    let profile = existingUser as UserProfile | null;
     authTrace('profile_lookup', {
       source: AUTH_SOURCES.AUTH_CALLBACK_PROFILE_FETCH,
       userId,
@@ -299,7 +343,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     });
 
     if (!profile) {
-      const meta = sessionData.user?.user_metadata || {};
+      const meta = recordValue(sessionData.user?.user_metadata);
       const displayName =
         (typeof meta.full_name === 'string' && meta.full_name) ||
         (typeof meta.name === 'string' && meta.name) ||
@@ -324,9 +368,9 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
         is_verified: true,
       };
 
-      let newUser: any = null;
-      let createErr: any = null;
-      let r1 = await serviceClient
+      let newUser: UserProfile | null = null;
+      let createErr: PostgrestError | null = null;
+      const r1 = await serviceClient
         .from('users')
         .upsert(fullPayload, { onConflict: 'id', ignoreDuplicates: true })
         .select('id, email, name, role, is_active, is_verified')
@@ -345,10 +389,10 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           .upsert(minimalPayload, { onConflict: 'id', ignoreDuplicates: true })
           .select('id, email, name, role, is_active, is_verified')
           .maybeSingle();
-        newUser = r2.data;
+        newUser = r2.data as UserProfile | null;
         createErr = r2.error;
       } else {
-        newUser = r1.data;
+        newUser = r1.data as UserProfile | null;
         createErr = r1.error;
       }
 
@@ -366,7 +410,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
           .select('id, email, name, role, is_active, restaurant_id, is_verified')
           .eq('id', userId)
           .maybeSingle();
-        profile = reRead;
+        profile = reRead as UserProfile | null;
       } else {
         profile = newUser;
       }
@@ -404,22 +448,14 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     //    honor the `next` parameter (e.g. /search from the login form).
     let redirectTo = next;
     if (!next || next === '/' || next === '/login' || next === '/search') {
-      const role = profile?.role || 'customer';
-      redirectTo =
-        role === 'driver'
-          ? '/driver/dashboard'
-          : role === 'restaurant_owner'
-            ? '/restaurant/dashboard'
-            : role === 'admin'
-              ? '/admin'
-              : '/search';
+      redirectTo = getRoleHomePath(profile?.role);
     }
 
     // 5) Build the final URL using the canonical base (validated).
     let appUrl: string;
     try {
       appUrl = getCanonicalBaseUrl(reqOrigin);
-    } catch (e) {
+    } catch {
       appUrl = reqOrigin;
     }
 
@@ -503,8 +539,8 @@ async function tryExtractCodeVerifier(rawValue: string | undefined): Promise<str
       if (typeof v === 'string') return v;
     }
     return null;
-  } catch (err) {
-    logger.warn('Failed to extract code verifier from cookie', { err: (err as Error).message });
+  } catch (err: unknown) {
+    logger.warn('Failed to extract code verifier from cookie', { err: errorMessage(err) });
     return null;
   }
 }
@@ -517,11 +553,14 @@ async function exchangeCodeForSessionDirect(
   code: string,
   codeVerifier: string,
 ): Promise<{
-  data: { session: any; user: any } | null;
-  error: { name: string; message: string } | null;
+  data: OAuthExchangeData | null;
+  error: ExchangeFailure | null;
 }> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-  const apikey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const apikey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!supabaseUrl || !apikey) {
+    return { data: null, error: { name: 'ConfigurationError', message: 'Supabase OAuth is not configured' } };
+  }
   try {
     const res = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=pkce`, {
       method: 'POST',
@@ -536,8 +575,9 @@ async function exchangeCodeForSessionDirect(
       const body = await res.text();
       let errMsg = `Supabase token endpoint returned HTTP ${res.status}`;
       try {
-        const j = JSON.parse(body);
-        errMsg = j.error_description || j.error || j.msg || errMsg;
+        const parsed = recordValue(JSON.parse(body) as unknown);
+        const candidate = parsed.error_description ?? parsed.error ?? parsed.msg;
+        if (typeof candidate === 'string') errMsg = candidate;
       } catch {
         if (body) errMsg = `${errMsg}: ${body.substring(0, 200)}`;
       }
@@ -546,25 +586,38 @@ async function exchangeCodeForSessionDirect(
         error: { name: 'AuthApiError', message: errMsg },
       };
     }
-    const body = await res.json();
+    const body = recordValue(await res.json() as unknown);
+    const user = recordValue(body.user);
+    if (
+      typeof body.access_token !== 'string'
+      || typeof body.refresh_token !== 'string'
+      || typeof body.expires_in !== 'number'
+      || (body.expires_at !== undefined && typeof body.expires_at !== 'number')
+      || typeof body.token_type !== 'string'
+      || typeof user.id !== 'string'
+    ) {
+      return { data: null, error: { name: 'InvalidTokenResponse', message: 'Supabase returned an invalid OAuth session' } };
+    }
+    const authUser = user as unknown as User;
+    const session = {
+      access_token: body.access_token,
+      refresh_token: body.refresh_token,
+      expires_in: body.expires_in,
+      expires_at: body.expires_at,
+      token_type: body.token_type,
+      user: authUser,
+    } as Session;
     return {
       data: {
-        session: {
-          access_token: body.access_token,
-          refresh_token: body.refresh_token,
-          expires_in: body.expires_in,
-          expires_at: body.expires_at,
-          token_type: body.token_type,
-          user: body.user,
-        },
-        user: body.user,
+        session,
+        user: authUser,
       },
       error: null,
     };
-  } catch (err) {
+  } catch (err: unknown) {
     return {
       data: null,
-      error: { name: 'NetworkError', message: (err as Error).message },
+      error: { name: 'NetworkError', message: errorMessage(err) },
     };
   }
 }
@@ -584,7 +637,7 @@ async function exchangeCodeForSessionDirect(
 function writeSessionCookieManually(
   res: NextResponse,
   storageKey: string,
-  session: any,
+  session: Session,
 ) {
   // The session object as it comes from the token endpoint. We need to
   // store it in the same shape that the standard SSR path would store.

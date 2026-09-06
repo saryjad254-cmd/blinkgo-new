@@ -27,6 +27,7 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { logger } from '@/lib/logging';
 import { rateLimit } from '@/lib/rate-limit';
+import { safeErrorMessage } from '@/lib/api/safe-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,14 +52,14 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Failed to deactivate' }, { status: 500 });
     }
 
-    // Sign out everywhere
+    // Block future token refresh and sign-in attempts while the erasure request
+    // is being processed. Existing short-lived tokens are still bounded by the
+    // is_active check on protected application routes.
     try {
-      // Best-effort: revoke refresh tokens
-      // F3 fix: use the canonical service-role client (sb_secret_* compatible).
-      const admin = (await import('@/lib/supabase/service')).createServiceClient();
-      // mark as banned so refresh fails (use is_active=false is already set)
-    } catch (e: any) {
-      logger.warn('account_delete_token_revoke_failed', {  reason: e?.message  });
+      const { error: banError } = await svc.auth.admin.updateUserById(userId, { ban_duration: '876000h' });
+      if (banError) throw banError;
+    } catch (error: unknown) {
+      logger.warn('account_delete_token_revoke_failed', { reason: safeErrorMessage(error) });
     }
 
     // Record DSAR
@@ -74,8 +75,8 @@ export async function DELETE(req: NextRequest) {
         status: 'pending',
         created_at: new Date().toISOString(),
       });
-    } catch (e: any) {
-      // Table might not exist; that's fine, the action is logged
+    } catch (error: unknown) {
+      logger.warn('account_delete_request_record_failed', { reason: safeErrorMessage(error) });
     }
 
     logger.info('account_deletion_requested', {  user_id: userId, request_id: requestId  });
@@ -83,7 +84,7 @@ export async function DELETE(req: NextRequest) {
     return ok({
       request_id: requestId,
       status: 'deactivated',
-      note: 'Your account has been deactivated. Personal data will be deleted within 30 days, except financial records which are retained for 10 years per § 147 AO.',
+      note: 'Your account has been deactivated. The erasure request will be processed subject to applicable legal retention obligations.',
     });
   });
 }

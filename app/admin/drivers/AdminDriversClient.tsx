@@ -1,20 +1,29 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import Truck from 'lucide-react/dist/esm/icons/truck';
-import Mail from 'lucide-react/dist/esm/icons/mail';
-import Phone from 'lucide-react/dist/esm/icons/phone';
-import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
 import Plus from 'lucide-react/dist/esm/icons/plus';
 import X from 'lucide-react/dist/esm/icons/x';
-import Star from 'lucide-react/dist/esm/icons/star';
-import Activity from 'lucide-react/dist/esm/icons/activity';
-import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
 import { formatEUR } from '@/lib/format';
+import { useLiveNow } from '@/lib/hooks/use-live-now';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
+import { useModalAccessibility } from '@/lib/hooks/use-modal-accessibility';
+
+interface DriverSummary {
+  id: string;
+  name: string;
+  email: string;
+  phone: string | null;
+  is_active: boolean;
+  last_login_at: string | null;
+  completed_deliveries: number;
+  total_earnings: number;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Failed';
+}
 
 const T = {
   de: {
@@ -109,40 +118,46 @@ export function AdminDriversClient({
 }) {
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [drivers, setDrivers] = useState<any[]>([]);
+  const nowMs = useLiveNow(30_000);
+  const [drivers, setDrivers] = useState<DriverSummary[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const createTriggerRef = useRef<HTMLButtonElement>(null);
+  const firstCreateFieldRef = useRef<HTMLInputElement>(null);
+  useModalAccessibility(showCreate, () => setShowCreate(false), firstCreateFieldRef, createTriggerRef);
 
   // form
-  const [form, setForm] = useState({ name: '', email: '', phone: '', password: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '' });
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  const fetchDrivers = async () => {
+  const fetchDrivers = useCallback(async (query: string, signal?: AbortSignal) => {
     setLoading(true);
     try {
       const url = new URL('/api/admin/drivers', window.location.origin);
       url.searchParams.set('limit', '100');
-      if (search) url.searchParams.set('q', search);
-      const res = await fetch(url.toString());
-      const data = await res.json();
-      if (res.ok && data.ok) setDrivers(data.drivers);
+      if (query) url.searchParams.set('q', query);
+      const res = await fetch(url.toString(), { signal });
+      const data = await res.json() as { ok?: boolean; drivers?: DriverSummary[] };
+      if (res.ok && data.ok && Array.isArray(data.drivers)) setDrivers(data.drivers);
     } finally {
-      setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchDrivers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
-    const t = setTimeout(fetchDrivers, 300);
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void fetchDrivers(search, controller.signal).catch((error: unknown) => {
+        if (!controller.signal.aborted) setCreateError(errorMessage(error));
+      });
+    }, search ? 300 : 0);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [fetchDrivers, search]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -156,20 +171,20 @@ export function AdminDriversClient({
       });
       const data = await res.json();
       if (!res.ok) {
-        setCreateError(data.error || 'Failed');
+        setCreateError(extractErrorMessage(data, 'Failed'));
         return;
       }
-      setForm({ name: '', email: '', phone: '', password: '' });
+      setForm({ name: '', email: '', phone: '' });
       setShowCreate(false);
-      fetchDrivers();
-    } catch (e: any) {
-      setCreateError(e.message);
+      await fetchDrivers(search);
+    } catch (error: unknown) {
+      setCreateError(errorMessage(error));
     } finally {
       setCreating(false);
     }
   };
 
-  const toggleActive = async (d: any) => {
+  const toggleActive = async (d: DriverSummary) => {
     // Confirmation: blocking a driver is destructive (prevents them from
     // accepting new orders, can break their workflow, and they must be
     // unblocked manually). Always confirm with the operator.
@@ -207,6 +222,7 @@ export function AdminDriversClient({
             <p className="text-sm text-text-secondary mt-0.5">{t.subtitle}</p>
           </div>
           <button
+            ref={createTriggerRef}
             type="button"
             onClick={() => setShowCreate(true)}
             className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active text-white text-sm font-extrabold hover:opacity-90 transition-opacity"
@@ -218,15 +234,18 @@ export function AdminDriversClient({
 
         {/* Create modal */}
         {showCreate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="presentation" onClick={() => setShowCreate(false)}>
             <form
               onSubmit={handleCreate}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-driver-title"
               className="w-full max-w-md bg-surface-elevated rounded-2xl border border-edge p-6 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-extrabold text-white">{t.createDriver}</h2>
-                <button type="button" onClick={() => setShowCreate(false)} className="w-8 h-8 rounded-lg bg-ink-700 flex items-center justify-center text-text-secondary hover:text-white">
+                <h2 id="create-driver-title" className="text-lg font-extrabold text-white">{t.createDriver}</h2>
+                <button type="button" onClick={() => setShowCreate(false)} aria-label={locale === 'ar' ? 'إغلاق' : locale === 'en' ? 'Close' : 'Schließen'} className="w-8 h-8 rounded-lg bg-ink-700 flex items-center justify-center text-text-secondary hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -236,6 +255,7 @@ export function AdminDriversClient({
                 </div>
               )}
               <input
+                ref={firstCreateFieldRef}
                 type="text"
                 placeholder={t.name2}
                 value={form.name}
@@ -260,16 +280,9 @@ export function AdminDriversClient({
                 dir="ltr"
                 className="w-full h-11 px-4 rounded-xl bg-ink-700 border border-edge text-white placeholder:text-text-muted focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none"
               />
-              <input
-                type="password"
-                placeholder={t.password}
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                required
-                minLength={8}
-                dir="ltr"
-                className="w-full h-11 px-4 rounded-xl bg-ink-700 border border-edge text-white placeholder:text-text-muted focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none"
-              />
+              <p className="rounded-xl border border-brand-yellow/30 bg-brand-yellow/10 p-3 text-sm font-bold text-brand-yellow">
+                {locale === 'ar' ? 'ستُرسل دعوة تفعيل آمنة إلى بريد السائق، ولن ترى كلمة مروره.' : locale === 'en' ? 'A secure activation invitation will be emailed to the driver. You will never see their password.' : 'Der Fahrer erhält eine sichere Aktivierungseinladung per E-Mail. Sein Passwort bleibt für dich unsichtbar.'}
+              </p>
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
@@ -333,7 +346,7 @@ export function AdminDriversClient({
                         {formatEUR(d.total_earnings)}
                       </td>
                       <td className="px-4 py-3">
-                        {d.last_login_at && new Date(d.last_login_at).getTime() > Date.now() - 5 * 60 * 1000 ? (
+                        {d.last_login_at && nowMs > 0 && new Date(d.last_login_at).getTime() > nowMs - 5 * 60 * 1000 ? (
                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-400 text-[10px] font-extrabold">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                             {t.online}
@@ -353,7 +366,7 @@ export function AdminDriversClient({
                       <td className="px-4 py-3 text-end">
                         <button
                           type="button"
-                          onClick={() => toggleActive(d)}
+                          onClick={() => void toggleActive(d)}
                           className="h-8 px-3 rounded-lg bg-ink-700 hover:bg-ink-600 text-text-secondary hover:text-white text-[10px] font-extrabold uppercase tracking-wider"
                         >
                           {d.is_active ? t.block : t.unblock}

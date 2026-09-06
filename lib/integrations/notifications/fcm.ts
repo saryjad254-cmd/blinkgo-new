@@ -7,8 +7,46 @@
 
 import type { PushProvider, PushDevice, PushPayload, PushResult, PushProviderName } from './types';
 import { IntegrationError, readProviderConfig } from '../types';
+import {
+  createGoogleServiceAccountAssertion,
+  type GoogleServiceAccountCredentials,
+} from './provider-jwt';
 
 const FCM_API_BASE = 'https://fcm.googleapis.com/v1';
+
+function isServiceAccount(value: unknown): value is GoogleServiceAccountCredentials {
+  if (!value || typeof value !== 'object') return false;
+  const account = value as Record<string, unknown>;
+  return typeof account.client_email === 'string'
+    && account.client_email.length > 0
+    && typeof account.private_key === 'string'
+    && account.private_key.includes('BEGIN PRIVATE KEY');
+}
+
+function parseServiceAccount(raw: string): GoogleServiceAccountCredentials {
+  const candidates = [raw];
+  try {
+    candidates.push(Buffer.from(raw, 'base64').toString('utf8'));
+  } catch {
+    // The raw value may already be JSON.
+  }
+
+  for (const candidate of candidates) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (isServiceAccount(parsed)) return parsed;
+    } catch {
+      // Try the next supported representation.
+    }
+  }
+
+  throw new IntegrationError(
+    'fcm',
+    'INVALID_SA_KEY',
+    'Service account credentials are invalid or incomplete',
+    { retryable: false },
+  );
+}
 
 export class FCMProvider implements PushProvider {
   public readonly name: PushProviderName = 'fcm';
@@ -30,10 +68,7 @@ export class FCMProvider implements PushProvider {
     }
   }
 
-  /**
-   * Get OAuth2 access token via service account JWT.
-   * In production, use a JWT library. Here we use the simplified approach.
-   */
+  /** Get an OAuth2 access token via a standards-compliant service-account JWT. */
   private async getAccessToken(): Promise<string> {
     if (this.cachedToken && this.cachedToken.expires > Date.now() + 60_000) {
       return this.cachedToken.token;
@@ -41,45 +76,32 @@ export class FCMProvider implements PushProvider {
     if (!this.serviceAccountKey) {
       throw new IntegrationError('fcm', 'NO_SA_KEY', 'Service account key missing', { retryable: false });
     }
-    // Parse the service account JSON
-    let sa: any;
-    try {
-      sa = JSON.parse(this.serviceAccountKey);
-    } catch {
-      // Maybe base64-encoded
-      try {
-        sa = JSON.parse(Buffer.from(this.serviceAccountKey, 'base64').toString());
-      } catch {
-        throw new IntegrationError('fcm', 'INVALID_SA_KEY', 'Service account key is not valid JSON', { retryable: false });
-      }
-    }
-
-    // Use Google Auth token endpoint via JWT exchange
-    const now = Math.floor(Date.now() / 1000);
-    const claim = {
-      iss: sa.client_email,
-      scope: 'https://www.googleapis.com/auth/firebase.messaging',
-      aud: 'https://oauth2.googleapis.com/token',
-      iat: now,
-      exp: now + 3600,
-    };
-    // Simplified: in real production, sign with sa.private_key
-    // For dev, return a placeholder that will trigger error if used without proper JWT lib
+    const serviceAccount = parseServiceAccount(this.serviceAccountKey);
+    const assertion = createGoogleServiceAccountAssertion(serviceAccount);
     const res = await fetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${require('node:crypto').createSign('RSA-SHA256').update(JSON.stringify(claim)).sign(sa.private_key, 'base64')}`,
+      body: new URLSearchParams({
+        grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+        assertion,
+      }),
     });
     if (!res.ok) {
-      const err = await res.text();
-      throw new IntegrationError('fcm', 'AUTH_FAILED', `Failed to get FCM token: ${err}`, { retryable: true });
+      throw new IntegrationError('fcm', 'AUTH_FAILED', `FCM authentication failed (${res.status})`, { retryable: true });
     }
-    const data = await res.json();
+    const data: unknown = await res.json();
+    if (!data || typeof data !== 'object') {
+      throw new IntegrationError('fcm', 'INVALID_AUTH_RESPONSE', 'FCM authentication returned an invalid response', { retryable: true });
+    }
+    const tokenData = data as Record<string, unknown>;
+    if (typeof tokenData.access_token !== 'string' || typeof tokenData.expires_in !== 'number') {
+      throw new IntegrationError('fcm', 'INVALID_AUTH_RESPONSE', 'FCM authentication response is incomplete', { retryable: true });
+    }
     this.cachedToken = {
-      token: data.access_token,
-      expires: Date.now() + data.expires_in * 1000,
+      token: tokenData.access_token,
+      expires: Date.now() + tokenData.expires_in * 1000,
     };
-    return data.access_token;
+    return tokenData.access_token;
   }
 
   async registerDevice(device: PushDevice): Promise<void> {

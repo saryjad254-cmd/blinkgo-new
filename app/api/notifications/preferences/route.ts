@@ -6,10 +6,10 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
-import { ok, withErrorHandling } from '@/lib/api/response';
+import { ok } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
-import { AuthenticationError, ValidationError } from '@/lib/errors';
+import { ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 
 export const runtime = 'nodejs';
@@ -20,81 +20,88 @@ const VALID_BOOL_FIELDS = [
   'order_updates', 'delivery_updates', 'promotions', 'new_features', 'reviews', 'payouts',
   'quiet_hours_enabled',
 ];
+const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 
-export async function GET(): Promise<NextResponse> {
-  return (await withSecurity(
-    secureRoute('lenient'),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (ctx) => getPrefs(ctx.auth.user.id) as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+export async function GET(req: NextRequest): Promise<NextResponse> {
+  return await withSecurity(
+    secureRoute('lenient', ['customer', 'driver', 'restaurant', 'manager', 'admin', 'super_admin']),
+    async (ctx) => getPrefs(ctx.auth.user.id),
+  )(req) as NextResponse;
 }
 
-async function getPrefs(userId: string): Promise<NextResponse> {
-  return withErrorHandling(async () => {
+async function getPrefs(userId: string) {
+  const supabase = await createServerClient();
+  const result = await supabase
+    .from('notification_preferences')
+    .select('*')
+    .eq('user_id', userId)
+    .maybeSingle();
+  let data = result.data;
+  const error = result.error;
 
-    const supabase = createServerClient();
-    let { data, error } = await supabase
+  if (error) {
+    logger.warn('notif prefs fetch failed', { userId }, error);
+    return ok({ preferences: getDefaultPreferences() });
+  }
+
+  // Auto-create if missing
+  if (!data) {
+    const { data: created, error: createError } = await supabase
       .from('notification_preferences')
-      .select('*')
-      .eq('user_id', userId)
-      .maybeSingle();
-
-    // Auto-create if missing
-    if (!data) {
-      const { data: created, error: cErr } = await supabase
-        .from('notification_preferences')
-        .insert({ user_id: userId })
-        .select()
-        .single();
-      if (cErr) {
-        logger.warn('notif prefs create failed', { userId }, cErr);
-        return ok({ preferences: getDefaultPreferences() });
-      }
-      data = created;
-    }
-
-    if (error) {
-      logger.warn('notif prefs fetch failed', { userId }, error);
+      .insert({ user_id: userId })
+      .select()
+      .single();
+    if (createError) {
+      logger.warn('notif prefs create failed', { userId }, createError);
       return ok({ preferences: getDefaultPreferences() });
     }
-    return ok({ preferences: data ?? getDefaultPreferences() });
-  });
+    data = created;
+  }
+
+  return ok({ preferences: data ?? getDefaultPreferences() });
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  return (await withSecurity(
-    secureRoute('moderate'),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (ctx, r) => updatePrefs(ctx.auth.user.id, r as NextRequest) as any,
-  )(req)) as unknown as NextResponse;
+  return await withSecurity(
+    secureRoute('moderate', ['customer', 'driver', 'restaurant', 'manager', 'admin', 'super_admin']),
+    async (ctx, request) => updatePrefs(ctx.auth.user.id, request),
+  )(req) as NextResponse;
 }
 
-async function updatePrefs(userId: string, req: NextRequest): Promise<NextResponse> {
-  return withErrorHandling(async () => {
+async function updatePrefs(userId: string, req: NextRequest) {
+  const rawBody: unknown = await req.json().catch(() => ({}));
+  const body = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+    ? rawBody as Record<string, unknown>
+    : {};
+  const updates: Record<string, boolean | string> = {};
 
-    const body = await req.json().catch(() => ({}));
-    const updates: any = {};
-
-    for (const field of VALID_BOOL_FIELDS) {
-      if (typeof body[field] === 'boolean') updates[field] = body[field];
+  for (const field of VALID_BOOL_FIELDS) {
+    if (typeof body[field] === 'boolean') updates[field] = body[field];
+  }
+  for (const field of ['quiet_hours_start', 'quiet_hours_end'] as const) {
+    if (body[field] !== undefined) {
+      if (typeof body[field] !== 'string' || !TIME_PATTERN.test(body[field])) {
+        throw new ValidationError(`${field} must use HH:mm format`);
+      }
+      updates[field] = body[field];
     }
-    if (body.quiet_hours_start) updates.quiet_hours_start = body.quiet_hours_start;
-    if (body.quiet_hours_end) updates.quiet_hours_end = body.quiet_hours_end;
-    updates.updated_at = new Date().toISOString();
+  }
+  if (Object.keys(updates).length === 0) throw new ValidationError('No valid preference fields provided');
+  updates.updated_at = new Date().toISOString();
 
-    const supabase = createServerClient();
-    const { data, error } = await supabase
-      .from('notification_preferences')
-      .upsert({ user_id: userId, ...updates }, { onConflict: 'user_id' })
-      .select()
-      .single();
+  const supabase = await createServerClient();
+  const { data, error } = await supabase
+    .from('notification_preferences')
+    .upsert({ user_id: userId, ...updates }, { onConflict: 'user_id' })
+    .select()
+    .single();
 
-    if (error) {
-      logger.error('notif prefs update failed', { userId }, error);
-      throw new Error('Failed to update preferences');
-    }
-    return ok({ preferences: data });
-  });
+  if (error) {
+    logger.error('notif prefs update failed', { userId }, error);
+    throw new Error('Failed to update preferences');
+  }
+
+  return ok({ preferences: data });
 }
 
 function getDefaultPreferences() {
@@ -111,5 +118,7 @@ function getDefaultPreferences() {
     reviews: true,
     payouts: true,
     quiet_hours_enabled: false,
+    quiet_hours_start: '22:00',
+    quiet_hours_end: '07:00',
   };
 }

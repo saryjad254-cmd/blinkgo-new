@@ -6,6 +6,7 @@
 
 import type { SMSProvider, SMSMessage, SMSResult, SMSProviderName } from './types';
 import { IntegrationError, readProviderConfig } from '../types';
+import { logger } from '@/lib/logging';
 
 export class DevSMSProvider implements SMSProvider {
   public readonly name: SMSProviderName = 'sms_dev';
@@ -21,7 +22,11 @@ export class DevSMSProvider implements SMSProvider {
     if (!this.enabled) {
       throw new IntegrationError('sms_dev', 'NOT_CONFIGURED', 'Dev SMS disabled', { retryable: false });
     }
-    console.log('[SMS DEV]', { to: message.to, body: message.body, code: message.verification_code });
+    logger.info('sms.dev.accepted', {
+      destination_suffix: message.to.slice(-4),
+      body_length: message.body.length,
+      contains_verification_code: Boolean(message.verification_code),
+    });
     return {
       id: crypto.randomUUID(),
       provider: 'sms_dev',

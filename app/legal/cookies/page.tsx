@@ -15,12 +15,13 @@ import { getDisplayCompanyInfo } from '@/lib/legal/company-info';
 import { LegalBanner } from '@/components/legal/LegalBanner';
 import { getServerLocale } from '@/lib/i18n/server-translations';
 import { cookies } from 'next/headers';
+import { OpenCookieSettingsButton } from '@/components/privacy/OpenCookieSettingsButton';
 
 export const dynamic = 'force-dynamic';
 
 interface CookieEntry {
   name: string;
-  type: 'cookie' | 'localStorage' | 'sessionStorage' | 'third-party-script';
+  type: 'cookie' | 'localStorage' | 'sessionStorage' | 'first-party-event' | 'third-party-script';
   category: 'strictly_necessary' | 'preferences' | 'analytics' | 'marketing' | 'unknown';
   purpose: string;
   retention: string;
@@ -30,7 +31,7 @@ interface CookieEntry {
 const COOKIES: CookieEntry[] = [
   // Strictly necessary
   { name: 'blinkgo-session', type: 'cookie', category: 'strictly_necessary', purpose: 'Session token for authenticated users (Supabase auth)', retention: '30 days', setBy: 'BlinkGo' },
-  { name: 'sb-rhdaffhlrglyknxtucux-auth-token', type: 'cookie', category: 'strictly_necessary', purpose: 'Supabase auth cookie (JWT)', retention: 'Until logout or 30 days', setBy: 'Supabase' },
+  { name: 'sb-<project-ref>-auth-token', type: 'cookie', category: 'strictly_necessary', purpose: 'Supabase auth cookie (JWT)', retention: 'Until logout or 30 days', setBy: 'Supabase' },
   { name: 'blinkgo-welcome-seen', type: 'cookie', category: 'strictly_necessary', purpose: 'Tracks first-time visitors to show /welcome once', retention: '1 year', setBy: 'BlinkGo' },
   { name: 'blinkgo-locale', type: 'cookie', category: 'preferences', purpose: 'Selected UI language (de/ar/en)', retention: '1 year', setBy: 'BlinkGo' },
 
@@ -41,8 +42,9 @@ const COOKIES: CookieEntry[] = [
   { name: 'blinkgo-search-history', type: 'localStorage', category: 'preferences', purpose: 'Recent search queries', retention: 'Until cleared', setBy: 'BlinkGo' },
   { name: 'push-dismissed', type: 'localStorage', category: 'preferences', purpose: 'Push opt-in dismissed state', retention: 'Until cleared', setBy: 'BlinkGo' },
 
-  // No analytics, no marketing scripts in current build
-  { name: '—', type: 'third-party-script', category: 'analytics', purpose: 'Kein Analyse-Tracking aktiv (kein Google Analytics, kein Matomo, kein Plausible)', retention: '—', setBy: '—' },
+  { name: '/api/analytics/product', type: 'first-party-event', category: 'analytics', purpose: 'First-party product interaction events; sent only after analytics opt-in', retention: 'Server policy; requires legal approval before production', setBy: 'BlinkGo' },
+  { name: '/api/analytics/cart', type: 'first-party-event', category: 'analytics', purpose: 'First-party cart interaction events; sent only after analytics opt-in', retention: 'Server policy; requires legal approval before production', setBy: 'BlinkGo' },
+  { name: '/api/analytics/checkout', type: 'first-party-event', category: 'analytics', purpose: 'First-party checkout interaction events; sent only after analytics opt-in', retention: 'Server policy; requires legal approval before production', setBy: 'BlinkGo' },
   { name: '—', type: 'third-party-script', category: 'marketing', purpose: 'Kein Marketing-Tracking aktiv (kein Facebook Pixel, kein Google Ads)', retention: '—', setBy: '—' },
 ];
 
@@ -55,7 +57,8 @@ const CATEGORY_LABELS = {
     unknown: 'Unbekannt (wird blockiert)',
     title: 'Cookies und Tracking',
     intro: 'Diese Seite listet alle Cookies, localStorage-Einträge und Tracking-Skripte auf, die in der aktuellen Version von BlinkGo verwendet werden.',
-    note: 'BlinkGo setzt in der aktuellen Version KEINE Tracking- oder Analyse-Tools ein. Daher ist keine Einwilligungs-Banner-Funktion erforderlich. Sollte sich dies ändern, wird diese Seite aktualisiert und ein DSGVO-konformes Einwilligungs-System implementiert.',
+    note: 'Optionale Analyse- und Marketingfunktionen sind standardmäßig ausgeschaltet und werden erst nach ausdrücklicher Einwilligung aktiviert. Die Auswahl kann jederzeit geändert oder widerrufen werden.',
+    settings: 'Datenschutz-Einstellungen ändern',
   },
   en: {
     strictly_necessary: 'Strictly necessary',
@@ -65,7 +68,8 @@ const CATEGORY_LABELS = {
     unknown: 'Unknown (blocked)',
     title: 'Cookies and Tracking',
     intro: 'This page lists every cookie, localStorage entry, and tracking script used by the current version of BlinkGo.',
-    note: 'BlinkGo does NOT use any tracking or analytics tools in the current version. Therefore, no consent banner is required. If this changes, this page will be updated and a GDPR-compliant consent system will be implemented.',
+    note: 'Optional analytics and marketing are disabled by default and activate only after explicit consent. You can change or withdraw your choice at any time.',
+    settings: 'Change privacy settings',
   },
   ar: {
     strictly_necessary: 'ضروري تقنياً',
@@ -75,12 +79,13 @@ const CATEGORY_LABELS = {
     unknown: 'غير معروف (محظور)',
     title: 'ملفات تعريف الارتباط والتتبع',
     intro: 'تسرد هذه الصفحة جميع ملفات تعريف الارتباط وإدخالات localStorage وسكربتات التتبع المستخدمة في الإصدار الحالي من BlinkGo.',
-    note: 'لا تستخدم BlinkGo في الإصدار الحالي أي أدوات تتبع أو تحليل. لذلك لا يلزم وجود شريط موافقة.',
+    note: 'تبقى التحليلات والتسويق الاختياريان متوقفين افتراضيًا ولا يعملان إلا بعد موافقة صريحة. يمكنك تغيير اختيارك أو سحب الموافقة في أي وقت.',
+    settings: 'تغيير إعدادات الخصوصية',
   },
 } as const;
 
-export default function CookiesPage() {
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
+export default async function CookiesPage() {
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale = getServerLocale(cookieHeader) as 'de' | 'ar' | 'en';
   const c = getDisplayCompanyInfo();
   const labels = CATEGORY_LABELS[locale] || CATEGORY_LABELS.de;
@@ -92,8 +97,15 @@ export default function CookiesPage() {
       <h1 className="text-3xl font-bold mb-4">{labels.title}</h1>
       <p className="text-sm mb-4">{labels.intro}</p>
       <p className="text-sm italic text-gray-600 mb-6">{labels.note}</p>
+      <OpenCookieSettingsButton label={labels.settings} />
 
-      <table className="w-full text-sm border border-gray-200 dark:border-gray-800 rounded overflow-hidden">
+      <div
+        className="w-full overflow-x-auto rounded border border-gray-200 dark:border-gray-800"
+        role="region"
+        aria-label={labels.title}
+        tabIndex={0}
+      >
+      <table className="min-w-[620px] w-full text-sm">
         <thead className="bg-gray-100 dark:bg-gray-900">
           <tr>
             <th className="text-left p-2">Name</th>
@@ -117,6 +129,7 @@ export default function CookiesPage() {
           ))}
         </tbody>
       </table>
+      </div>
     </article>
   );
 }

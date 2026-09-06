@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left';
 import MessageCircle from 'lucide-react/dist/esm/icons/message-circle';
 import Mail from 'lucide-react/dist/esm/icons/mail';
-import Phone from 'lucide-react/dist/esm/icons/phone';
+import Inbox from 'lucide-react/dist/esm/icons/inbox';
 import HelpCircle from 'lucide-react/dist/esm/icons/help-circle';
 import FileText from 'lucide-react/dist/esm/icons/file-text';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
@@ -15,70 +16,70 @@ const COPY = {
     title: 'Hilfe & Support',
     subtitle: 'Wir sind für dich da. Wähle einen Weg, uns zu erreichen.',
     chat: 'Live-Chat',
-    chatDesc: 'Sofortige Antworten, rund um die Uhr',
+    chatDesc: 'Sichere Nachrichten direkt in der App',
     email: 'E-Mail',
-    emailDesc: 'Antwort innerhalb von 24 Stunden',
-    phone: 'Telefon',
-    phoneDesc: 'Mo–Fr 9–18 Uhr',
+    emailDesc: 'Sende uns eine ausführliche Nachricht',
+    requests: 'Meine Anfragen',
+    requestsDesc: 'Status und Antworten des Support-Teams',
     faq: 'Häufige Fragen',
     faqDesc: 'Schnelle Antworten auf typische Fragen',
     report: 'Problem melden',
     reportDesc: 'Etwas funktioniert nicht? Sag uns Bescheid.',
     back: 'Zurück',
+    legal: 'Rechtliches', legalDesc: 'Impressum, Datenschutz und Bedingungen',
   },
   ar: {
     title: 'المساعدة والدعم',
     subtitle: 'نحن هنا من أجلك. اختر طريقة التواصل معنا.',
     chat: 'الدردشة المباشرة',
-    chatDesc: 'إجابات فورية، على مدار الساعة',
+    chatDesc: 'رسائل آمنة مباشرة داخل التطبيق',
     email: 'البريد الإلكتروني',
-    emailDesc: 'الرد خلال 24 ساعة',
-    phone: 'الهاتف',
-    phoneDesc: 'الإثنين–الجمعة 9–18',
+    emailDesc: 'أرسل لنا رسالة مفصّلة',
+    requests: 'طلباتي',
+    requestsDesc: 'حالة الطلبات وردود فريق الدعم',
     faq: 'الأسئلة الشائعة',
     faqDesc: 'إجابات سريعة على الأسئلة الشائعة',
     report: 'الإبلاغ عن مشكلة',
     reportDesc: 'شيء لا يعمل؟ أخبرنا.',
     back: 'رجوع',
+    legal: 'المعلومات القانونية', legalDesc: 'الخصوصية والشروط وبيانات الشركة',
   },
   en: {
     title: 'Help & Support',
     subtitle: "We're here for you. Choose how to reach us.",
     chat: 'Live chat',
-    chatDesc: 'Instant answers, 24/7',
+    chatDesc: 'Secure messages directly in the app',
     email: 'Email',
-    emailDesc: 'Response within 24 hours',
-    phone: 'Phone',
-    phoneDesc: 'Mon–Fri 9–18',
+    emailDesc: 'Send us a detailed message',
+    requests: 'My requests',
+    requestsDesc: 'Status and replies from the support team',
     faq: 'FAQ',
     faqDesc: 'Quick answers to common questions',
     report: 'Report a problem',
     reportDesc: "Something not working? Let us know.",
     back: 'Back',
+    legal: 'Legal', legalDesc: 'Imprint, privacy and terms',
   },
 };
 
 export default function HelpPage() {
-  const [locale, setLocale] = useState<'de' | 'ar' | 'en'>('de');
-
-  useEffect(() => {
-    if (typeof document !== 'undefined') {
-      const m = document.cookie.split(';').find((c) => c.trim().startsWith('blinkgo-locale='));
-      const v = m?.split('=')[1]?.trim();
-      if (v === 'ar' || v === 'en' || v === 'de') setLocale(v);
-    }
-  }, []);
+  const searchParams = useSearchParams();
+  const orderId = searchParams.get('order');
+  const { locale } = useI18n();
 
   const t = COPY[locale];
   const dir = locale === 'ar' ? 'rtl' : 'ltr';
 
+  const orderQuery = orderId ? `?order=${encodeURIComponent(orderId)}` : '';
+  const reportQuery = orderId ? `?order=${encodeURIComponent(orderId)}&new=1` : '?new=1';
+  const backHref = orderId ? `/orders/${encodeURIComponent(orderId)}` : '/home';
   const options = [
-    { icon: MessageCircle, title: t.chat, desc: t.chatDesc, href: '/help/chat', accent: 'from-brand-red-500/20 to-brand-red-500/0' },
+    { icon: MessageCircle, title: t.chat, desc: t.chatDesc, href: `/help/chat${orderQuery}`, accent: 'from-brand-red-500/20 to-brand-red-500/0' },
     { icon: Mail, title: t.email, desc: t.emailDesc, href: 'mailto:support@blinkgo.de', accent: 'from-brand-yellow-500/20 to-brand-yellow-500/0' },
-    { icon: Phone, title: t.phone, desc: t.phoneDesc, href: 'tel:+4920000000000', accent: 'from-success/20 to-success/0' },
+    { icon: Inbox, title: t.requests, desc: t.requestsDesc, href: '/customer/support', accent: 'from-success/20 to-success/0' },
     { icon: HelpCircle, title: t.faq, desc: t.faqDesc, href: '/help/faq', accent: 'from-info/20 to-info/0' },
-    { icon: AlertTriangle, title: t.report, desc: t.reportDesc, href: '/help/report', accent: 'from-warning/20 to-warning/0' },
-    { icon: FileText, title: 'Legal', desc: 'Imprint, Privacy, Terms', href: '/legal/impressum', accent: 'from-text-muted/20 to-text-muted/0' },
+    { icon: AlertTriangle, title: t.report, desc: t.reportDesc, href: `/customer/support${reportQuery}`, accent: 'from-warning/20 to-warning/0' },
+    { icon: FileText, title: t.legal, desc: t.legalDesc, href: '/legal/impressum', accent: 'from-text-muted/20 to-text-muted/0' },
   ];
 
   return (
@@ -90,7 +91,7 @@ export default function HelpPage() {
       <div className="absolute top-0 inset-x-0 h-1 bg-gradient-to-r from-brand-red-600 via-accent-500 to-brand-red-600 z-50" />
 
       <div className="relative max-w-3xl mx-auto px-4 sm:px-6 py-8">
-        <Link href="/" className="inline-flex items-center gap-1.5 text-sm font-bold text-text-muted hover:text-text mb-6 transition-colors">
+        <Link href={backHref} className="inline-flex min-h-11 items-center gap-1.5 text-sm font-bold text-text-muted hover:text-text mb-6 transition-colors">
           <ChevronLeft className="w-4 h-4 rtl:rotate-180" />
           {t.back}
         </Link>

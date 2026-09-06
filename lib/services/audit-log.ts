@@ -43,6 +43,12 @@ export type AuditEventType =
   | 'DRIVER_ONLINE'
   | 'DRIVER_OFFLINE'
   | 'DRIVER_ACCEPTED_ORDER'
+  | 'DRIVER_CONFIRMED_AUTO_ASSIGNMENT'
+  | 'DRIVER_RELEASED_ORDER'
+  | 'DRIVER_ARRIVED_PICKUP'
+  | 'DRIVER_ARRIVED_DROPOFF'
+  | 'DRIVER_REPORTED_ISSUE'
+  | 'DRIVER_FAILED_DELIVERY'
   | 'DRIVER_PICKED_UP'
   | 'DRIVER_DELIVERED'
   // Payment
@@ -60,6 +66,11 @@ export type AuditEventType =
   | 'ADMIN_USER_UPDATED'
   | 'ADMIN_USER_DELETED'
   | 'ADMIN_CONFIG_CHANGED'
+  | 'ADMIN_FEATURE_FLAG_CHANGED'
+  // Support
+  | 'SUPPORT_TICKET_CREATED'
+  | 'SUPPORT_TICKET_REPLIED'
+  | 'SUPPORT_TICKET_UPDATED'
   // Data
   | 'DATA_EXPORT'
   | 'DATA_DELETION';
@@ -151,18 +162,20 @@ export async function audit(
     ringBuffer.shift();
   }
   
-  // Log to console
-  const logFn = event.severity === 'critical' || event.severity === 'error'
-    ? logger.error
-    : event.severity === 'warn'
-    ? logger.warn
-    : logger.info;
-  logFn(`[AUDIT] ${event.type}`, {
+  // Log to console — call through the logger to preserve `this` binding.
+  const ctx = {
     userId: event.userId,
     resource: event.resource,
     resourceId: event.resourceId,
     ...(event.error && { error: event.error }),
-  });
+  };
+  if (event.severity === 'critical' || event.severity === 'error') {
+    logger.error(`[AUDIT] ${event.type}`, ctx);
+  } else if (event.severity === 'warn') {
+    logger.warn(`[AUDIT] ${event.type}`, ctx);
+  } else {
+    logger.info(`[AUDIT] ${event.type}`, ctx);
+  }
   
   // Best-effort DB write (don't await, don't fail)
   void persistToDb(event);

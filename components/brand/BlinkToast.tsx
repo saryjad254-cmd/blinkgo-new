@@ -6,7 +6,8 @@ import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import Info from 'lucide-react/dist/esm/icons/info';
 import X from 'lucide-react/dist/esm/icons/x';
-import { useEffect, useState, type ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
+import { useEffect } from 'react';
 import { cn } from '@/lib/cn';
 
 /**
@@ -41,7 +42,7 @@ interface BlinkToastProps {
   onClose: (id: string) => void;
 }
 
-const variantStyles: Record<ToastVariant, { bg: string; ring: string; icon: any; iconColor: string; barColor: string }> = {
+const variantStyles: Record<ToastVariant, { bg: string; ring: string; icon: LucideIcon; iconColor: string; barColor: string }> = {
   success: {
     bg: 'bg-surface border-emerald-500/30',
     ring: 'ring-emerald-500/10',

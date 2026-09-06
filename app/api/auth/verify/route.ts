@@ -7,6 +7,8 @@ import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { ValidationError } from '@/lib/errors';
+import { createClient } from '@supabase/supabase-js';
+import { getCanonicalBaseUrl } from '@/lib/auth/redirect-url';
 
 export const runtime = 'nodejs';
 export const dynamic = "force-dynamic";
@@ -40,14 +42,29 @@ async function verifyHandler(req: NextRequest): Promise<NextResponse> {
 
     const norm = email.toLowerCase().trim();
     const verification = await consumeOTP({ email: norm, code, purpose: 'signup' });
-    if (!verification) {
-      throw new ValidationError('Invalid code');
+    let verifiedUserId = verification?.user_id || null;
+
+    // Registration can fall back to Supabase Auth SMTP. In that case the
+    // six-digit token is owned and verified by GoTrue rather than email_otps.
+    if (!verifiedUserId) {
+      const authClient = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        { auth: { autoRefreshToken: false, persistSession: false } },
+      );
+      const { data: otpData, error: otpError } = await authClient.auth.verifyOtp({
+        email: norm,
+        token: code,
+        type: 'email',
+      });
+      if (otpError || !otpData.user) throw new ValidationError('Invalid code');
+      verifiedUserId = otpData.user.id;
     }
 
     const supabase = getAdminClient();
-    if (verification.user_id) {
+    if (verifiedUserId) {
       const { error: confirmErr } = await supabase.auth.admin.updateUserById(
-        verification.user_id,
+        verifiedUserId,
         { email_confirm: true },
       );
       if (confirmErr) {
@@ -57,7 +74,7 @@ async function verifyHandler(req: NextRequest): Promise<NextResponse> {
       await supabase
         .from('users')
         .update({ is_verified: true })
-        .eq('id', verification.user_id);
+        .eq('id', verifiedUserId);
     }
     return ok({ message: 'Email verified' });
   });
@@ -105,16 +122,29 @@ async function resendHandler(req: NextRequest): Promise<NextResponse> {
       purpose: 'signup',
     });
 
+    let verificationEmailSent = false;
     try {
       const { sendOTPEmail } = await import('@/lib/email-service');
-      await sendOTPEmail({
+      const result = await sendOTPEmail({
         to: norm,
         code: otpCode,
         locale: 'de',
         expiresInMinutes: 15,
       });
+      verificationEmailSent = result.ok;
     } catch (e) {
       console.error('Resend email error:', e);
+    }
+
+    if (!verificationEmailSent) {
+      const { error: smtpError } = await supabase.auth.signInWithOtp({
+        email: norm,
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo: `${getCanonicalBaseUrl(req.nextUrl.origin)}/login?verified=1`,
+        },
+      });
+      if (smtpError) throw new Error('Verification email could not be sent');
     }
 
     return ok({ message: 'New code generated' });

@@ -2,14 +2,10 @@
 
 import { useState, useEffect } from 'react';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
-import Search from 'lucide-react/dist/esm/icons/search';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
-import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import X from 'lucide-react/dist/esm/icons/x';
 import { cn } from '@/lib/cn';
 import { formatEUR } from '@/lib/format';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
-import Link from 'next/link';
 
 const T = {
   de: {
@@ -90,7 +86,17 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-500/15 text-red-400',
 };
 
-const STATUS_KEYS = ['all', 'pending', 'confirmed', 'preparing', 'ready', 'picked_up', 'delivered', 'cancelled'];
+const STATUS_KEYS = ['all', 'pending', 'confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivered', 'cancelled'];
+
+interface AdminOrderRow {
+  id: string;
+  order_number: string | null;
+  restaurants?: { name?: string | null } | null;
+  customer?: { name?: string | null } | null;
+  total: number | string | null;
+  status: string;
+  created_at: string;
+}
 
 export function AdminOrdersClient({
   user,
@@ -101,7 +107,7 @@ export function AdminOrdersClient({
 }) {
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [orders, setOrders] = useState<any[]>([]);
+  const [orders, setOrders] = useState<AdminOrderRow[]>([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [loading, setLoading] = useState(true);
@@ -127,7 +133,7 @@ export function AdminOrdersClient({
             (isAr ? 'تعذّر تحميل الطلبات' : isAr === false && locale === 'en' ? 'Could not load orders' : 'Bestellungen konnten nicht geladen werden'),
         );
       }
-    } catch (e) {
+    } catch {
       setError(
         isAr ? 'خطأ في الشبكة' : locale === 'en' ? 'Network error' : 'Netzwerkfehler',
       );
@@ -137,9 +143,10 @@ export function AdminOrdersClient({
   };
 
   useEffect(() => {
-    fetchOrders();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void fetchOrders(); });
     const interval = setInterval(fetchOrders, 30000);
-    return () => clearInterval(interval);
+    return () => { cancelled = true; clearInterval(interval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [statusFilter]);
 
@@ -161,6 +168,7 @@ export function AdminOrdersClient({
             type="button"
             onClick={fetchOrders}
             disabled={loading}
+            aria-label={locale === 'ar' ? 'تحديث الطلبات' : locale === 'en' ? 'Refresh orders' : 'Bestellungen aktualisieren'}
             className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-ink-700 border border-edge text-sm font-bold text-text-secondary hover:text-white disabled:opacity-50"
           >
             <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />

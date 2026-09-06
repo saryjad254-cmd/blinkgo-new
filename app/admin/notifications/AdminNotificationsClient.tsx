@@ -8,6 +8,7 @@ import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 const T = {
   de: {
@@ -72,6 +73,13 @@ const T = {
   },
 };
 
+interface AdminNotification {
+  id: string;
+  title: string;
+  body: string;
+  created_at: string;
+}
+
 export function AdminNotificationsClient({
   user,
   locale = 'de',
@@ -81,7 +89,7 @@ export function AdminNotificationsClient({
 }) {
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notifications, setNotifications] = useState<AdminNotification[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ title: '', message: '', audience: 'all', type: 'announcement' });
@@ -100,7 +108,9 @@ export function AdminNotificationsClient({
   };
 
   useEffect(() => {
-    fetchNotifs();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void fetchNotifs(); });
+    return () => { cancelled = true; };
   }, []);
 
   const handleSend = async (e: React.FormEvent) => {
@@ -122,8 +132,8 @@ export function AdminNotificationsClient({
       setForm({ title: '', message: '', audience: 'all', type: 'announcement' });
       setShowForm(false);
       fetchNotifs();
-    } catch (e: any) {
-      setResult({ ok: false, error: e.message });
+    } catch (error: unknown) {
+      setResult({ ok: false, error: extractErrorMessage(error, 'Failed') });
     } finally {
       setSending(false);
     }

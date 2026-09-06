@@ -26,8 +26,8 @@ export interface AvailableOrderCardProps {
     duration_min?: number;
     payment_method?: string;
     created_at: string;
-    restaurants?: { name?: string; address?: string };
-    delivery_address?: any;
+    restaurants?: { name?: string; address?: string; latitude?: number | null; longitude?: number | null };
+    delivery_address?: unknown;
     customer_latitude?: number | null;
     customer_longitude?: number | null;
     restaurant_latitude?: number | null;
@@ -115,27 +115,28 @@ export function AvailableOrderCard({
   const isRtl = locale === 'ar';
   const t = T[locale] ?? T.de;
   const age = getAge(order.created_at);
-  const isHot = age.ms < 90 * 1000; // < 90s
+  const isHot = isFresh || age.ms < 90 * 1000; // < 90s or explicitly marked fresh
 
   // Parse customer address
-  const da: any = order.delivery_address;
+  const da = order.delivery_address;
+  const address = typeof da === 'object' && da !== null ? da as Record<string, unknown> : null;
   const customerAddress =
-    typeof da === 'object' && da
-      ? da.formatted_address || da.address || `${da.street ?? ''}, ${da.postal ?? ''} ${da.city ?? ''}`.trim().replace(/^,\s*/, '')
+    address
+      ? String(address.formatted_address || address.address || `${address.street ?? ''}, ${address.postal ?? ''} ${address.city ?? ''}`.trim().replace(/^,\s*/, ''))
       : typeof da === 'string'
       ? da
       : '';
-  const customerFloor = typeof da === 'object' && da ? da.floor : null;
-  const customerDoor = typeof da === 'object' && da ? da.door : null;
-  const customerNotes = typeof da === 'object' && da ? da.instructions : null;
+  const customerFloor = address && (typeof address.floor === 'string' || typeof address.floor === 'number') ? address.floor : null;
+  const customerDoor = address && (typeof address.door === 'string' || typeof address.door === 'number') ? address.door : null;
+  const customerNotes = address && typeof address.instructions === 'string' ? address.instructions : null;
 
   const restaurantName = order.restaurants?.name ?? 'Restaurant';
   const restaurantAddress = order.restaurants?.address ?? '';
   const distance = order.distance_km ?? 0;
   const duration = order.duration_min ?? 0;
 
-  // Driver earnings: 80% of delivery_fee + tip (canonical formula)
-  const driverEarnings = computeEarnings({ delivery_fee: order.delivery_fee, tip: order.tip }).total;
+  // Driver earnings use the canonical, platform-configured contract formula.
+  const driverEarnings = computeEarnings(order).total;
 
   const PaymentIcon =
     order.payment_method === 'cash' ? Banknote : order.payment_method === 'card' ? CreditCard : Smartphone;
@@ -282,6 +283,7 @@ export function AvailableOrderCard({
           <button
             type="button"
             onClick={() => onReject(order.id)}
+            aria-label={locale === 'ar' ? 'رفض الطلب' : locale === 'en' ? 'Reject order' : 'Bestellung ablehnen'}
             className="flex-shrink-0 h-12 px-4 rounded-2xl font-bold text-sm transition-all active:scale-[0.97] border border-edge text-text-muted hover:text-red-400 hover:border-red-500/40 bg-ink-700/40 touch-manipulation"
           >
             <X className="w-4 h-4" />

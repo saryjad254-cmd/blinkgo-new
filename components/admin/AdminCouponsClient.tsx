@@ -4,9 +4,10 @@ import { useT } from '@/lib/i18n/I18nProvider';
 import { useState } from 'react';
 import Plus from 'lucide-react/dist/esm/icons/plus';
 import Trash2 from 'lucide-react/dist/esm/icons/trash-2';
-import Ticket from 'lucide-react/dist/esm/icons/ticket';
 import { AdminLayout, type AdminUser } from './AdminLayout';
 import type { Locale } from '@/lib/i18n/server-translations';
+import { useToast } from '@/components/ui/Toast';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 interface Coupon {
   id: string;
@@ -20,6 +21,12 @@ interface Coupon {
   start_date: string;
   end_date: string;
   is_active: boolean;
+}
+
+function couponWindow(days: number): { startsAt: string; endsAt: string } {
+  const startsAt = new Date();
+  const endsAt = new Date(startsAt.getTime() + days * 24 * 60 * 60 * 1000);
+  return { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() };
 }
 
 export function AdminCouponsClient({
@@ -45,10 +52,18 @@ export function AdminCouponsClient({
     ends_in_days: 30,
   });
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const toast = useToast();
+  const copy = isAr
+    ? { createFailed: 'تعذر إنشاء القسيمة', deleteFailed: 'تعذر حذف القسيمة', created: 'تم إنشاء القسيمة', deleted: 'تم حذف القسيمة', confirmDelete: 'هل تريد حذف هذه القسيمة؟', maxDiscount: 'الحد الأقصى للخصم', validDays: 'عدد أيام الصلاحية', status: 'الحالة', deleteLabel: 'حذف القسيمة' }
+    : locale === 'en'
+      ? { createFailed: 'Could not create coupon', deleteFailed: 'Could not delete coupon', created: 'Coupon created', deleted: 'Coupon deleted', confirmDelete: 'Delete this coupon?', maxDiscount: 'Maximum discount', validDays: 'Days valid', status: 'Status', deleteLabel: 'Delete coupon' }
+      : { createFailed: 'Gutschein konnte nicht erstellt werden', deleteFailed: 'Gutschein konnte nicht gelöscht werden', created: 'Gutschein erstellt', deleted: 'Gutschein gelöscht', confirmDelete: 'Diesen Gutschein löschen?', maxDiscount: 'Maximaler Rabatt', validDays: 'Gültigkeit in Tagen', status: 'Status', deleteLabel: 'Gutschein löschen' };
 
   const create = async () => {
     setSaving(true);
     try {
+      const window = couponWindow(form.ends_in_days);
       const res = await fetch('/api/admin/coupons', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -59,27 +74,43 @@ export function AdminCouponsClient({
           min_order_amount: form.min_order_amount,
           max_discount: form.max_discount ? Number(form.max_discount) : null,
           usage_limit: form.usage_limit ? Number(form.usage_limit) : null,
-          starts_at: new Date().toISOString(),
-          ends_at: new Date(Date.now() + form.ends_in_days * 24 * 60 * 60 * 1000).toISOString(),
+          starts_at: window.startsAt,
+          ends_at: window.endsAt,
         }),
       });
-      const data = await res.json();
-      if (data.ok) {
-        setCoupons([data.data.coupon, ...coupons]);
+      const data: unknown = await res.json().catch(() => null);
+      const createdCoupon = data && typeof data === 'object' && 'data' in data && data.data && typeof data.data === 'object' && 'coupon' in data.data
+        ? (data.data as { coupon: Coupon }).coupon
+        : null;
+      if (res.ok && createdCoupon) {
+        setCoupons((current) => [createdCoupon, ...current]);
         setShowForm(false);
         setForm({ code: '', type: 'percentage', value: 10, min_order_amount: 0, max_discount: '', usage_limit: '', ends_in_days: 30 });
+        toast.success(copy.created);
       } else {
-        alert(data.error?.message ?? 'Failed to create');
+        toast.error(extractErrorMessage(data, copy.createFailed));
       }
+    } catch (error) {
+      toast.error(extractErrorMessage(error, copy.createFailed));
     } finally {
       setSaving(false);
     }
   };
 
   const remove = async (id: string) => {
-    if (!confirm('Delete this coupon?')) return;
-    const res = await fetch(`/api/admin/coupons?id=${id}`, { method: 'DELETE' });
-    if (res.ok) setCoupons(coupons.filter((c) => c.id !== id));
+    if (!confirm(copy.confirmDelete)) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/admin/coupons?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data: unknown = await res.json().catch(() => null);
+      if (!res.ok) return toast.error(extractErrorMessage(data, copy.deleteFailed));
+      setCoupons((current) => current.filter((coupon) => coupon.id !== id));
+      toast.success(copy.deleted);
+    } catch (error) {
+      toast.error(extractErrorMessage(error, copy.deleteFailed));
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -110,7 +141,7 @@ export function AdminCouponsClient({
             />
             <select
               value={form.type}
-              onChange={(e) => setForm({ ...form, type: e.target.value as any })}
+              onChange={(e) => setForm({ ...form, type: e.target.value as typeof form.type })}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             >
               <option value="percentage">{t.coupon.percentage}</option>
@@ -135,7 +166,7 @@ export function AdminCouponsClient({
               type="number"
               value={form.max_discount}
               onChange={(e) => setForm({ ...form, max_discount: e.target.value })}
-              placeholder="Max discount"
+              placeholder={copy.maxDiscount}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             />
             <input
@@ -149,7 +180,7 @@ export function AdminCouponsClient({
               type="number"
               value={form.ends_in_days}
               onChange={(e) => setForm({ ...form, ends_in_days: Number(e.target.value) })}
-              placeholder="Days valid"
+              placeholder={copy.validDays}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             />
           </div>
@@ -179,7 +210,7 @@ export function AdminCouponsClient({
               <th className="p-4 font-semibold text-zinc-600 dark:text-zinc-400">{t.admin.discountValue}</th>
               <th className="p-4 font-semibold text-zinc-600 dark:text-zinc-400">{t.admin.usageCount}</th>
               <th className="p-4 font-semibold text-zinc-600 dark:text-zinc-400">{t.admin.validUntil}</th>
-              <th className="p-4 font-semibold text-zinc-600 dark:text-zinc-400">Status</th>
+              <th className="p-4 font-semibold text-zinc-600 dark:text-zinc-400">{copy.status}</th>
               <th className="p-4"></th>
             </tr>
           </thead>
@@ -210,7 +241,7 @@ export function AdminCouponsClient({
                     </span>
                   </td>
                   <td className="p-4">
-                    <button onClick={() => remove(c.id)} aria-label="Löschen" className="rounded-full p-2 text-rose-600 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-500/50">
+                    <button disabled={deletingId === c.id} onClick={() => void remove(c.id)} aria-label={copy.deleteLabel} className="rounded-full p-2 text-rose-600 hover:bg-rose-50 focus:outline-none focus:ring-2 focus:ring-rose-500/50 disabled:cursor-wait disabled:opacity-50">
                       <Trash2 className="h-4 w-4" />
                     </button>
                   </td>

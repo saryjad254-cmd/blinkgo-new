@@ -141,7 +141,8 @@ async function seedOperator({ id, email, password, name, role }) {
     const { error: updateErr } = await supabase.auth.admin.updateUserById(existing.id, {
       password,
       email_confirm: true,
-      user_metadata: { name, role },
+      app_metadata: { app_role: role },
+      user_metadata: { name },
     });
     if (updateErr) {
       console.error(`  ❌ updateUserById failed: ${updateErr.message}`);
@@ -154,7 +155,8 @@ async function seedOperator({ id, email, password, name, role }) {
       email,
       password,
       email_confirm: true,
-      user_metadata: { name, role },
+      app_metadata: { app_role: role },
+      user_metadata: { name },
     });
     if (createErr) {
       // Common case: soft-deleted auth.users row blocks the email uniqueness.
@@ -169,7 +171,8 @@ async function seedOperator({ id, email, password, name, role }) {
           const { error: updateErr2 } = await supabase.auth.admin.updateUserById(existing.id, {
             password,
             email_confirm: true,
-            user_metadata: { name, role },
+            app_metadata: { app_role: role },
+            user_metadata: { name },
           });
           if (updateErr2) {
             console.error(`  ❌ updateUserById (after recovery) failed: ${updateErr2.message}`);

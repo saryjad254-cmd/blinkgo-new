@@ -25,6 +25,8 @@ import Utensils from 'lucide-react/dist/esm/icons/utensils';
 import Leaf from 'lucide-react/dist/esm/icons/leaf';
 import Tag from 'lucide-react/dist/esm/icons/tag';
 import MessageCircle from 'lucide-react/dist/esm/icons/message-circle';
+import ShoppingBasket from 'lucide-react/dist/esm/icons/shopping-basket';
+import PackageSearch from 'lucide-react/dist/esm/icons/package-search';
 import type { ComponentType, SVGProps } from 'react';
 import { EmptyState as BaseEmptyState } from './EmptyState';
 
@@ -63,6 +65,8 @@ const ICONS: Record<string, LucideIcon> = {
   Leaf,
   Tag,
   MessageCircle,
+  ShoppingBasket,
+  PackageSearch,
 };
 
 interface Props {
@@ -92,5 +96,5 @@ export const EmptyStateClient = memo(function EmptyStateClient({
   } else {
     resolvedIcon = <Inbox className="w-8 h-8" strokeWidth={2} />;
   }
-  return <BaseEmptyState icon={resolvedIcon} {...(rest as any)} />;
+  return <BaseEmptyState icon={resolvedIcon} {...rest} />;
 });

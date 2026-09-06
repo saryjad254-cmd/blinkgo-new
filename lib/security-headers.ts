@@ -121,16 +121,31 @@ export function applySecurityHeaders(res: NextResponse): NextResponse {
   // Dev: allows unsafe-eval for Next.js hot reload
   const isDev = process.env.NODE_ENV !== 'production';
   const scriptSrc = isDev
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.supabase.co https://maps.googleapis.com https://maps.gstatic.com https://unpkg.com"
-    : "script-src 'self' 'unsafe-inline' https://*.supabase.co https://maps.googleapis.com https://maps.gstatic.com https://unpkg.com";
+    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.supabase.co https://maps.googleapis.com https://maps.gstatic.com"
+    : "script-src 'self' 'unsafe-inline' https://*.supabase.co https://maps.googleapis.com https://maps.gstatic.com";
+
+  // The optimized production build is also used by the explicitly enabled
+  // loopback acceptance harness. Permit only the configured loopback Supabase
+  // origin in that environment; deployed Supabase projects keep the strict
+  // HTTPS/WSS-only policy below.
+  let localSupabaseConnect = '';
+  try {
+    const supabaseUrl = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL ?? '');
+    if (supabaseUrl.hostname === 'localhost' || supabaseUrl.hostname === '127.0.0.1') {
+      const wsProtocol = supabaseUrl.protocol === 'https:' ? 'wss:' : 'ws:';
+      localSupabaseConnect = ` ${supabaseUrl.origin} ${wsProtocol}//${supabaseUrl.host}`;
+    }
+  } catch {
+    // Missing or malformed configuration must not widen CSP.
+  }
 
   const csp = [
     "default-src 'self'",
     scriptSrc,
-    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com",
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob: https: http:",
     "font-src 'self' data: https://fonts.gstatic.com",
-    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.resend.com https://maps.googleapis.com https://*.tiles.openstreetmap.org https://nominatim.openstreetmap.org https://*.basemaps.cartocdn.com",
+    `connect-src 'self' https://*.supabase.co wss://*.supabase.co${localSupabaseConnect} https://api.resend.com https://maps.googleapis.com https://*.tiles.openstreetmap.org https://nominatim.openstreetmap.org https://*.basemaps.cartocdn.com`,
     "frame-ancestors 'none'",
     "form-action 'self'",
     "base-uri 'self'",

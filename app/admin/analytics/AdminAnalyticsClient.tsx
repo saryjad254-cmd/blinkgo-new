@@ -1,14 +1,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
-import BarChart3 from 'lucide-react/dist/esm/icons/bar-chart-3';
-import Activity from 'lucide-react/dist/esm/icons/activity';
 import Users from 'lucide-react/dist/esm/icons/users';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
 import DollarSign from 'lucide-react/dist/esm/icons/dollar-sign';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import Calendar from 'lucide-react/dist/esm/icons/calendar';
+import type { ReactNode } from 'react';
+import type { LucideIcon } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
 
@@ -68,6 +67,17 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: 'bg-red-500',
 };
 
+interface AnalyticsSeriesPoint { date: string; orders: number; revenue: number }
+interface AnalyticsData {
+  aov: number;
+  activeCustomers: number;
+  totalCustomers: number;
+  hourly: number[];
+  series: AnalyticsSeriesPoint[];
+  dayOfWeek: number[];
+  statusDist: Record<string, number>;
+}
+
 export function AdminAnalyticsClient({
   user,
   locale = 'de',
@@ -77,28 +87,22 @@ export function AdminAnalyticsClient({
 }) {
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [data, setData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
-
+  const [data, setData] = useState<AnalyticsData | null>(null);
   const load = async () => {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/admin/analytics');
-      const json = await res.json();
-      if (res.ok && json.ok) setData(json);
-    } finally {
-      setLoading(false);
-    }
+    const res = await fetch('/api/admin/analytics');
+    const json = await res.json();
+    if (res.ok && json.ok) setData(json);
   };
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void load(); });
     const i = setInterval(load, 60000);
-    return () => clearInterval(i);
+    return () => { cancelled = true; clearInterval(i); };
   }, []);
 
   const maxHourly = Math.max(...(data?.hourly ?? [1]));
-  const maxDaily = Math.max(...(data?.series?.map((s: any) => s.orders) ?? [1]));
+  const maxDaily = Math.max(...(data?.series?.map((s) => s.orders) ?? [1]));
   const maxWeekday = Math.max(...(data?.dayOfWeek ?? [1]));
 
   return (
@@ -127,7 +131,7 @@ export function AdminAnalyticsClient({
           <StatCard
             icon={ShoppingBag}
             label={t.daily}
-            value={data?.series?.reduce((s: number, x: any) => s + x.orders, 0) ?? 0}
+            value={data?.series?.reduce((s, x) => s + x.orders, 0) ?? 0}
             color="text-brand-500"
           />
         </section>
@@ -167,7 +171,7 @@ export function AdminAnalyticsClient({
           </h2>
           {data && (
             <div className="space-y-2">
-              {data.series.map((s: any) => {
+              {data.series.map((s) => {
                 const pct = (s.orders / maxDaily) * 100;
                 return (
                   <div key={s.date} className="flex items-center gap-2 text-xs" dir="ltr">
@@ -226,11 +230,8 @@ export function AdminAnalyticsClient({
                 {Object.entries(data.statusDist)
                   .sort(([, a], [, b]) => (b as number) - (a as number))
                   .map(([status, count]) => {
-                    const total = Object.values(data.statusDist).reduce(
-                      (s: number, v) => s + (v as number),
-                      0,
-                    );
-                    const pct = total > 0 ? ((count as number) / total) * 100 : 0;
+                    const total = Object.values(data.statusDist).reduce((sum, value) => sum + value, 0);
+                    const pct = total > 0 ? (count / total) * 100 : 0;
                     return (
                       <div key={status} className="flex items-center gap-2 text-xs">
                         <span
@@ -249,7 +250,7 @@ export function AdminAnalyticsClient({
                           />
                         </div>
                         <span className="w-12 text-end text-white font-extrabold tabular-nums">
-                          {count as number}
+                          {count}
                         </span>
                       </div>
                     );
@@ -270,9 +271,9 @@ function StatCard({
   sub,
   color,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
-  value: any;
+  value: ReactNode;
   sub?: string;
   color: string;
 }) {

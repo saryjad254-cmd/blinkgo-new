@@ -75,12 +75,12 @@ export function ScheduleOrderPicker({
     const now = new Date();
     const opts: Array<{ label: string; sub: string; value: Date; key: string }> = [];
 
-    const plus30 = new Date(now.getTime() + 30 * 60 * 1000);
+    const plus30 = new Date(now.getTime() + minLeadMinutes * 60 * 1000);
     opts.push({
-      label: '+30 min',
+      label: `+${minLeadMinutes} min`,
       sub: fmtTime(plus30),
       value: plus30,
-      key: '30min',
+      key: `${minLeadMinutes}min`,
     });
 
     const plus1h = new Date(now.getTime() + 60 * 60 * 1000);
@@ -111,7 +111,7 @@ export function ScheduleOrderPicker({
     });
 
     return opts;
-  }, []); // eslint-disable-line
+  }, [minLeadMinutes, t.tomorrow]);
 
   const activeKey = scheduledFor ? findClosestKey(scheduledFor, options) : 'asap';
 
@@ -208,7 +208,7 @@ export function ScheduleOrderPicker({
               <input
                 type="datetime-local"
                 value={manualTime}
-                min={defaultLocalISO()}
+                min={minLocalISO(minLeadMinutes)}
                 max={maxLocalISO(maxDaysAhead)}
                 onChange={(e) => commitManual(e.target.value)}
                 className={cn(
@@ -264,6 +264,10 @@ function toLocalISO(d: Date): string {
 function defaultLocalISO(): string {
   const d = new Date(Date.now() + 45 * 60 * 1000); // +45 min default
   return toLocalISO(d);
+}
+
+function minLocalISO(minutes: number): string {
+  return toLocalISO(new Date(Date.now() + minutes * 60 * 1000));
 }
 
 function maxLocalISO(days: number): string {

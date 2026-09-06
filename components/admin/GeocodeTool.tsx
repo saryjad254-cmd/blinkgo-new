@@ -7,6 +7,7 @@ import CheckCircle from 'lucide-react/dist/esm/icons/check-circle';
 import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import { useI18n } from '@/lib/i18n/I18nProvider';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 type Result = {
   ok: boolean;
@@ -69,12 +70,12 @@ export function GeocodeTool() {
       });
       const data = await r.json();
       if (!data?.ok) {
-        setError(data?.error || L.error);
+        setError(extractErrorMessage(data, L.error));
         return;
       }
       setResult(data);
-    } catch (e: any) {
-      setError(e?.message || L.error);
+    } catch (error: unknown) {
+      setError(extractErrorMessage(error, L.error));
     } finally {
       setRunning(false);
     }

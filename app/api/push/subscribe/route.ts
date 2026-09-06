@@ -9,14 +9,15 @@ import { createServerClient } from '@/lib/supabase/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
-import { ValidationError, AuthenticationError } from '@/lib/errors';
+import { ValidationError } from '@/lib/errors';
+import { validateWebhookUrl } from '@/lib/security/outbound-url';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
-    secureRoute('moderate'),
+    secureRoute('moderate', ['customer', 'driver', 'restaurant', 'manager', 'admin', 'super_admin']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (ctx, r) => subscribe(ctx.auth.user.id, r as NextRequest) as any,
   )(req)) as unknown as NextResponse;
@@ -24,22 +25,34 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 async function subscribe(userId: string, req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
 
     const body = await req.json().catch(() => ({}));
     const { endpoint, keys } = body;
     if (!endpoint || !keys?.p256dh || !keys?.auth) {
       throw new ValidationError('endpoint, keys.p256dh, keys.auth required');
     }
+    if (typeof endpoint !== 'string' || endpoint.length > 2048
+      || typeof keys.p256dh !== 'string' || keys.p256dh.length > 512
+      || typeof keys.auth !== 'string' || keys.auth.length > 256) {
+      throw new ValidationError('Invalid push subscription');
+    }
+    let safeEndpoint: string;
+    try {
+      safeEndpoint = await validateWebhookUrl(endpoint);
+    } catch {
+      throw new ValidationError('Push endpoint is not allowed');
+    }
     const { error } = await supabase
       .from('push_subscriptions')
       .upsert({
         user_id: userId,
-        endpoint,
+        endpoint: safeEndpoint,
         p256dh: keys.p256dh,
         auth: keys.auth,
         user_agent: req.headers.get('user-agent') ?? null,
         last_used_at: new Date().toISOString(),
+        is_active: true,
       }, { onConflict: 'endpoint' });
     if (error) {
       throw new Error('Failed to save push subscription');
@@ -50,7 +63,7 @@ async function subscribe(userId: string, req: NextRequest): Promise<NextResponse
 
 export async function DELETE(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
-    secureRoute('moderate'),
+    secureRoute('moderate', ['customer', 'driver', 'restaurant', 'manager', 'admin', 'super_admin']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (ctx, r) => unsubscribe(ctx.auth.user.id, r as NextRequest) as any,
   )(req)) as unknown as NextResponse;
@@ -58,7 +71,7 @@ export async function DELETE(req: NextRequest): Promise<NextResponse> {
 
 async function unsubscribe(userId: string, req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const body = await req.json().catch(() => ({}));
     const { endpoint } = body;
     if (!endpoint) throw new ValidationError('endpoint required');

@@ -1,32 +1,15 @@
 'use client';
-import { memo, useState } from 'react';
+import { memo } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import Star from 'lucide-react/dist/esm/icons/star';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import Truck from 'lucide-react/dist/esm/icons/truck';
-import ChefHat from 'lucide-react/dist/esm/icons/chef-hat';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
-import Heart from 'lucide-react/dist/esm/icons/heart';
 import type { Restaurant } from '@/lib/types';
 import { formatEUR } from '@/lib/format';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { FavoriteButton } from '@/components/customer/FavoriteButton';
-import { cn } from '@/lib/cn';
-
-// v85: Premium fallback gradient palettes (rotated by index for variety)
-const FALLBACK_PALETTES = [
-  'from-brand-red-500 via-brand-red-400 to-brand-yellow-400',
-  'from-brand-yellow-500 via-brand-yellow-400 to-brand-red-400',
-  'from-brand-black via-brand-red-900 to-brand-yellow-500',
-  'from-brand-red-700 via-brand-red-500 to-orange-400',
-  'from-amber-500 via-orange-500 to-red-500',
-  'from-rose-500 via-pink-500 to-orange-400',
-];
-
-// 1x1 transparent blur placeholder (prevents CLS while image loads)
-const BLUR_DATA_URL =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+import { CatalogImage } from '@/components/customer/CatalogImage';
 
 /**
  * RestaurantCard — premium card with real images and a beautiful fallback
@@ -41,78 +24,71 @@ const BLUR_DATA_URL =
 export const RestaurantCard = memo(function RestaurantCard({
   restaurant,
   index = 0,
+  initialFavorited = false,
+  onFavoriteChange,
 }: {
   restaurant: Restaurant;
   index?: number;
+  initialFavorited?: boolean;
+  onFavoriteChange?: (favorited: boolean) => void;
 }) {
   const { locale } = useI18n();
-  const [imgError, setImgError] = useState(false);
-  const showImage = !!restaurant.cover_url && !imgError;
-
-  const palette = FALLBACK_PALETTES[index % FALLBACK_PALETTES.length];
-  const initial = (restaurant.name || '?').trim().charAt(0).toUpperCase();
+  const reviewCount = Number(restaurant.review_count || 0);
+  const rating = Number(restaurant.rating || 0);
+  const hasVerifiedRating = reviewCount > 0 && rating > 0;
+  const description = locale === 'ar' && restaurant.description && !/[\u0600-\u06FF]/.test(restaurant.description)
+    ? null
+    : restaurant.description;
+  const localizeCuisine = (value: string) => {
+    if (locale !== 'ar') return value;
+    return value
+      .replace(/Burgers?/gi, 'برغر').replace(/American/gi, 'أمريكي')
+      .replace(/Amerikanisch/gi, 'أمريكي')
+      .replace(/Pizza/gi, 'بيتزا').replace(/Italian/gi, 'إيطالي')
+      .replace(/Sushi/gi, 'سوشي').replace(/Japanese|Japanisch/gi, 'ياباني')
+      .replace(/Caf[eé]/gi, 'مقهى').replace(/Breakfast/gi, 'فطور')
+      .replace(/Pasta/gi, 'باستا').replace(/Desserts?/gi, 'حلويات');
+  };
+  const deliveryTime = locale === 'ar'
+    ? restaurant.estimated_delivery_time.replace(/min\.?/gi, 'دقيقة')
+    : restaurant.estimated_delivery_time;
+  const featuredLabel = locale === 'ar' ? 'مميّز' : locale === 'de' ? 'Empfohlen' : 'Featured';
 
   return (
-    <Link
-      href={`/restaurants/${restaurant.id}`}
-      prefetch={true}
-      className="group block rounded-md overflow-hidden bg-bg-card backdrop-blur-xl border border-edge-light hover:border-brand-red-500/40 shadow-speed-md hover:shadow-speed-xl hover:-translate-y-1 transition-all duration-300"
-    >
+    <article className="group relative overflow-hidden rounded-[22px] border border-edge-light bg-bg-card shadow-speed-md backdrop-blur-xl transition-all duration-300 hover:-translate-y-1 hover:border-brand-red-500/40 hover:shadow-speed-xl">
+      <Link
+        href={`/restaurants/${restaurant.id}`}
+        prefetch={true}
+        className="block focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand"
+      >
       {/* Cover */}
       <div className="relative h-40 sm:h-48 bg-gradient-to-br from-surface to-bg overflow-hidden">
-        {showImage ? (
-          <Image
-            src={restaurant.cover_url!}
-            alt={restaurant.name}
-            fill
-            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
-            placeholder="blur"
-            blurDataURL={BLUR_DATA_URL}
-            className="object-cover group-hover:scale-110 transition-transform duration-500"
-            onError={() => setImgError(true)}
-            unoptimized={restaurant.cover_url!.includes('supabase.co/storage')}
-          />
-        ) : (
-          // v85: Premium fallback — gradient + first letter of restaurant name
-          <div
-            className={cn(
-              'w-full h-full flex items-center justify-center relative',
-              'bg-gradient-to-br',
-              palette,
-            )}
-            aria-label={restaurant.name}
-          >
-            {/* Subtle pattern overlay for premium feel */}
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_20%,rgba(255,255,255,0.25),transparent_50%)]" />
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_80%,rgba(0,0,0,0.15),transparent_60%)]" />
-            <span className="relative text-6xl sm:text-7xl font-black text-white/95 drop-shadow-lg select-none">
-              {initial}
-            </span>
-            <ChefHat
-              className="absolute bottom-3 end-3 w-5 h-5 text-white/40"
-              aria-hidden
-            />
-          </div>
-        )}
+        <CatalogImage
+          src={restaurant.cover_url}
+          alt={restaurant.name}
+          name={restaurant.name}
+          kind="restaurant"
+          index={index}
+          priority={index < 2}
+          sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 25vw"
+          className="group-hover:scale-[1.045]"
+        />
 
         {/* Overlay gradient */}
         <div className="absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/80 via-black/30 to-transparent pointer-events-none" />
 
-        {/* Favorite button */}
-        <FavoriteButton restaurantId={restaurant.id} />
-
         {/* Featured badge */}
         {restaurant.is_featured && (
-          <span className="absolute top-3 right-3 inline-flex items-center gap-1 bg-speed-gradient text-white text-[10px] px-2.5 py-1 rounded-pill font-bold shadow-speed-glow">
+          <span className="absolute bottom-3 start-3 inline-flex items-center gap-1 bg-speed-gradient text-white text-[10px] px-2.5 py-1 rounded-pill font-bold shadow-speed-glow">
             <Sparkles className="w-3 h-3" />
-            مميز
+            {featuredLabel}
           </span>
         )}
 
         {/* Rating badge — top left */}
-        <span className="absolute top-3 left-3 inline-flex items-center gap-1 bg-bg-card/95 backdrop-blur-sm text-white text-xs px-2 py-1 rounded-pill font-bold border border-edge-light">
+        <span className="absolute top-3 start-3 inline-flex items-center gap-1 bg-bg-card/95 backdrop-blur-sm text-white text-xs px-2 py-1 rounded-pill font-bold border border-edge-light">
           <Star className="w-3 h-3 fill-accent text-accent" />
-          {Number(restaurant.rating || 0).toFixed(1)}
+          {hasVerifiedRating ? rating.toFixed(1) : (locale === 'ar' ? 'جديد' : locale === 'de' ? 'Neu' : 'New')}
         </span>
       </div>
 
@@ -124,15 +100,15 @@ export const RestaurantCard = memo(function RestaurantCard({
           </h3>
         </div>
 
-        {restaurant.description && (
+        {description && (
           <p className="text-xs text-text-muted line-clamp-2 mb-3 leading-relaxed">
-            {restaurant.description}
+            {description}
           </p>
         )}
 
         {restaurant.cuisine && restaurant.cuisine.length > 0 && (
           <div className="flex flex-wrap gap-1 mb-3">
-            {(restaurant.cuisine ?? []).slice(0, 3).map((c) => (
+            {Array.from(new Set((restaurant.cuisine ?? []).map(localizeCuisine))).slice(0, 3).map((c) => (
               <span
                 key={c}
                 className="text-[10px] bg-surface-elevated text-text-secondary px-2 py-0.5 rounded-pill border border-edge-light font-semibold"
@@ -146,17 +122,26 @@ export const RestaurantCard = memo(function RestaurantCard({
         <div className="flex items-center justify-between text-xs text-text-muted pt-3 border-t border-edge-light">
           <div className="flex items-center gap-1">
             <Clock className="w-3.5 h-3.5 text-info" />
-            <span>{restaurant.estimated_delivery_time}</span>
+            <span>{deliveryTime}</span>
           </div>
           <div className="flex items-center gap-1">
             <Truck className="w-3.5 h-3.5 text-success" />
-            <span>{formatEUR(restaurant.delivery_fee)}</span>
+            <span>{restaurant.delivery_fee === 0 ? (locale === 'ar' ? 'مجاني' : locale === 'de' ? 'Kostenlos' : 'Free') : formatEUR(restaurant.delivery_fee)}</span>
           </div>
           <div className="text-text-muted">
-            {restaurant.review_count || 0} {(locale === 'ar' ? 'تقييم' : 'Bewertungen')}
+            {reviewCount > 0
+              ? `${reviewCount.toLocaleString(locale === 'ar' ? 'ar' : locale === 'de' ? 'de-DE' : 'en-US')} ${locale === 'ar' ? 'تقييم' : locale === 'de' ? 'Bewertungen' : 'reviews'}`
+              : (locale === 'ar' ? 'لا تقييمات بعد' : locale === 'de' ? 'Noch keine Bewertungen' : 'No reviews yet')}
           </div>
         </div>
       </div>
-    </Link>
+      </Link>
+      <FavoriteButton
+        restaurantId={restaurant.id}
+        initialFavorited={initialFavorited}
+        onChange={onFavoriteChange}
+        className="absolute end-3 top-3 z-20 shadow-lg"
+      />
+    </article>
   );
 });

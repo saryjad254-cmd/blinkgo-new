@@ -9,6 +9,7 @@ import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
+import type { LucideIcon } from 'lucide-react';
 
 const T = {
   de: {
@@ -70,7 +71,7 @@ const T = {
   },
 };
 
-const EVENT_ICONS: Record<string, any> = {
+const EVENT_ICONS: Record<string, LucideIcon> = {
   login: Activity,
   logout: Activity,
   register: Mail,
@@ -80,6 +81,15 @@ const EVENT_ICONS: Record<string, any> = {
   blocked: Shield,
   deleted: Shield,
 };
+
+interface AuditEvent {
+  id: string;
+  type: string;
+  actor?: string | null;
+  description?: string | null;
+  created_at: string;
+  metadata?: unknown;
+}
 
 const EVENT_COLORS: Record<string, string> = {
   login: 'bg-emerald-500/15 text-emerald-400',
@@ -101,7 +111,7 @@ export function AdminAuditClient({
 }) {
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [events, setEvents] = useState<any[]>([]);
+  const [events, setEvents] = useState<AuditEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   const load = async () => {
@@ -116,9 +126,10 @@ export function AdminAuditClient({
   };
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void load(); });
     const i = setInterval(load, 30000);
-    return () => clearInterval(i);
+    return () => { cancelled = true; clearInterval(i); };
   }, []);
 
   return (
@@ -162,7 +173,7 @@ export function AdminAuditClient({
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-sm font-extrabold text-white">
-                          {((t as any)[e.type] as string) ?? e.type}
+                          {(t[e.type as keyof typeof t] as string | undefined) ?? e.type}
                         </span>
                         {e.actor && (
                           <span className="text-xs text-text-muted" dir="ltr">

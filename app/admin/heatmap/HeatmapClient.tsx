@@ -42,7 +42,7 @@ export default function HeatmapClient() {
           setDrivers(json.data.drivers ?? []);
         }
         setLoading(false);
-      } catch (e) {
+      } catch {
         if (!mounted) return;
         setError('Network error');
         setLoading(false);

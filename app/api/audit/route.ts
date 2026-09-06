@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
   try {
     const result = await getAuditLog({ limit, offset, actor_id, action, target_type });
     return NextResponse.json({ ok: true, ...result });
-  } catch (e) {
+  } catch {
     return NextResponse.json({ ok: false, error: 'Failed' }, { status: 500 });
   }
 }

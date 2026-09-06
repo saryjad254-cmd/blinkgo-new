@@ -1,25 +1,8 @@
 /**
- * Cookie Consent API
- * ──────────────────
- *
- * POST /api/consent
- *
- * Records the user's cookie consent state. Audit-grade:
- *  - Timestamped
- *  - IP + user-agent recorded (for compliance audit)
- *  - Stored in `consent_records` table (defensive — table
- *    may not exist; falls back to log-only)
- *
- * The system currently uses NO non-essential cookies or
- * tracking scripts. This endpoint is wired up so that if
- * analytics or marketing tools are added later, the consent
- * state is enforced.
- *
- * The current behavior is "implicit" consent: only strictly
- * necessary cookies are set. Optional cookies are NOT set
- * unless the user explicitly accepts them.
+ * Cookie consent audit API.
+ * Records an append-only, data-minimised proof of the visitor's choice.
+ * IP addresses and user-agent strings are intentionally not retained.
  */
-
 import { NextRequest, NextResponse } from 'next/server';
 import { logger } from '@/lib/logging';
 import { ok, withErrorHandling } from '@/lib/api/response';
@@ -27,6 +10,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { ValidationError } from '@/lib/errors';
+import { CONSENT_COOKIE_NAME, CONSENT_MAX_AGE_SECONDS, CONSENT_VERSION } from '@/lib/privacy/consent';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +21,7 @@ export async function POST(req: NextRequest) {
   return (await withSecurity(
     secureRoute('moderate'),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (_ctx, r) => recordConsent(r as NextRequest) as any,
+    async (_ctx, request) => recordConsent(request as NextRequest) as any,
   )(req)) as unknown as NextResponse;
 }
 
@@ -47,59 +31,71 @@ async function recordConsent(req: NextRequest): Promise<NextResponse> {
     if (limited) return limited;
 
     const body = await req.json().catch(() => ({}));
-    const { categories, action } = body;
+    const { categories, action, consentId, version, source } = body;
 
-    if (!action || !['accept_all', 'reject_non_essential', 'custom'].includes(action)) {
+    if (!['accept_all', 'reject_non_essential', 'custom'].includes(action)) {
       throw new ValidationError('Invalid action');
     }
+    if (typeof consentId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(consentId)) {
+      throw new ValidationError('Invalid consentId');
+    }
+    if (version !== CONSENT_VERSION) throw new ValidationError('Unsupported consent version');
+
     if (action === 'custom') {
-      if (!categories || typeof categories !== 'object') {
-        throw new ValidationError('categories required for custom');
-      }
-      for (const k of Object.keys(categories)) {
-        if (!VALID_CATEGORIES.includes(k)) {
-          throw new ValidationError(`Invalid category: ${k}`);
-        }
-        if (typeof categories[k] !== 'boolean') {
-          throw new ValidationError(`category ${k} must be boolean`);
-        }
+      if (!categories || typeof categories !== 'object') throw new ValidationError('categories required for custom');
+      for (const [key, value] of Object.entries(categories)) {
+        if (!VALID_CATEGORIES.includes(key)) throw new ValidationError(`Invalid category: ${key}`);
+        if (typeof value !== 'boolean') throw new ValidationError(`category ${key} must be boolean`);
       }
     }
 
-    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
-    const userAgent = req.headers.get('user-agent') || 'unknown';
+    const normalizedCategories = action === 'accept_all'
+      ? { strictly_necessary: true, preferences: true, analytics: true, marketing: true }
+      : action === 'reject_non_essential'
+        ? { strictly_necessary: true, preferences: false, analytics: false, marketing: false }
+        : {
+            strictly_necessary: true,
+            preferences: categories.preferences === true,
+            analytics: categories.analytics === true,
+            marketing: categories.marketing === true,
+          };
+
     const record = {
-      id: `consent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      id: consentId,
+      consent_version: version,
       action,
-      categories: action === 'accept_all' ? { strictly_necessary: true, preferences: true, analytics: true, marketing: true } : action === 'reject_non_essential' ? { strictly_necessary: true, preferences: false, analytics: false, marketing: false } : categories,
-      ip,
-      user_agent: userAgent,
+      categories: normalizedCategories,
+      source: typeof source === 'string' && source.length <= 40 ? source : 'global_banner',
       created_at: new Date().toISOString(),
     };
 
-    // Log always (audit trail)
-    logger.info('consent_recorded', {  ...record  });
+    logger.info('consent_recorded', record);
+    const { createServiceClient } = await import('@/lib/supabase/service');
+    const service = createServiceClient();
+    const { error } = await service.from('consent_records').insert(record);
+    if (error) throw error;
 
-    // Try to persist (defensive)
-    try {
-      const { createServiceClient } = await import('@/lib/supabase/service');
-      const svc = createServiceClient();
-      await svc.from('consent_records').insert(record);
-    } catch (e: any) {
-      // Table missing — log-only is acceptable
-    }
-
-    return ok({
-      recorded: true,
-      categories: record.categories,
-      note: 'Current build uses only strictly_necessary cookies. Custom consent will be enforced if optional categories are later activated.',
+    const response = ok({ recorded: true, categories: normalizedCategories, version: CONSENT_VERSION });
+    response.cookies.set(CONSENT_COOKIE_NAME, JSON.stringify({
+      id: consentId,
+      version,
+      categories: normalizedCategories,
+      updatedAt: record.created_at,
+    }), {
+      path: '/',
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      httpOnly: false,
+      maxAge: CONSENT_MAX_AGE_SECONDS,
     });
+    return response;
   });
 }
 
 export async function GET() {
   return NextResponse.json({
-    current_state: 'no_non_essential_cookies_active',
-    note: 'BlinkGo does not currently use non-essential cookies or tracking scripts. Consent endpoint is wired but no opt-in is required at this time.',
+    current_state: 'opt_in_required_for_non_essential_categories',
+    consent_version: CONSENT_VERSION,
+    default_categories: { strictly_necessary: true, preferences: false, analytics: false, marketing: false },
   });
 }

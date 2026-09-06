@@ -216,7 +216,7 @@ async function waitForAuthUser(supabase, email, attempts = 8) {
 // Step 1 — Schema (verified at script compile time, not from DB)
 // ════════════════════════════════════════════════════════════════════════════════
 
-function useSchema() {
+function loadVerifiedSchema() {
   STEP(1, 'Schema (verified production — hardcoded)');
   INFO(`public.users       : ${SCHEMA.users.size} columns`);
   INFO(`public.drivers     : ${SCHEMA.drivers.size} columns`);
@@ -232,7 +232,7 @@ async function ensureAuthUser(supabase, op) {
   console.log(`\n   → ${op.email}  (id: ${op.id})`);
 
   // First, see if it already exists
-  let existing = await waitForAuthUser(supabase, op.email, 2);
+  const existing = await waitForAuthUser(supabase, op.email, 2);
 
   if (existing) {
     INFO(`auth user exists (id: ${existing.id})`);
@@ -244,7 +244,8 @@ async function ensureAuthUser(supabase, op) {
     const { error } = await supabase.auth.admin.updateUserById(canonicalId, {
       password: op.password,
       email_confirm: true,
-      user_metadata: { name: op.name, role: op.role },
+      app_metadata: { app_role: op.role },
+      user_metadata: { name: op.name },
     });
     if (error) {
       FAIL(`updateUserById failed: ${error.message}`);
@@ -261,7 +262,8 @@ async function ensureAuthUser(supabase, op) {
       email: op.email,
       password: op.password,
       email_confirm: true,
-      user_metadata: { name: op.name, role: op.role },
+      app_metadata: { app_role: op.role },
+      user_metadata: { name: op.name },
     });
     if (error) throw error;
     OK(`auth user created (id: ${data.user.id})`);
@@ -276,7 +278,8 @@ async function ensureAuthUser(supabase, op) {
       const { error: updateErr } = await supabase.auth.admin.updateUserById(recovered.id, {
         password: op.password,
         email_confirm: true,
-        user_metadata: { name: op.name, role: op.role },
+        app_metadata: { app_role: op.role },
+        user_metadata: { name: op.name },
       });
       if (updateErr) {
         FAIL(`recovery update failed: ${updateErr.message}`);
@@ -467,7 +470,7 @@ async function main() {
   });
 
   // Step 1 — schema (verified, hardcoded — no DB query)
-  const schema = useSchema();
+  const schema = loadVerifiedSchema();
 
   // Step 2 — auth.users
   STEP(2, 'auth.users via Admin API');

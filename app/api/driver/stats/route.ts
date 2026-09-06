@@ -1,25 +1,22 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
-import { ok, withErrorHandling } from '@/lib/api/response';
+import { fail, ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { requireApiRole } from '@/lib/auth-helper';
-import { AuthenticationError, AuthorizationError } from '@/lib/errors';
-import { safeErrorMessage } from '@/lib/api/safe-error';
+import { AuthenticationError } from '@/lib/errors';
+import { computeEarnings, type EarningsInput } from '@/lib/services/driver-earnings';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
-  return (await withSecurity(
-    secureRoute('lenient', ['driver', 'admin', 'super_admin', 'manager']),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async () => driverStats() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+interface DeliveredOrder extends EarningsInput {
+  id: string;
+  total: number | string | null;
+  delivered_at: string | null;
+  created_at: string;
 }
 
-async function driverStats(): Promise<NextResponse> {
+async function driverStats() {
   return withErrorHandling(async () => {
     const user = await requireApiRole(['driver', 'admin', 'super_admin', 'manager']);
     if (!user) throw new AuthenticationError();
@@ -34,21 +31,28 @@ async function driverStats(): Promise<NextResponse> {
 
     const { data: todaysOrders, error } = await supa
       .from('orders')
-      .select('id, total, delivery_fee, tip, delivered_at, created_at')
+      .select('id, total, delivery_fee, tip, delivered_at, created_at, restaurant_latitude, restaurant_longitude, customer_latitude, customer_longitude')
       .eq('driver_id', driverId)
       .eq('status', 'delivered')
       .gte('delivered_at', startISO)
       .order('delivered_at', { ascending: false });
 
     if (error) {
-      return fail(error as any);
+      return fail(error);
     }
 
-    const todayCount = todaysOrders?.length || 0;
-    const todayEarnings = (todaysOrders || []).reduce(
-      (s, o: any) => s + Number(o.delivery_fee || 0) + Number(o.tip || 0),
-      0
+    const deliveredOrders = (todaysOrders ?? []) as DeliveredOrder[];
+    const todayCount = deliveredOrders.length;
+    const todayEarnings = deliveredOrders.reduce(
+      (sum, order) => sum + computeEarnings(order).total,
+      0,
     );
+    const todayTotalRevenue = deliveredOrders.reduce(
+      (sum, order) => sum + Number(order.total ?? 0),
+      0,
+    );
+    const roundedEarnings = Math.round(todayEarnings * 100) / 100;
+    const roundedRevenue = Math.round(todayTotalRevenue * 100) / 100;
 
     const { count: totalCount } = await supa
       .from('orders')
@@ -58,12 +62,17 @@ async function driverStats(): Promise<NextResponse> {
 
     return ok({
       today_count: todayCount,
-      today_earnings: Math.round(todayEarnings * 100) / 100,
-      today_total_revenue: Math.round((todaysOrders || []).reduce((s, o: any) => s + Number(o.total || 0), 0) * 100) / 100,
+      today_earnings: roundedEarnings,
+      today_total_revenue: roundedRevenue,
       total_deliveries: totalCount || 0,
+      // Current clients use camelCase; retain snake_case above for legacy callers.
+      todayDeliveries: todayCount,
+      todayEarnings: roundedEarnings,
     });
   });
 }
 
-// Re-export fail for error handling
-import { fail } from '@/lib/api/response';
+export const GET = withSecurity(
+  secureRoute('lenient', ['driver', 'admin', 'super_admin', 'manager']),
+  async () => driverStats(),
+);

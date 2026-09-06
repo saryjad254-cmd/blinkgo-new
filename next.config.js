@@ -1,25 +1,13 @@
 /** @type {import('next').NextConfig} */
-const path = require('path');
-
 const nextConfig = {
+  // Allow the isolated acceptance harness to run beside the staging dev
+  // server without sharing Next.js locks or build artifacts.
+  distDir: process.env.NEXT_DIST_DIR || '.next',
+  agentRules: false,
   reactStrictMode: true,
   poweredByHeader: false,
   compress: true,
   productionBrowserSourceMaps: false,
-
-  // Explicit webpack aliases as a safety net.
-  // tsconfig.json already maps "@/*" to "./*", but on Vercel some
-  // webpack configurations need this spelled out explicitly. This
-  // guarantees that all imports like `@/lib/cart-store` resolve
-  // regardless of the build environment.
-  webpack: (config) => {
-    config.resolve = config.resolve || {};
-    config.resolve.alias = {
-      ...(config.resolve.alias || {}),
-      '@': path.resolve(__dirname),
-    };
-    return config;
-  },
 
   // Image optimization — WebP/AVIF, lazy, responsive
   images: {
@@ -60,23 +48,23 @@ const nextConfig = {
   // and components/auth/LoginForm.tsx. They are independent of these
   // redirects and remain intact.
 
+  // Domain canonicalization stays at Cloudflare/Vercel. This redirect is
+  // intentionally path-only: handling the legacy menu URL before rendering
+  // avoids a client navigation race and keeps one governed product flow.
+  async redirects() {
+    return [
+      {
+        source: '/restaurant/menu/new',
+        destination: '/restaurant/menu/requests/new',
+        permanent: true,
+      },
+    ];
+  },
+
   // Caching strategy
   async headers() {
     return [
       // Long cache for static assets
-      {
-        source: '/_next/static/:path*',
-        headers: [
-          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
-        ],
-      },
-      // Cache images
-      {
-        source: '/_next/image:path*',
-        headers: [
-          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
-        ],
-      },
       // Service worker
       {
         source: '/sw.js',
@@ -86,12 +74,6 @@ const nextConfig = {
         ],
       },
       // HTML — short cache (5s) for fast updates
-      {
-        source: '/:path*',
-        headers: [
-          { key: 'Cache-Control', value: 'public, max-age=0, s-maxage=5, stale-while-revalidate=300' },
-        ],
-      },
     ];
   },
 

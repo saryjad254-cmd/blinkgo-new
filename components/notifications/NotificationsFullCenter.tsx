@@ -2,11 +2,9 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import Bell from 'lucide-react/dist/esm/icons/bell';
-import Check from 'lucide-react/dist/esm/icons/check';
-import X from 'lucide-react/dist/esm/icons/x';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
-import Inbox from 'lucide-react/dist/esm/icons/inbox';
 import Package from 'lucide-react/dist/esm/icons/package';
 import Truck from 'lucide-react/dist/esm/icons/truck';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
@@ -18,20 +16,22 @@ import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import CheckCheck from 'lucide-react/dist/esm/icons/check-check';
 import { createBrowserClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/cn';
+import type { RealtimeChannel, RealtimePostgresInsertPayload } from '@supabase/supabase-js';
 
 export interface Notification {
   id: string;
   user_id: string;
   title: string;
   body: string;
-  type: 'order' | 'driver' | 'restaurant' | 'promo' | 'info' | 'success' | 'warning' | 'coupon' | 'system';
-  data: any;
+  type: 'order' | 'driver' | 'restaurant' | 'promo' | 'info' | 'success' | 'warning' | 'coupon' | 'system' | 'new_order_assigned';
+  data: Record<string, unknown> | null;
   read_at: string | null;
   created_at: string;
 }
 
 interface NotificationsFullCenterProps {
   locale: 'de' | 'ar' | 'en';
+  scope: 'customer' | 'driver' | 'restaurant';
 }
 
 const COPY: Record<'de' | 'ar' | 'en', {
@@ -45,6 +45,8 @@ const COPY: Record<'de' | 'ar' | 'en', {
   empty: string;
   emptyDesc: string;
   refresh: string;
+  loadError: string;
+  updateError: string;
 }> = {
   de: {
     filterAll: 'Alle',
@@ -57,6 +59,8 @@ const COPY: Record<'de' | 'ar' | 'en', {
     empty: 'Keine Benachrichtigungen',
     emptyDesc: 'Sobald etwas passiert — Bestellungen, Aktionen, Updates — siehst du es hier.',
     refresh: 'Aktualisieren',
+    loadError: 'Benachrichtigungen konnten nicht geladen werden.',
+    updateError: 'Die Änderung konnte nicht gespeichert werden.',
   },
   ar: {
     filterAll: 'الكل',
@@ -69,6 +73,8 @@ const COPY: Record<'de' | 'ar' | 'en', {
     empty: 'لا توجد إشعارات',
     emptyDesc: 'بمجرد حدوث أي شيء — طلبات أو عروض أو تحديثات — ستراها هنا.',
     refresh: 'تحديث',
+    loadError: 'تعذّر تحميل الإشعارات.',
+    updateError: 'تعذّر حفظ التغيير.',
   },
   en: {
     filterAll: 'All',
@@ -81,6 +87,8 @@ const COPY: Record<'de' | 'ar' | 'en', {
     empty: 'No notifications',
     emptyDesc: 'Once something happens — orders, offers, updates — you will see it here.',
     refresh: 'Refresh',
+    loadError: 'Notifications could not be loaded.',
+    updateError: 'The change could not be saved.',
   },
 };
 
@@ -119,22 +127,67 @@ function timeAgo(iso: string, locale: 'de' | 'ar' | 'en'): string {
   return d.toLocaleDateString(locale === 'ar' ? 'ar' : locale === 'de' ? 'de-DE' : 'en-US', { day: '2-digit', month: 'short' });
 }
 
-function notificationLink(n: Notification): string | null {
-  if (n.data?.order_id) return `/orders/${n.data.order_id}`;
-  if (n.data?.restaurant_id) return `/restaurants/${n.data.restaurant_id}`;
-  if (n.data?.coupon_id) return '/profile?tab=coupons';
-  if (n.data?.url) return n.data.url;
+function notificationLink(n: Notification, scope: NotificationsFullCenterProps['scope']): string | null {
+  const orderId = typeof n.data?.order_id === 'string' ? n.data.order_id : null;
+  const restaurantId = typeof n.data?.restaurant_id === 'string' ? n.data.restaurant_id : null;
+  const couponId = typeof n.data?.coupon_id === 'string' ? n.data.coupon_id : null;
+  if (orderId) return scope === 'restaurant' ? `/restaurant/orders/${orderId}` : scope === 'driver' ? `/driver/orders/${orderId}` : `/orders/${orderId}`;
+  if (restaurantId) return `/restaurants/${restaurantId}`;
+  if (couponId) return '/profile?tab=coupons';
+  if (typeof n.data?.url === 'string' && n.data.url.startsWith('/') && !n.data.url.startsWith('//')) return n.data.url;
   return null;
 }
 
-export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps) {
+function localizedNotification(n: Notification, locale: NotificationsFullCenterProps['locale']): { title: string; body: string } {
+  const subtype = typeof n.data?.subtype === 'string' ? n.data.subtype : '';
+  const source = `${n.title} ${n.body}`;
+  const orderNumber = source.match(/#([A-Z0-9-]+)/i)?.[1];
+  const suffix = orderNumber ? ` #${orderNumber}` : '';
+  const copy = {
+    de: {
+      assigned: { title: 'Neue Bestellung', body: `Eine neue Lieferung wurde dir zugewiesen${suffix}.` },
+      ready: { title: 'Bestellung abholbereit', body: 'Die Bestellung kann jetzt im Restaurant abgeholt werden.' },
+      pickedUp: { title: 'Bestellung abgeholt', body: 'Die Lieferung ist jetzt auf dem Weg zum Kunden.' },
+      nearby: { title: 'Auf dem Weg zum Kunden', body: 'Folge der Navigation bis zur Lieferadresse.' },
+      delivered: { title: 'Lieferung abgeschlossen', body: 'Die Bestellung wurde erfolgreich zugestellt.' },
+      cancelled: { title: 'Bestellung storniert', body: 'Diese Bestellung wurde storniert. Öffne sie für weitere Details.' },
+    },
+    ar: {
+      assigned: { title: 'طلب توصيل جديد', body: `تم تعيين طلب توصيل جديد لك${suffix}.` },
+      ready: { title: 'الطلب جاهز للاستلام', body: 'أصبح بإمكانك استلام الطلب من المطعم الآن.' },
+      pickedUp: { title: 'تم استلام الطلب', body: 'الطلب الآن في طريقه إلى الزبون.' },
+      nearby: { title: 'في الطريق إلى الزبون', body: 'اتبع الملاحة حتى عنوان التسليم.' },
+      delivered: { title: 'اكتمل التوصيل', body: 'تم تسليم الطلب بنجاح.' },
+      cancelled: { title: 'تم إلغاء الطلب', body: 'أُلغي هذا الطلب. افتحه للاطلاع على التفاصيل.' },
+    },
+    en: {
+      assigned: { title: 'New delivery assigned', body: `A new delivery has been assigned to you${suffix}.` },
+      ready: { title: 'Order ready for pickup', body: 'The order is ready to collect from the restaurant.' },
+      pickedUp: { title: 'Order picked up', body: 'The delivery is now on its way to the customer.' },
+      nearby: { title: 'Heading to the customer', body: 'Follow navigation to the delivery address.' },
+      delivered: { title: 'Delivery complete', body: 'The order was delivered successfully.' },
+      cancelled: { title: 'Order cancelled', body: 'This order was cancelled. Open it for more details.' },
+    },
+  }[locale];
+
+  if (subtype === 'new_order_assigned' || n.type === 'new_order_assigned') return copy.assigned;
+  if (subtype === 'picked_up') return copy.pickedUp;
+  if (subtype === 'nearby') return copy.nearby;
+  if (subtype === 'delivered') return copy.delivered;
+  if (subtype === 'order_cancelled') return copy.cancelled;
+  if (subtype === 'order_accepted' && /ready|abhol|جاهز/i.test(source)) return copy.ready;
+  return { title: n.title, body: n.body };
+}
+
+export function NotificationsFullCenter({ locale, scope }: NotificationsFullCenterProps) {
+  const router = useRouter();
   const t = COPY[locale];
   const dir = locale === 'ar' ? 'rtl' : 'ltr';
   const [items, setItems] = useState<Notification[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'unread' | 'order' | 'promo' | 'system'>('all');
   const [busy, setBusy] = useState<string | 'all' | null>(null);
-  const [realtimeChannel, setRealtimeChannel] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const supabase = useMemo(() => {
     try {
@@ -145,39 +198,31 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
   }, []);
 
   const fetchNotifications = useCallback(async () => {
-    if (!supabase) { setLoading(false); return; }
+    setLoading(true);
+    setError(null);
     try {
-      const { data, error } = await supabase
-        .from('notifications')
-        .select('*')
-        .order('created_at', { ascending: false })
-        .limit(50);
-      if (error) {
-        // Graceful: if table missing, show empty state
-        if (error.code === 'PGRST205' || error.code === '42P01') {
-          setItems([]);
-        } else {
-          console.warn('[notifications] fetch error:', error.message);
-        }
-      } else {
-        setItems((data || []) as Notification[]);
-      }
-    } catch (e) {
-      console.warn('[notifications] fetch threw:', e);
+      const response = await fetch('/api/notifications', { cache: 'no-store' });
+      if (!response.ok) throw new Error('notification request failed');
+      const payload = await response.json();
+      setItems((payload?.data?.notifications ?? payload?.notifications ?? []) as Notification[]);
+    } catch {
+      setError(t.loadError);
     } finally {
       setLoading(false);
     }
-  }, [supabase]);
+  }, [t.loadError]);
 
   useEffect(() => {
-    fetchNotifications();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void fetchNotifications(); });
+    return () => { cancelled = true; };
   }, [fetchNotifications]);
 
   // Realtime subscription for new notifications
   useEffect(() => {
     if (!supabase) return;
     let mounted = true;
-    let channel: any = null;
+    let channel: RealtimeChannel | null = null;
     (async () => {
       try {
         // We need the user id first; get it from auth
@@ -188,15 +233,14 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
           .on(
             'postgres_changes',
             { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
-            (payload: any) => {
+            (payload: RealtimePostgresInsertPayload<Notification>) => {
               if (payload?.new) {
                 setItems((prev) => [payload.new as Notification, ...prev]);
               }
             }
           )
           .subscribe();
-        setRealtimeChannel(channel);
-      } catch (e) {
+      } catch {
         // realtime may not be enabled; that's fine
       }
     })();
@@ -207,38 +251,45 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
   }, [supabase]);
 
   const markAsRead = useCallback(async (id: string) => {
-    if (!supabase) return;
     setBusy(id);
-    // Optimistic update
+    setError(null);
+    const previous = items;
     setItems((prev) => prev.map((n) => n.id === id ? { ...n, read_at: new Date().toISOString() } : n));
     try {
-      await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id);
-    } catch (e) {
-      console.warn('[notifications] markAsRead failed:', e);
+      const response = await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      if (!response.ok) throw new Error('notification update failed');
+    } catch {
+      setItems(previous);
+      setError(t.updateError);
     } finally {
       setBusy(null);
     }
-  }, [supabase]);
+  }, [items, t.updateError]);
 
   const markAllAsRead = useCallback(async () => {
-    if (!supabase) return;
     setBusy('all');
+    setError(null);
+    const previous = items;
     const now = new Date().toISOString();
     setItems((prev) => prev.map((n) => n.read_at ? n : { ...n, read_at: now }));
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-      await supabase
-        .from('notifications')
-        .update({ read_at: now })
-        .eq('user_id', user.id)
-        .is('read_at', null);
-    } catch (e) {
-      console.warn('[notifications] markAllAsRead failed:', e);
+      const response = await fetch('/api/notifications', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mark_all_read: true }),
+      });
+      if (!response.ok) throw new Error('notifications update failed');
+    } catch {
+      setItems(previous);
+      setError(t.updateError);
     } finally {
       setBusy(null);
     }
-  }, [supabase]);
+  }, [items, t.updateError]);
 
   // Filter
   const filtered = items.filter((n) => {
@@ -261,7 +312,7 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
   ];
 
   return (
-    <div dir={dir} className="space-y-4">
+    <div data-testid="notifications-list-center" dir={dir} className="space-y-4">
       {/* Header bar */}
       <div className="card-glass p-3 sm:p-4 flex items-center gap-2 sm:gap-3">
         <div className="flex-1 min-w-0">
@@ -271,8 +322,9 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
                 key={tab.key}
                 type="button"
                 onClick={() => setFilter(tab.key)}
+                aria-pressed={filter === tab.key}
                 className={cn(
-                  'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap transition-all flex-shrink-0',
+                  'inline-flex min-h-11 items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand',
                   filter === tab.key
                     ? 'bg-gradient-to-r from-brand-red-500/15 to-brand-yellow-500/10 text-brand border border-brand-red-500/30'
                     : 'bg-bg-elevated/40 text-text-secondary hover:text-text border border-edge hover:border-edge-strong'
@@ -302,7 +354,7 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
             type="button"
             onClick={markAllAsRead}
             disabled={busy === 'all'}
-            className="inline-flex items-center gap-1.5 px-3 h-9 rounded-xl bg-bg-elevated/60 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-xs font-bold text-text-secondary hover:text-text transition-all disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 px-3 h-11 rounded-xl bg-bg-elevated/60 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-xs font-bold text-text-secondary hover:text-text transition-all disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand"
           >
             {busy === 'all' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCheck className="w-3.5 h-3.5" />}
             {t.markAll}
@@ -312,13 +364,22 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
           type="button"
           onClick={fetchNotifications}
           disabled={loading}
-          className="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-bg-elevated/60 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-text-secondary hover:text-text transition-all disabled:opacity-50"
+          className="inline-flex items-center justify-center w-11 h-11 rounded-xl bg-bg-elevated/60 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-text-secondary hover:text-text transition-all disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand"
           title={t.refresh}
           aria-label={t.refresh}
         >
           <RefreshCw className={cn('w-4 h-4', loading && 'animate-spin')} />
         </button>
       </div>
+
+      {error && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-danger/25 bg-danger/5 p-3 text-sm text-danger" role="alert">
+          <span>{error}</span>
+          <button type="button" onClick={() => void fetchNotifications()} className="min-h-11 shrink-0 rounded-xl border border-danger/30 px-3 font-bold focus:outline-none focus-visible:ring-2 focus-visible:ring-danger">
+            {t.refresh}
+          </button>
+        </div>
+      )}
 
       {/* Content */}
       {loading ? (
@@ -341,22 +402,14 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
         <div className="space-y-2">
           {filtered.map((n) => {
             const Icon = notificationIcon(n.type);
-            const href = notificationLink(n);
-            const Wrapper: any = href ? Link : 'div';
-            const wrapperProps: any = href ? { href } : {};
-            return (
-              <Wrapper
-                key={n.id}
-                {...wrapperProps}
-                className={cn(
-                  'group relative card-glass p-4 flex items-start gap-3 transition-all duration-200 ease-silk',
-                  href && 'hover:border-edge-strong hover:-translate-y-0.5 cursor-pointer',
-                  !n.read_at && 'border-l-2 border-l-brand-red-500'
-                )}
-                onClick={() => {
-                  if (!n.read_at) markAsRead(n.id);
-                }}
-              >
+            const href = notificationLink(n, scope);
+            const localized = localizedNotification(n, locale);
+            const className = cn(
+              'group relative card-glass w-full p-4 flex items-start gap-3 text-start transition-all duration-200 ease-silk [content-visibility:auto] [contain-intrinsic-size:96px]',
+              'hover:border-edge-strong hover:-translate-y-0.5 cursor-pointer',
+              !n.read_at && 'border-l-2 border-l-brand-red-500'
+            );
+            const content = <>
                 {/* Unread dot */}
                 {!n.read_at && (
                   <div className="absolute top-3 end-3 w-2 h-2 rounded-full bg-brand-red-500 shadow-[0_0_8px_rgba(220,38,38,0.6)]" />
@@ -377,14 +430,41 @@ export function NotificationsFullCenter({ locale }: NotificationsFullCenterProps
                 {/* Body */}
                 <div className="flex-1 min-w-0 pe-4">
                   <p className={cn('text-sm leading-snug mb-0.5 line-clamp-1', !n.read_at ? 'font-extrabold text-text' : 'font-bold text-text-secondary')}>
-                    {n.title}
+                    {localized.title}
                   </p>
-                  <p className="text-xs text-text-secondary line-clamp-2 leading-relaxed">{n.body}</p>
+                  <p className="text-xs text-text-secondary line-clamp-2 leading-relaxed">{localized.body}</p>
                   <p className="text-[10px] text-text-muted mt-1.5 font-bold uppercase tracking-wider">
                     {timeAgo(n.created_at, locale)}
                   </p>
                 </div>
-              </Wrapper>
+              </>;
+            if (href) {
+              return (
+                <Link
+                  key={n.id}
+                  href={href}
+                  className={className}
+                  aria-busy={busy === n.id}
+                  onClick={async (event) => {
+                    event.preventDefault();
+                    if (!n.read_at) await markAsRead(n.id);
+                    router.push(href);
+                  }}
+                >
+                  {content}
+                </Link>
+              );
+            }
+            return (
+              <button
+                key={n.id}
+                type="button"
+                className={className}
+                aria-busy={busy === n.id}
+                onClick={() => { if (!n.read_at) void markAsRead(n.id); }}
+              >
+                {content}
+              </button>
             );
           })}
         </div>

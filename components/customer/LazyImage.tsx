@@ -37,8 +37,9 @@ function LazyImageInner({
     if (!el) return;
 
     if (typeof IntersectionObserver === 'undefined') {
-      setIsVisible(true);
-      return;
+      let cancelled = false;
+      queueMicrotask(() => { if (!cancelled) setIsVisible(true); });
+      return () => { cancelled = true; };
     }
 
     const observer = new IntersectionObserver(

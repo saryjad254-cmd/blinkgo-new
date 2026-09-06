@@ -8,6 +8,8 @@ import Megaphone from 'lucide-react/dist/esm/icons/megaphone';
 import Calendar from 'lucide-react/dist/esm/icons/calendar';
 import { AdminLayout, type AdminUser } from './AdminLayout';
 import type { Locale } from '@/lib/i18n/server-translations';
+import { useToast } from '@/components/ui/Toast';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 interface Promotion {
   id: string;
@@ -20,6 +22,12 @@ interface Promotion {
   ends_at: string;
   is_active: boolean;
   current_uses: number;
+}
+
+function promotionWindow(days: number): { startsAt: string; endsAt: string } {
+  const startsAt = new Date();
+  const endsAt = new Date(startsAt.getTime() + days * 24 * 60 * 60 * 1000);
+  return { startsAt: startsAt.toISOString(), endsAt: endsAt.toISOString() };
 }
 
 export function AdminPromotionsClient({
@@ -45,30 +53,54 @@ export function AdminPromotionsClient({
     restaurant_id: '',
     days: 7,
   });
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const toast = useToast();
+  const copy = isAr
+    ? { title: 'عنوان العرض', description: 'الوصف', percentage: 'نسبة مئوية', fixed: 'مبلغ ثابت', value: 'قيمة الخصم', days: 'عدد الأيام', empty: 'لا توجد عروض حاليًا', createFailed: 'تعذر إنشاء العرض', deleteFailed: 'تعذر حذف العرض', created: 'تم إنشاء العرض', deleted: 'تم حذف العرض', confirmDelete: 'هل تريد حذف هذا العرض؟', deleteLabel: 'حذف العرض' }
+    : locale === 'en'
+      ? { title: 'Promotion title', description: 'Description', percentage: 'Percentage', fixed: 'Fixed amount', value: 'Discount value', days: 'Days valid', empty: 'No promotions available', createFailed: 'Could not create promotion', deleteFailed: 'Could not delete promotion', created: 'Promotion created', deleted: 'Promotion deleted', confirmDelete: 'Delete this promotion?', deleteLabel: 'Delete promotion' }
+      : { title: 'Titel der Aktion', description: 'Beschreibung', percentage: 'Prozent', fixed: 'Fester Betrag', value: 'Rabattwert', days: 'Gültigkeit in Tagen', empty: 'Keine Aktionen vorhanden', createFailed: 'Aktion konnte nicht erstellt werden', deleteFailed: 'Aktion konnte nicht gelöscht werden', created: 'Aktion erstellt', deleted: 'Aktion gelöscht', confirmDelete: 'Diese Aktion löschen?', deleteLabel: 'Aktion löschen' };
 
   const create = async () => {
-    const res = await fetch('/api/admin/promotions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        ...form,
-        restaurant_id: form.restaurant_id || null,
-        starts_at: new Date().toISOString(),
-        ends_at: new Date(Date.now() + form.days * 24 * 60 * 60 * 1000).toISOString(),
-      }),
-    });
-    const data = await res.json();
-    if (data.ok) {
-      setPromos([data.data.promotion, ...promos]);
+    setSaving(true);
+    try {
+      const window = promotionWindow(form.days);
+      const res = await fetch('/api/admin/promotions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...form, restaurant_id: form.restaurant_id || null, starts_at: window.startsAt, ends_at: window.endsAt }),
+      });
+      const data: unknown = await res.json().catch(() => null);
+      const createdPromotion = data && typeof data === 'object' && 'data' in data && data.data && typeof data.data === 'object' && 'promotion' in data.data
+        ? (data.data as { promotion: Promotion }).promotion
+        : null;
+      if (!res.ok || !createdPromotion) return toast.error(extractErrorMessage(data, copy.createFailed));
+      setPromos((current) => [createdPromotion, ...current]);
       setShowForm(false);
       setForm({ title: '', description: '', discount_type: 'percentage', discount_value: 20, restaurant_id: '', days: 7 });
+      toast.success(copy.created);
+    } catch (error) {
+      toast.error(extractErrorMessage(error, copy.createFailed));
+    } finally {
+      setSaving(false);
     }
   };
 
   const remove = async (id: string) => {
-    if (!confirm('Delete this promotion?')) return;
-    await fetch(`/api/admin/promotions?id=${id}`, { method: 'DELETE' });
-    setPromos(promos.filter((p) => p.id !== id));
+    if (!confirm(copy.confirmDelete)) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch(`/api/admin/promotions?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const data: unknown = await res.json().catch(() => null);
+      if (!res.ok) return toast.error(extractErrorMessage(data, copy.deleteFailed));
+      setPromos((current) => current.filter((promotion) => promotion.id !== id));
+      toast.success(copy.deleted);
+    } catch (error) {
+      toast.error(extractErrorMessage(error, copy.deleteFailed));
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   return (
@@ -94,13 +126,13 @@ export function AdminPromotionsClient({
             <input
               value={form.title}
               onChange={(e) => setForm({ ...form, title: e.target.value })}
-              placeholder="Title"
+              placeholder={copy.title}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             />
             <input
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
-              placeholder="Description"
+              placeholder={copy.description}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             />
             <select
@@ -108,14 +140,14 @@ export function AdminPromotionsClient({
               onChange={(e) => setForm({ ...form, discount_type: e.target.value })}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             >
-              <option value="percentage">Percentage</option>
-              <option value="fixed">Fixed</option>
+              <option value="percentage">{copy.percentage}</option>
+              <option value="fixed">{copy.fixed}</option>
             </select>
             <input
               type="number"
               value={form.discount_value}
               onChange={(e) => setForm({ ...form, discount_value: Number(e.target.value) })}
-              placeholder="Discount value"
+              placeholder={copy.value}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             />
             <select
@@ -132,12 +164,12 @@ export function AdminPromotionsClient({
               type="number"
               value={form.days}
               onChange={(e) => setForm({ ...form, days: Number(e.target.value) })}
-              placeholder="Days"
+              placeholder={copy.days}
               className="rounded-xl border border-zinc-300 bg-white px-4 py-2.5 dark:border-zinc-700 dark:bg-zinc-800"
             />
           </div>
           <div className="mt-4 flex gap-2">
-            <button onClick={create} disabled={!form.title} className="rounded-xl bg-racing-red px-5 py-2.5 text-sm font-semibold text-white">
+            <button onClick={() => void create()} disabled={saving || !form.title.trim() || form.days < 1 || form.discount_value <= 0} className="rounded-xl bg-racing-red px-5 py-2.5 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">
               {t.common.save}
             </button>
             <button onClick={() => setShowForm(false)} className="rounded-xl border border-zinc-300 px-5 py-2.5 text-sm font-semibold dark:border-zinc-700">
@@ -151,7 +183,7 @@ export function AdminPromotionsClient({
         {promos.length === 0 ? (
           <div className="col-span-full rounded-2xl border border-zinc-200 bg-white p-8 text-center text-zinc-500 dark:border-zinc-800 dark:bg-zinc-900">
             <Megaphone className="mx-auto h-12 w-12 opacity-30" />
-            <div className="mt-3">{t.common.search}: 0 results</div>
+            <div className="mt-3">{copy.empty}</div>
           </div>
         ) : (
           promos.map((p) => (
@@ -174,7 +206,7 @@ export function AdminPromotionsClient({
               </div>
               <div className="mt-3 flex items-center justify-between">
                 <span className="text-xs text-zinc-500">{p.current_uses} {t.admin.usageCount.toLowerCase()}</span>
-                <button onClick={() => remove(p.id)} className="rounded-full p-2 text-rose-600 hover:bg-rose-50">
+                <button disabled={deletingId === p.id} onClick={() => void remove(p.id)} aria-label={copy.deleteLabel} className="rounded-full p-2 text-rose-600 hover:bg-rose-50 disabled:cursor-wait disabled:opacity-50">
                   <Trash2 className="h-4 w-4" />
                 </button>
               </div>

@@ -9,14 +9,15 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
+import type { ApiResponse } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { assertCanReadOrder } from '@/lib/api/ownership';
-import { AuthenticationError, ValidationError, NotFoundError } from '@/lib/errors';
-import { logger } from '@/lib/logging/logger';
+import { ValidationError, NotFoundError } from '@/lib/errors';
 import { haversineDistance, type LatLng } from '@/lib/delivery-zone';
+import { validateLocation } from '@/lib/driver/dispatch-policy';
+import type { AuthedUser } from '@/lib/auth-helper';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,32 +26,28 @@ const ARRIVAL_THRESHOLD_M = 50; // Within 50m = "arrived"
 const PICKUP_THRESHOLD_M = 75;  // Slightly larger for restaurant pickup
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  return (await withSecurity(
+  return await withSecurity(
     secureRoute('moderate', ['driver', 'admin', 'super_admin', 'manager']),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (_ctx, r) => geofence(r as NextRequest) as any,
-  )(req)) as unknown as NextResponse;
+    async (ctx, request) => await geofence(ctx.auth.user, request) as NextResponse<ApiResponse<unknown>>,
+  )(req) as NextResponse;
 }
 
-async function geofence(req: NextRequest): Promise<NextResponse> {
+async function geofence(user: Pick<AuthedUser, 'id' | 'role'>, req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabaseAuth = createServerClient();
-    const { data: { user } } = await supabaseAuth.auth.getUser();
-    if (!user) throw new AuthenticationError();
-
-    const body = await req.json().catch(() => ({}));
+    const rawBody: unknown = await req.json().catch(() => null);
+    const body = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as Record<string, unknown>
+      : {};
     const orderId = String(body.order_id ?? '');
-    const lat = Number(body.lat);
-    const lng = Number(body.lng);
-
-    if (!orderId || !isFinite(lat) || !isFinite(lng)) {
+    const location = validateLocation(body.lat, body.lng);
+    if (!orderId || !location.ok) {
       throw new ValidationError('order_id, lat, lng required');
     }
 
     // Ownership check (throws 404 if not found, 403 if not allowed)
-    await assertCanReadOrder({ id: user.id, role: user.role as any }, orderId);
+    await assertCanReadOrder(user, orderId);
 
-    const driverPos: LatLng = { lat, lng };
+    const driverPos: LatLng = { lat: location.lat, lng: location.lng };
     const svc = createServiceClient();
 
     // Get order
@@ -91,15 +88,15 @@ async function geofence(req: NextRequest): Promise<NextResponse> {
     let suggestedAction: string | null = null;
     if (atPickup && (order.status === 'confirmed' || order.status === 'preparing' || order.status === 'ready')) {
       suggestedAction = 'pickup';
-    } else if (atDropoff && (order.status === 'picked_up' || order.status === 'on_the_way')) {
+    } else if (atDropoff && (order.status === 'picked_up' || order.status === 'on_the_way' || order.status === 'delivering')) {
       suggestedAction = 'deliver';
     }
 
     return ok({
       at_pickup: atPickup,
       at_dropoff: atDropoff,
-      distance_to_pickup_m: distanceToPickup ? Math.round(distanceToPickup) : null,
-      distance_to_dropoff_m: distanceToDropoff ? Math.round(distanceToDropoff) : null,
+      distance_to_pickup_m: distanceToPickup != null ? Math.round(distanceToPickup) : null,
+      distance_to_dropoff_m: distanceToDropoff != null ? Math.round(distanceToDropoff) : null,
       suggested_action: suggestedAction,
     });
   });

@@ -32,8 +32,8 @@ export async function GET() {
     const { error } = await supabase.from('users').select('id').limit(1).maybeSingle();
     if (error) throw error;
     checks.database = { status: 'ok', latency_ms: Date.now() - dbStart };
-  } catch (e: any) {
-    checks.database = { status: 'fail', latency_ms: Date.now() - dbStart, error: e?.message };
+  } catch {
+    checks.database = { status: 'fail', latency_ms: Date.now() - dbStart, error: 'database_unavailable' };
   }
 
   // 3) Memory check (process-level)

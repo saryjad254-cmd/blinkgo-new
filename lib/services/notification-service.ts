@@ -12,6 +12,7 @@
 import { createServiceClient } from '@/lib/supabase/service';
 import { AppError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
+import { sendWebPushToUser, sendWebPushToUsers } from './web-push-service';
 
 /**
  * Allowed canonical notification types (semantic constants).
@@ -94,8 +95,10 @@ export class NotificationService {
         if (error) {
           lastErr = error;
           // Don't retry on 4xx (validation, RLS) — those will not recover.
-          const code = (error as any).code ?? '';
-          const status = (error as any).status ?? 0;
+          const candidate = error as { code?: unknown; status?: unknown };
+          const code = typeof candidate.code === 'string' ? candidate.code : '';
+          const parsedStatus = Number(candidate.status);
+          const status = Number.isFinite(parsedStatus) ? parsedStatus : 0;
           if (
             code === '23505' ||            // unique violation
             code === '23503' ||            // FK violation
@@ -125,6 +128,20 @@ export class NotificationService {
           });
         } catch {
           // table may not exist yet; non-fatal
+        }
+        // Web Push is intentionally best-effort: the durable in-app row above
+        // remains the source of truth even when a browser endpoint is offline.
+        // Expired subscriptions are removed by the push service.
+        try {
+          await sendWebPushToUser(input.userId, {
+            title: input.title,
+            body: input.body,
+            data: input.data,
+            notificationId: data.id,
+            requireInteraction: input.type === 'new_order_assigned',
+          });
+        } catch (pushError) {
+          logger.warn('Web push fan-out failed after durable notification insert', { userId: input.userId }, pushError);
         }
         return { id: data.id };
       } catch (innerErr) {
@@ -157,7 +174,14 @@ export class NotificationService {
         const { data } = await svc.from('users').select('id').eq('is_active', true);
         userIds = (data ?? []).map((u) => u.id);
       } else {
-        const { data } = await svc.from('users').select('id').eq('role', input.audience).eq('is_active', true);
+        const roles = input.audience === 'customers'
+          ? ['customer']
+          : input.audience === 'drivers'
+            ? ['driver']
+            : input.audience === 'restaurants'
+              ? ['restaurant']
+              : ['manager', 'admin', 'super_admin'];
+        const { data } = await svc.from('users').select('id').in('role', roles).eq('is_active', true);
         userIds = (data ?? []).map((u) => u.id);
       }
     } else {
@@ -182,6 +206,16 @@ export class NotificationService {
         throw new AppError('Failed to broadcast notification', { statusCode: 500, cause: error });
       }
       inserted += Math.min(100, rows.length - i);
+    }
+    try {
+      await sendWebPushToUsers(userIds, {
+        title: input.title,
+        body: input.body,
+        data: input.data,
+        tag: 'blinkgo-announcement',
+      });
+    } catch (pushError) {
+      logger.warn('Broadcast Web Push fan-out failed after durable insert', { audienceSize: userIds.length }, pushError);
     }
     return { sent: inserted };
   }

@@ -10,18 +10,19 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { audit } from '@/lib/services/audit-log';
-import { NotFoundError, ConflictError } from '@/lib/errors';
+import { NotFoundError, ConflictError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
+import { normalizeDriverReleaseInput } from '@/lib/driver/rejection-reasons';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }): Promise<NextResponse> {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   return (await withSecurity(
     secureRoute('moderate', ['driver', 'admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -37,8 +38,10 @@ async function rejectOrder(
   return withErrorHandling(async () => {
     const user = ctx.auth.user;
 
-    const body = await req.json().catch(() => ({}));
-    const reason = String(body.reason ?? '').slice(0, 200);
+    const body = await req.json().catch(() => null);
+    const release = normalizeDriverReleaseInput(body);
+    if (!release) throw new ValidationError('Choose a valid release reason');
+    const note = `[driver_release:${release.reason}]${release.details ? ` ${release.details}` : ''}`;
 
     const svc = createServiceClient();
     const { data: order } = await svc.from('orders').select('*').eq('id', orderId).maybeSingle();
@@ -54,7 +57,7 @@ async function rejectOrder(
     // food picked up, then "reject" the order — leaving the status
     // stuck at picked_up with no driver and the food somewhere on a
     // sidewalk.
-    const RELEASEABLE_FROM = ['confirmed', 'preparing', 'ready'];
+    const RELEASEABLE_FROM = ['confirmed', 'preparing', 'ready', 'assigned'];
     if (user.role === 'driver' && !RELEASEABLE_FROM.includes(order.status)) {
       throw new ConflictError(
         `Order can no longer be released in status: ${order.status}. ` +
@@ -63,19 +66,45 @@ async function rejectOrder(
       );
     }
     // Release the order: unassign driver, leave status
-    const { error: updateErr } = await svc
+    const { data: releasedOrder, error: updateErr } = await svc
       .from('orders')
       .update({
         driver_id: null,
+        ...(order.status === 'assigned' ? { status: 'ready' } : {}),
         notes: order.notes
-          ? `${order.notes}\n[rejected] ${reason}`.slice(0, 1000)
-          : `[rejected] ${reason}`,
+          ? `${order.notes}\n${note}`.slice(0, 1000)
+          : note,
       })
       .eq('id', orderId)
-      .in('status', RELEASEABLE_FROM); // atomic guard — concurrent status change will reject this update
+      .eq('driver_id', order.driver_id)
+      .in('status', RELEASEABLE_FROM)
+      .select('id')
+      .maybeSingle();
     if (updateErr) {
       logger.error('Driver reject failed', { orderId }, updateErr);
       throw new Error('Failed to reject order');
+    }
+    if (!releasedOrder) {
+      throw new ConflictError('Order changed before it could be released', {
+        code: 'RELEASE_RACE',
+      });
+    }
+
+    const { error: statusError } = await svc
+      .from('driver_status')
+      .update({
+        is_on_delivery: false,
+        current_order_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('driver_id', order.driver_id)
+      .eq('current_order_id', orderId);
+    if (statusError) {
+      logger.warn('Driver status cleanup after release failed', {
+        orderId,
+        driverId: order.driver_id,
+        error: statusError.message,
+      });
     }
     // Log tracking event
     try {
@@ -83,18 +112,26 @@ async function rejectOrder(
         order_id: orderId,
         driver_id: user.id,
         event_type: 'driver_rejected',
-        notes: reason,
+        notes: note,
+        metadata: {
+          reason_code: release.reason,
+          details: release.details || null,
+        },
       });
     } catch {}
-    await audit('DRIVER_ACCEPTED_ORDER', {
+    await audit('DRIVER_RELEASED_ORDER', {
       severity: 'warn',
       userId: user.id,
       userRole: user.role,
       resource: 'order',
       resourceId: orderId,
-      metadata: { action: 'reject', reason },
+      metadata: {
+        action: 'release',
+        reason_code: release.reason,
+        details: release.details || null,
+      },
     });
-    return ok({ rejected: true, orderId });
+    return ok({ rejected: true, orderId, reason: release.reason });
   });
 }
 

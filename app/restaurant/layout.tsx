@@ -14,12 +14,12 @@ export const revalidate = 0;
 export const fetchCache = 'force-no-store';
 
 export default async function RestaurantLayout({ children }: { children: React.ReactNode }) {
-  await requireRole(['restaurant', 'admin', 'super_admin']);
+  const user = await requireRole(['restaurant', 'admin', 'super_admin']);
   return (
     <ToastProvider>
       <div className="min-h-screen bg-bg">
         <AnnouncementBanner audience="restaurant_owner" />
-      <RestaurantNav />
+      <RestaurantNav user={{ email: user.email ?? '', role: user.role }} />
         <main className="pb-20 md:pb-8">{children}</main>
       </div>
     </ToastProvider>

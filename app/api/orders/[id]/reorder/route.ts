@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
 import { withSecurity, HandlerContext } from '@/lib/api/security';
-import { ok, fail } from '@/lib/api/response';
+import { ok, fail, type ApiResponse } from '@/lib/api/response';
 
 export const runtime = 'nodejs';
 export const dynamic = "force-dynamic";
@@ -57,28 +56,25 @@ async function reorderHandler(
 
   return ok({
     order: { id: order.id, restaurant_id: order.restaurant_id },
-    items: items.map((it: any) => ({
-      id: it.id,
-      product_id: it.product_id ?? it.menu_item_id ?? it.id,
-      name: it.name ?? it.product_name ?? 'Item',
-      quantity: it.quantity ?? 1,
-      unit_price: Number(it.unit_price ?? it.price ?? 0),
-      special_instructions: it.special_instructions ?? null,
+    items: items.map((item) => ({
+      id: item.id,
+      product_id: item.product_id ?? item.menu_item_id ?? item.id,
+      name: item.name ?? item.product_name ?? 'Item',
+      quantity: item.quantity ?? 1,
+      unit_price: Number(item.unit_price ?? item.price ?? 0),
+      special_instructions: item.special_instructions ?? null,
     })),
   });
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   const wrapped = withSecurity(
     { roles: ['customer', 'admin', 'super_admin', 'manager'] },
-    // The handler is wrapped in a thin closure that returns a plain
-    // NextResponse; withSecurity's strict signature wants
-    // NextResponse<ApiResponse<T>> but our handler is compatible at
-    // runtime. The `as any` keeps the call site concise.
-    async (ctx: HandlerContext) => reorderHandler(ctx, params.id) as any,
+    async (ctx: HandlerContext) => {
+      const response = await reorderHandler(ctx, params.id);
+      return response as NextResponse<ApiResponse<unknown>>;
+    },
   );
   return (await wrapped(req)) as NextResponse;
 }

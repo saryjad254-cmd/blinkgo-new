@@ -48,7 +48,7 @@
  * ── FIELD LIST ─────────────────────────────────────────────────
  *
  *  The required fields below are derived from:
- *   - § 5 TMG (Telemediengesetz) for Impressum
+ *   - § 5 DDG (Digitale-Dienste-Gesetz) for Impressum
  *   - Art. 13 DSGVO for Datenschutz
  *   - § 14 UStG for VAT identification
  *   - § 22 EStG / § 147 AO for retention
@@ -69,7 +69,7 @@ export interface CompanyInfo {
   proprietorOrDirector: string | null; // Inhaber oder Geschäftsführer (Vor- und Nachname)
   additionalDirectors: string[] | null; // Bei GmbH: alle Geschäftsführer
 
-  // Address (§ 5 TMG)
+  // Address (§ 5 DDG)
   streetAddress: string | null;      // Straße + Hausnummer
   postalCode: string | null;         // Postleitzahl
   city: string | null;               // Ort
@@ -88,7 +88,7 @@ export interface CompanyInfo {
   registerCourt: string | null;      // Registergericht
   registrationNumber: string | null; // Registernummer
 
-  // Authority / Editorial (§ 5 TMG / § 18 MStV)
+  // Authority / Editorial (§ 5 DDG / § 18 MStV)
   supervisoryAuthority: string | null; // Zuständige Aufsichtsbehörde (falls genehmigungspflichtig)
   editorialResponsible: string | null; // Verantwortlich i.S.d. § 18 Abs. 2 MStV
 
@@ -103,7 +103,7 @@ export interface CompanyInfo {
   serviceType: string | null;        // Art der Dienstleistung (z.B. "Vermittlung von Lieferdiensten")
 
   // Dispute resolution
-  euDisputeResolution: string | null; // OS-Plattform-Link + Hinweis
+  euDisputeResolution: string | null; // Legacy field; do not link the discontinued EU ODR platform
   consumerArbitration: string | null; // Bereitschaft zu Verbraucherschlichtung
 
   // Internal
@@ -197,7 +197,7 @@ export function getDisplayCompanyInfo(): CompanyInfo & {
     }
   };
 
-  // Required for Impressum (§ 5 TMG)
+  // Required for Impressum (§ 5 DDG)
   fill('legalName', 'Vollständiger Firmenname — bitte eintragen');
   fill('legalForm', 'Rechtsform — bitte eintragen');
   fill('proprietorOrDirector', 'Inhaber oder Geschäftsführer — bitte eintragen');
@@ -228,7 +228,7 @@ export function getDisplayCompanyInfo(): CompanyInfo & {
 /**
  * Check whether the company is "sufficiently" configured for
  * a non-production / demo launch. Returns true if the bare
- * minimum for Impressum (§ 5 TMG) is set.
+ * minimum for Impressum (§ 5 DDG) is set.
  */
 export function isCompanyConfigured(): boolean {
   const c = COMPANY;
@@ -253,7 +253,7 @@ export function validateForProduction(): { ok: boolean; missing: string[] } {
   const c = COMPANY;
   const missing: string[] = [];
 
-  // Impressum (§ 5 TMG)
+  // Impressum (§ 5 DDG)
   if (!c.legalName) missing.push('COMPANY_LEGAL_NAME');
   if (!c.legalForm) missing.push('COMPANY_LEGAL_FORM');
   if (!c.proprietorOrDirector) missing.push('COMPANY_PROPRIETOR');
@@ -286,6 +286,24 @@ export function validateForProduction(): { ok: boolean; missing: string[] } {
   // Review status
   if (c.legalReviewStatus !== 'APPROVED') {
     missing.push(`LEGAL_REVIEW_STATUS must be APPROVED (currently: ${c.legalReviewStatus})`);
+  }
+
+  // Germany/EU launch evidence. These confirmations must be set only after
+  // the corresponding human review has actually been completed.
+  if (process.env.ACCESSIBILITY_REVIEW_STATUS !== 'APPROVED') {
+    missing.push('ACCESSIBILITY_REVIEW_STATUS must be APPROVED (BFSG/BFSGV)');
+  }
+  if (process.env.COOKIE_CONSENT_AUDIT_STATUS !== 'APPROVED') {
+    missing.push('COOKIE_CONSENT_AUDIT_STATUS must be APPROVED (TDDDG § 25)');
+  }
+  if (process.env.TRADER_VERIFICATION_STATUS !== 'APPROVED') {
+    missing.push('TRADER_VERIFICATION_STATUS must be APPROVED (DSA Art. 30)');
+  }
+  if (process.env.CHECKOUT_LEGAL_REVIEW_STATUS !== 'APPROVED') {
+    missing.push('CHECKOUT_LEGAL_REVIEW_STATUS must be APPROVED (BGB § 312j / PAngV)');
+  }
+  if (process.env.PRIVACY_DPIA_STATUS !== 'APPROVED') {
+    missing.push('PRIVACY_DPIA_STATUS must be APPROVED (DSGVO location-data assessment)');
   }
 
   return { ok: missing.length === 0, missing };

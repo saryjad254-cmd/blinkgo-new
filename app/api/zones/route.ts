@@ -2,41 +2,51 @@
  * Public Delivery Zones API
  * ─────────────────────────
  * GET /api/zones - Get all active delivery zones (for customer check)
+ *
+ * Migrated to apiRoute() — the canonical API entry point.
  */
-import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
-import { ok, withErrorHandling } from '@/lib/api/response';
-import { withSecurity } from '@/lib/api/security';
-import { secureRoute } from '@/lib/api/security-helpers';
-import { logger } from '@/lib/logging/logger';
+import { apiRoute, ok, log, tier } from '@/lib/api/canonical';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest): Promise<NextResponse> {
-  return (await withSecurity(
-    secureRoute('open'),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async () => listZones() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
-}
+type DeliveryZoneRow = {
+  id: string;
+  name: string;
+  description?: string | null;
+  polygon?: unknown;
+  center_lat?: number | string | null;
+  center_lng?: number | string | null;
+  radius_km?: number | string | null;
+  delivery_fee?: number | string | null;
+  min_order_amount?: number | string | null;
+  priority?: number | null;
+};
 
-async function listZones(): Promise<NextResponse> {
-  return withErrorHandling(async () => {
-    const supabase = createServerClient();
+export const GET = apiRoute({
+  method: 'GET',
+  auth: 'public',
+  rateLimit: tier('open'),
+  // PERF: delivery zones are static. CDN caches 1 day, revalidates
+  // up to a week while serving stale. Eliminates this fetch from
+  // the per-request Supabase load almost entirely.
+  cacheControl: 'public, s-maxage=86400, stale-while-revalidate=604800',
+  handler: async () => {
+    const supabase = await createServerClient();
     const { data, error } = await supabase
       .from('delivery_zones')
-      .select('*')
+      .select('id,name,description,polygon,center_lat,center_lng,radius_km,delivery_fee,min_order_amount,priority')
       .eq('is_active', true)
       .order('priority', { ascending: false });
 
     if (error) {
-      logger.warn('zones fetch failed', { error: error.message });
+      log.warn('zones fetch failed', { error: error.message });
       return ok({ zones: [] });
     }
 
     // Normalize polygon from JSONB
-    const zones = (data ?? []).map((z: any) => ({
+    const zones = ((data ?? []) as DeliveryZoneRow[]).map((z) => ({
       id: z.id,
       name: z.name,
       description: z.description,
@@ -48,11 +58,6 @@ async function listZones(): Promise<NextResponse> {
       priority: z.priority ?? 0,
     }));
 
-    return ok({ zones }, undefined, {
-      // PERF: delivery zones are static. CDN caches 1 day, revalidates
-      // up to a week while serving stale. Eliminates this fetch from
-      // the per-request Supabase load almost entirely.
-      headers: { 'Cache-Control': 'public, s-maxage=86400, stale-while-revalidate=604800' },
-    });
-  });
-}
+    return ok({ zones });
+  },
+});

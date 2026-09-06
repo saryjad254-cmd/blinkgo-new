@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminRole } from '@/lib/rbac';
 import { createServiceClient } from '@/lib/supabase/service';
 import { toSafeInt } from '@/lib/validation';
+import { safeErrorMessage } from '@/lib/api/safe-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,6 +13,11 @@ interface AuditEvent {
   description?: string;
   actor?: string;
   created_at: string;
+}
+
+function relationName(value: unknown): string {
+  const item = Array.isArray(value) ? value[0] : value;
+  return item && typeof item === 'object' && 'name' in item && typeof item.name === 'string' ? item.name : '';
 }
 
 /**
@@ -56,7 +62,7 @@ export async function GET(request: NextRequest) {
       events.push({
         id: `order-${o.id}`,
         type: o.status === 'delivered' ? 'login' : o.status === 'cancelled' ? 'blocked' : 'register',
-        description: `Bestellung #${o.order_number} — ${o.status} — ${Number(o.total).toFixed(2)} € — ${(o as any).restaurants?.name ?? ''}`,
+        description: `Bestellung #${o.order_number} — ${o.status} — ${Number(o.total).toFixed(2)} € — ${relationName(o.restaurants)}`,
         created_at: o.created_at,
       });
     }
@@ -80,9 +86,9 @@ export async function GET(request: NextRequest) {
     events.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     return NextResponse.json({ ok: true, events: events.slice(0, limit) });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: safeErrorMessage(error) },
       { status: 500 },
     );
   }

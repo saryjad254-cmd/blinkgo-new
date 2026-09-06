@@ -1,14 +1,10 @@
 'use client';
 
-import Link from 'next/link';
 import { useState, useMemo } from 'react';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import DollarSign from 'lucide-react/dist/esm/icons/dollar-sign';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import Store from 'lucide-react/dist/esm/icons/store';
-import ArrowRight from 'lucide-react/dist/esm/icons/arrow-right';
-import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import Filter from 'lucide-react/dist/esm/icons/filter';
 import Package from 'lucide-react/dist/esm/icons/package';
 import Truck from 'lucide-react/dist/esm/icons/truck';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
@@ -25,9 +21,18 @@ type Order = {
   total: number;
   delivery_fee: number;
   tip: number;
-  delivery_address?: any;
-  restaurants?: { name: string; address: string };
+  delivery_address?: unknown;
+  restaurants?: { name: string; address: string; latitude?: number | null; longitude?: number | null };
 };
+
+interface AvailableOrderCopy {
+  all?: string;
+  highestPayout?: string;
+  closest?: string;
+  ready?: string;
+  deliveryTo?: string;
+  estimatedEarnings?: string;
+}
 
 type Locale = 'de' | 'ar' | 'en';
 
@@ -40,13 +45,16 @@ function getMinutesAgo(dateStr: string, locale: Locale): string {
 }
 
 function deliveryAddr(order: Order): string {
-  if (typeof order.delivery_address === 'object' && order.delivery_address?.address) {
-    return order.delivery_address.address;
+  if (typeof order.delivery_address === 'object' && order.delivery_address) {
+    const address = order.delivery_address as { address?: unknown };
+    return typeof address.address === 'string' ? address.address : '';
   }
   if (typeof order.delivery_address === 'string') {
     try {
-      const parsed = JSON.parse(order.delivery_address);
-      return parsed?.address || order.delivery_address;
+      const parsed: unknown = JSON.parse(order.delivery_address);
+      return typeof parsed === 'object' && parsed && 'address' in parsed && typeof parsed.address === 'string'
+        ? parsed.address
+        : order.delivery_address;
     } catch {
       return order.delivery_address;
     }
@@ -55,12 +63,6 @@ function deliveryAddr(order: Order): string {
 }
 
 // Haversine distance in km (rough — for sort)
-function roughDistanceKm(a: { lat: number; lng: number }, order: Order): number {
-  const dLat = (50.732 - a.lat) * 111;
-  const dLng = (7.09 - a.lng) * 78;
-  return Math.sqrt(dLat * dLat + dLng * dLng);
-}
-
 export function AvailableOrderList({
   orders,
   locale,
@@ -68,7 +70,7 @@ export function AvailableOrderList({
 }: {
   orders: Order[];
   locale: Locale;
-  t: any;
+  t: AvailableOrderCopy;
 }) {
   const [filter, setFilter] = useState<'all' | 'payout_high' | 'closest'>('all');
   const driverPos = useMemo(() => ({ lat: 50.732, lng: 7.09 }), []);
@@ -79,8 +81,8 @@ export function AvailableOrderList({
     if (filter === 'closest') {
       arr.sort((a, b) => {
         // Use restaurant coords
-        const ra = (a.restaurants as any)?.latitude ?? 0;
-        const rb = (b.restaurants as any)?.latitude ?? 0;
+        const ra = a.restaurants?.latitude ?? 0;
+        const rb = b.restaurants?.latitude ?? 0;
         return Math.abs(ra - driverPos.lat) - Math.abs(rb - driverPos.lat);
       });
     }

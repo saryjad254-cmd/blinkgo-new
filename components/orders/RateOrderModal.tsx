@@ -9,9 +9,9 @@ import Utensils from 'lucide-react/dist/esm/icons/utensils';
 import Truck from 'lucide-react/dist/esm/icons/truck';
 import Send from 'lucide-react/dist/esm/icons/send';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
-import { useT, safeT } from '@/lib/i18n/I18nProvider';
-import { createBrowserClient } from '@/lib/supabase/client';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 import { cn } from '@/lib/cn';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 interface RatingData {
   food?: number;
@@ -46,16 +46,14 @@ interface RateOrderModalProps {
 export function RateOrderModal({
   orderId,
   orderNumber,
-  restaurantId,
   driverId,
   isOpen,
   onClose,
   onSubmitted,
   locale: localeProp,
 }: RateOrderModalProps) {
-  const t = useT();
-  const detected = (t as any)?.customer?.orderNumber ? (t as any) : null;
-  const loc = (localeProp ?? (detected && 'ar' in detected ? 'ar' : 'de')) as 'ar' | 'de' | 'en';
+  const { locale: providerLocale } = useI18n();
+  const loc = localeProp ?? providerLocale;
 
   const [rating, setRating] = useState<RatingData>({});
   const [hoveredFood, setHoveredFood] = useState(0);
@@ -66,7 +64,7 @@ export function RateOrderModal({
   const [error, setError] = useState<string | null>(null);
 
   // 3-locale labels
-  const labels = {
+  const labels = useMemo(() => ({
     title:
       loc === 'ar' ? 'كيف كانت تجربتك؟' : loc === 'en' ? 'How was your experience?' : 'Wie war dein Erlebnis?',
     subtitle:
@@ -107,7 +105,13 @@ export function RateOrderModal({
     close: loc === 'ar' ? 'إغلاق' : loc === 'en' ? 'Close' : 'Schließen',
     required:
       loc === 'ar' ? 'يرجى تقييم المطعم' : loc === 'en' ? 'Please rate the restaurant' : 'Bitte bewerte das Restaurant',
-  };
+    submitError:
+      loc === 'ar'
+        ? 'تعذر إرسال التقييم. يرجى المحاولة مرة أخرى.'
+        : loc === 'en'
+          ? 'Could not submit your review. Please try again.'
+          : 'Die Bewertung konnte nicht gesendet werden. Bitte versuche es erneut.',
+  }), [loc, orderNumber]);
 
   const handleSubmit = useCallback(async () => {
     if (!rating.restaurant) {
@@ -117,54 +121,44 @@ export function RateOrderModal({
     setSubmitting(true);
     setError(null);
     try {
-      const supabase = createBrowserClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
-        setError(loc === 'ar' ? 'يجب تسجيل الدخول' : loc === 'en' ? 'Must be logged in' : 'Bitte einloggen');
-        setSubmitting(false);
-        return;
-      }
-      const { error: insertErr } = await supabase.from('ratings').insert({
-        order_id: orderId,
-        customer_id: user.id,
-        restaurant_id: restaurantId ?? null,
-        driver_id: driverId ?? null,
-        restaurant_rating: rating.restaurant,
-        food_rating: rating.food ?? null,
-        driver_rating: rating.driver ?? null,
-        comment: rating.comment?.trim() || null,
+      const response = await fetch('/api/ratings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order_id: orderId,
+          restaurant_rating: rating.restaurant,
+          food_rating: rating.food ?? null,
+          driver_rating: rating.driver ?? null,
+          comment: rating.comment?.trim() || null,
+        }),
       });
-      if (insertErr) {
-        // 23505 = unique violation (already rated)
-        if (insertErr.code === '23505') {
-          setSuccess(true);
-          setTimeout(() => {
-            onSubmitted?.();
-            onClose();
-          }, 1800);
-          return;
-        }
-        throw insertErr;
+      const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; error?: string }
+        | null;
+      if (!response.ok || !payload?.ok) {
+        throw new Error(extractErrorMessage(payload, labels.submitError));
       }
       setSuccess(true);
       setTimeout(() => {
         onSubmitted?.();
         onClose();
       }, 1800);
-    } catch (e: any) {
-      setError(e?.message ?? 'Failed to submit');
+    } catch (error: unknown) {
+      setError(extractErrorMessage(error, labels.submitError));
       setSubmitting(false);
     }
-  }, [rating, orderId, restaurantId, driverId, onSubmitted, onClose, labels, loc]);
+  }, [rating, orderId, onSubmitted, onClose, labels]);
 
   useEffect(() => {
-    if (isOpen) {
+    if (!isOpen) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
       setRating({});
       setError(null);
       setSuccess(false);
-    }
+    });
+    return () => { cancelled = true; };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -174,6 +168,7 @@ export function RateOrderModal({
       className="fixed inset-0 z-modal flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/70 backdrop-blur-md animate-[fadeIn_200ms_ease-out]"
       role="dialog"
       aria-modal
+      aria-label={labels.title}
       onClick={onClose}
     >
       <div

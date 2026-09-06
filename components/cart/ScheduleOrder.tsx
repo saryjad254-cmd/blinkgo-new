@@ -5,8 +5,6 @@ import { useState, useEffect } from 'react';
 import { useT } from '@/lib/i18n/I18nProvider';
 
 import Clock from 'lucide-react/dist/esm/icons/clock';
-import Calendar from 'lucide-react/dist/esm/icons/calendar';
-import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
 
 interface ScheduleOrderProps {
   value: string | null; // ISO timestamp or null for ASAP
@@ -27,13 +25,18 @@ export function ScheduleOrder({ value, onChange }: ScheduleOrderProps) {
 
   // Populate defaults and the min/max window on the client only.
   useEffect(() => {
-    const now = Date.now();
-    setMinDate(new Date(now + 30 * 60 * 1000).toISOString().slice(0, 10));
-    setMaxDate(new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
-    if (!value) {
-      setDate(new Date(now + 60 * 60 * 1000).toISOString().slice(0, 10));
-      setTime('19:00');
-    }
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      const now = Date.now();
+      setMinDate(new Date(now + 30 * 60 * 1000).toISOString().slice(0, 10));
+      setMaxDate(new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+      if (!value) {
+        setDate(new Date(now + 60 * 60 * 1000).toISOString().slice(0, 10));
+        setTime('19:00');
+      }
+    });
+    return () => { cancelled = true; };
   }, [value]);
 
   useEffect(() => {

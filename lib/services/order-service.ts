@@ -31,6 +31,7 @@ export type OrderStatus =
   | 'confirmed'
   | 'preparing'
   | 'ready'
+  | 'assigned'
   | 'picked_up'
   | 'delivering'
   | 'delivered'
@@ -78,10 +79,9 @@ export interface Order {
   tip: number;
   discount: number;
   total: number;
-  commission: number;
   delivery_address: string;
-  customer_lat?: number;
-  customer_lng?: number;
+  customer_latitude?: number;
+  customer_longitude?: number;
   created_at: string;
 }
 
@@ -98,7 +98,8 @@ const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   pending: ['confirmed', 'cancelled', 'cancel_refund_pending'],
   confirmed: ['preparing', 'cancelled', 'cancel_refund_pending'],
   preparing: ['ready', 'cancelled', 'cancel_refund_pending'],
-  ready: ['picked_up', 'cancelled', 'cancel_refund_pending'],
+  ready: ['assigned', 'picked_up', 'cancelled', 'cancel_refund_pending'],
+  assigned: ['ready', 'picked_up', 'cancelled', 'cancel_refund_pending'],
   picked_up: ['delivering', 'delivered', 'could_not_deliver'],
   delivering: ['delivered', 'could_not_deliver'],
   delivered: ['refunded'], // admin-only via the /api/orders/status route override
@@ -119,6 +120,25 @@ const ALLOWED_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
  * single source of truth instead of duplicating it (v82 audit fix).
  */
 export const ORDER_ALLOWED_TRANSITIONS = ALLOWED_TRANSITIONS;
+
+type OrderActorRole = 'customer' | 'driver' | 'restaurant' | 'admin' | 'super_admin' | 'manager';
+
+function normalizeActorRole(role: string): OrderActorRole | null {
+  if (role === 'restaurant_owner') return 'restaurant';
+  if (['customer', 'driver', 'restaurant', 'admin', 'super_admin', 'manager'].includes(role)) {
+    return role as OrderActorRole;
+  }
+  return null;
+}
+
+function isPrivilegedRole(role: OrderActorRole): boolean {
+  return role === 'admin' || role === 'super_admin' || role === 'manager';
+}
+
+const ROLE_TRANSITION_TARGETS: Partial<Record<OrderActorRole, ReadonlySet<OrderStatus>>> = {
+  restaurant: new Set(['confirmed', 'preparing', 'ready', 'cancelled']),
+  driver: new Set(['picked_up', 'delivering', 'delivered', 'could_not_deliver']),
+};
 
 export class OrderService {
   /**
@@ -149,8 +169,6 @@ export class OrderService {
       0,
       Number((subtotal + deliveryFee + serviceFee + tax + tip - discount).toFixed(2)),
     );
-    const commission = Number((subtotal * COMMISSION_RATE).toFixed(2));
-
     const orderNumber = await this.generateOrderNumber();
     const svc = createServiceClient();
     const { data, error } = await svc
@@ -167,10 +185,9 @@ export class OrderService {
         tip,
         discount,
         total,
-        commission,
         delivery_address: input.deliveryAddress,
-        customer_lat: input.customerLat,
-        customer_lng: input.customerLng,
+        customer_latitude: input.customerLat,
+        customer_longitude: input.customerLng,
         notes: input.notes,
         status: 'pending',
         payment_method: input.paymentMethod ?? 'cash',
@@ -210,21 +227,22 @@ export class OrderService {
     const svc = createServiceClient();
     const { data, error } = await svc
       .from('orders')
-      .select('*')
+      .select('*, restaurant:restaurants!orders_restaurant_id_fkey(owner_id)')
       .eq('id', orderId)
       .single();
     if (error || !data) throw new NotFoundError('Order');
-    // Customer/Driver/Restaurant can only see their own
-    if (viewer.role === 'customer' && data.customer_id !== viewer.id) {
-      throw new AuthorizationError('You can only view your own orders');
+    const role = normalizeActorRole(viewer.role);
+    if (!role) throw new AuthorizationError('Unsupported order viewer role');
+    if (isPrivilegedRole(role)) return data as unknown as Order;
+
+    if (role === 'customer' && data.customer_id === viewer.id) return data as unknown as Order;
+    if (role === 'driver' && data.driver_id === viewer.id) return data as unknown as Order;
+    if (role === 'restaurant') {
+      const relation = data.restaurant as unknown as { owner_id?: string } | { owner_id?: string }[] | null;
+      const ownerId = Array.isArray(relation) ? relation[0]?.owner_id : relation?.owner_id;
+      if (ownerId === viewer.id) return data as unknown as Order;
     }
-    if (viewer.role === 'driver' && data.driver_id !== viewer.id) {
-      throw new AuthorizationError('You can only view your assigned orders');
-    }
-    if (viewer.role === 'restaurant' && data.restaurant_id !== viewer.id) {
-      throw new AuthorizationError('You can only view your restaurant orders');
-    }
-    return data as Order;
+    throw new AuthorizationError('You do not have access to this order');
   }
 
   /**
@@ -235,12 +253,17 @@ export class OrderService {
     newStatus: OrderStatus,
     actor: { id: string; role: string },
   ): Promise<Order> {
+    const role = normalizeActorRole(actor.role);
+    if (!role) throw new AuthorizationError('Unsupported order actor role');
+    if (!isPrivilegedRole(role) && !ROLE_TRANSITION_TARGETS[role]?.has(newStatus)) {
+      throw new AuthorizationError('Your role cannot perform this order transition');
+    }
     const current = await this.getById(orderId, { id: actor.id, role: actor.role });
     const allowed = ALLOWED_TRANSITIONS[current.status] ?? [];
     if (!allowed.includes(newStatus)) {
       throw new ConflictError(
         `Cannot transition from ${current.status} to ${newStatus}`,
-        { from: current.status, to: newStatus, allowed },
+        { meta: { from: current.status, to: newStatus, allowed } },
       );
     }
     const svc = createServiceClient();
@@ -296,7 +319,7 @@ export class OrderService {
       .select('*')
       .single();
     if (error || !data) {
-      throw new ConflictError('Order is no longer available', { orderId });
+      throw new ConflictError('Order is no longer available', { meta: { orderId } });
     }
     return data as Order;
   }
@@ -305,25 +328,41 @@ export class OrderService {
    * List orders with role-based filtering + pagination.
    */
   static async list(filter: {
-    role: 'customer' | 'driver' | 'restaurant' | 'admin';
+    role: 'customer' | 'driver' | 'restaurant' | 'restaurant_owner' | 'admin' | 'super_admin' | 'manager';
     userId: string;
     status?: OrderStatus;
     limit?: number;
     offset?: number;
   }): Promise<{ orders: Order[]; total: number }> {
     const svc = createServiceClient();
+    const role = normalizeActorRole(filter.role);
+    if (!role) throw new AuthorizationError('Unsupported order list role');
     let q = svc.from('orders').select('*', { count: 'exact' });
-    switch (filter.role) {
+    switch (role) {
       case 'customer':
         q = q.eq('customer_id', filter.userId);
         break;
       case 'driver':
         q = q.eq('driver_id', filter.userId);
         break;
-      case 'restaurant':
-        q = q.eq('restaurant_id', filter.userId);
+      case 'restaurant': {
+        const { data: ownedRestaurants, error: restaurantError } = await svc
+          .from('restaurants')
+          .select('id')
+          .eq('owner_id', filter.userId);
+        if (restaurantError) {
+          throw new AppError('Failed to resolve restaurant ownership', {
+            statusCode: 500,
+            code: 'RESTAURANT_OWNERSHIP_FAILED',
+            cause: restaurantError,
+          });
+        }
+        const restaurantIds = (ownedRestaurants ?? []).map((restaurant) => restaurant.id);
+        if (restaurantIds.length === 0) return { orders: [], total: 0 };
+        q = q.in('restaurant_id', restaurantIds);
         break;
-      // admin: no filter
+      }
+      // privileged roles: no filter
     }
     if (filter.status) q = q.eq('status', filter.status);
     q = q.order('created_at', { ascending: false })
@@ -347,9 +386,7 @@ export class OrderService {
   private static statusTimestamps(status: OrderStatus): Record<string, string> {
     const now = new Date().toISOString();
     switch (status) {
-      case 'preparing': return { prepared_at: now };
-      case 'ready': return { ready_at: now };
-      case 'picked_up': return { picked_up_at: now };
+      case 'ready': return { prepared_at: now };
       case 'delivered': return { delivered_at: now };
       case 'cancelled': return { cancelled_at: now };
       default: return {};

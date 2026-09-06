@@ -1,14 +1,21 @@
 import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
+import { getUserWithTransientRetry } from '@/lib/auth/get-user-with-retry';
 
 export async function updateSession(request: NextRequest) {
   let response = NextResponse.next({
     request: { headers: request.headers },
   });
 
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    return { response, user: null, supabase: null };
+  }
+
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    url,
+    anonKey,
     {
       cookies: {
         get(name: string) {
@@ -32,7 +39,7 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user } } = await getUserWithTransientRetry(supabase);
 
   return { response, user, supabase };
 }

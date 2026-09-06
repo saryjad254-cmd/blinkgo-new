@@ -37,8 +37,8 @@ Set these in the Vercel project → Settings → Environment Variables.
 
 | Name | Value (example) | Purpose |
 |------|-----------------|---------|
-| `APP_URL` | `https://blinkgo.de` | Canonical base URL. **Used by every auth redirect.** Falls back to `NEXT_PUBLIC_APP_URL` if not set, but `APP_URL` is preferred. |
-| `NEXT_PUBLIC_APP_URL` | `https://blinkgo.de` | Public mirror of `APP_URL` (some client code reads this). |
+| `APP_URL` | `https://www.blinkgo.de` | Canonical base URL. **Used by every auth redirect.** Falls back to `NEXT_PUBLIC_APP_URL` if not set, but `APP_URL` is preferred. |
+| `NEXT_PUBLIC_APP_URL` | `https://www.blinkgo.de` | Public mirror of `APP_URL` (some client code reads this). The apex domain redirects permanently to this canonical host. |
 | `AUTH_ALLOWED_REDIRECT_HOSTS` | `blinkgo.de,www.blinkgo.de,trycloudflare.com,loca.lt,localhost:3000` | CSV of hostnames the auth layer accepts in redirects. Add your domain. Remove localhost for production-only builds. |
 
 ### How to set in Vercel

@@ -18,14 +18,15 @@
  */
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
+const { CUSTOMER_TERMS_VERSION, PRIVACY_NOTICE_VERSION } = require('./legal-versions-test-helper');
 // SECURITY: Project ref is derived from the public Supabase URL, not hardcoded
 const PROJECT_REF = (() => { const u = process.env.NEXT_PUBLIC_SUPABASE_URL || ''; const m = u.match(/https:\/\/([^.]+)\.supabase\.co/); return m ? m[1] : 'YOUR-PROJECT-REF'; })();
 const COOKIES = {};
 const ACCOUNTS = {
   customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  restaurant: { email: 'restaurant@blinkgo.de', password: 'DemoRestaurant!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  driver: { email: 'driver@blinkgo.com', password: 'BlinkGoDriver2026!' },
+  restaurant: { email: 'wesseling@blinkgo.de', password: 'BlinkGoWesseling2026!' },
+  admin: { email: 'admin@blinkgo.com', password: 'BlinkGoAdmin2026!' },
 };
 
 let passed = 0, failed = 0;
@@ -57,6 +58,7 @@ function cookieHeader() {
 async function f(path, init = {}, opts = {}) {
   // Use a unique x-forwarded-for so per-IP rate limits don't cascade
   const headers = {
+    'x-blinkgo-test-run': 'local-e2e',
     'Content-Type': 'application/json',
     'Origin': BASE,
     'x-forwarded-for': `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`,
@@ -68,6 +70,7 @@ async function f(path, init = {}, opts = {}) {
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = { _raw: text?.slice(0, 200) }; }
+  if (json?.ok === true && Object.prototype.hasOwnProperty.call(json, 'data')) json = json.data;
   return { status: res.status, ok: res.ok, json };
 }
 
@@ -76,6 +79,19 @@ function clearCookies() { Object.keys(COOKIES).forEach((k) => delete COOKIES[k])
 async function login(role) {
   clearCookies();
   await f('/api/auth/login', { method: 'POST', body: JSON.stringify(ACCOUNTS[role]) });
+}
+
+function checkoutLine(product, restaurant) {
+  const selectedModifiers = Object.fromEntries((product.modifiers || [])
+    .filter((modifier) => modifier.required && Number(modifier.min_select || 0) > 0)
+    .map((modifier) => [
+      modifier.id,
+      (modifier.options || []).slice(0, Number(modifier.min_select)).map((option) => option.id),
+    ]));
+  const unitPrice = Number(product.discount_price ?? product.price ?? 0);
+  const minimumOrder = Number(restaurant.minimum_order ?? restaurant.min_order_amount ?? 0);
+  const quantity = unitPrice > 0 ? Math.max(2, Math.ceil((minimumOrder + 0.01) / unitPrice)) : 2;
+  return { product_id: product.id, quantity, configuration: { selected_modifiers: selectedModifiers } };
 }
 
 async function run() {
@@ -87,7 +103,12 @@ async function run() {
   console.log('► Edge: malformed input');
   const badJson = await fetch(BASE + '/api/auth/login', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'Origin': BASE },
+    headers: {
+      'Content-Type': 'application/json',
+      'Origin': BASE,
+      'x-forwarded-for': '10.42.9.1',
+      'x-blinkgo-test-run': 'local-e2e',
+    },
     body: '{not valid json}',
   });
   record('Invalid JSON rejected', badJson.status === 400 || badJson.status === 500);
@@ -165,32 +186,44 @@ async function run() {
   });
   record('Empty items rejected', !emptyItems.ok);
 
+  const validSearch = await f('/api/search?sort=recommended');
+  const validRestaurant = validSearch.json?.restaurants?.[0];
+  const validProducts = await f(`/api/products/bestsellers?restaurant_id=${validRestaurant?.id}`);
+  const validProduct = validProducts.json?.bestsellers?.[0];
+  const validDeliveryAddress = {
+    address: 'Test Wesseling',
+    lat: Number(validRestaurant?.latitude ?? 50.82),
+    lng: Number(validRestaurant?.longitude ?? 6.98),
+  };
+
   // ── 11. Negative tip ──
   const negTip = await f('/api/orders', {
     method: 'POST',
     body: JSON.stringify({
-      restaurant_id: '00000000-0000-0000-0000-000000000010',
-      items: [{ product_id: '11111111-0000-0000-0000-000000000003', quantity: 1 }],
+      restaurant_id: validRestaurant.id,
+      // Build the same valid line as checkout so this assertion isolates
+      // tip clamping from minimum-order and required-modifier validation.
+      items: [checkoutLine(validProduct, validRestaurant)],
       payment_method: 'cash',
-      delivery_address: { address: 'Test', lat: 50.7, lng: 7.1 },
+      delivery_address: validDeliveryAddress,
       tip: -100,
     }),
   });
   // Negative tip is clamped to 0
-  record('Negative tip clamped to 0', negTip.json?.data?.order?.tip === 0);
+  record('Negative tip clamped to 0', negTip.ok && negTip.json?.order?.tip === 0, `status=${negTip.status} tip=${negTip.json?.order?.tip}`);
 
   // ── 12. Excessive tip ──
   const bigTip = await f('/api/orders', {
     method: 'POST',
     body: JSON.stringify({
-      restaurant_id: '00000000-0000-0000-0000-000000000010',
-      items: [{ product_id: '11111111-0000-0000-0000-000000000003', quantity: 1 }],
+      restaurant_id: validRestaurant.id,
+      items: [checkoutLine(validProduct, validRestaurant)],
       payment_method: 'cash',
-      delivery_address: { address: 'Test', lat: 50.7, lng: 7.1 },
+      delivery_address: validDeliveryAddress,
       tip: 99999,
     }),
   });
-  record('Excessive tip capped', bigTip.json?.data?.order?.tip <= 500, `tip=${bigTip.json?.data?.order?.tip}`);
+  record('Excessive tip capped', bigTip.ok && bigTip.json?.order?.tip === 500, `status=${bigTip.status} tip=${bigTip.json?.order?.tip}`);
 
   // ── 13. Unicode in name ──
   console.log('\n► Edge: unicode / i18n');
@@ -200,6 +233,11 @@ async function run() {
       email: 'test+unicode@blinkgo-test.de',
       password: 'Test1234!',
       name: 'محمد 测试 🎉',
+      role: 'customer',
+      acceptedTerms: true,
+      termsVersion: CUSTOMER_TERMS_VERSION,
+      privacyVersion: PRIVACY_NOTICE_VERSION,
+      locale: 'ar',
     }),
   });
   record('Unicode name accepted', unicode.ok || unicode.json?.ok, `status=${unicode.status}`);

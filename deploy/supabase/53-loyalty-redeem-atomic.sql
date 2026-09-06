@@ -19,6 +19,10 @@
 -- parallel orders from the same user cannot double-spend.
 -- ════════════════════════════════════════════════════════════════
 
+-- The legacy function returned void. PostgreSQL cannot change a function's
+-- return type through CREATE OR REPLACE, so replace that exact signature.
+DROP FUNCTION IF EXISTS public.redeem_loyalty_points(uuid, integer, uuid);
+
 CREATE OR REPLACE FUNCTION public.redeem_loyalty_points(
   p_user_id  uuid,
   p_points   integer,
@@ -102,6 +106,8 @@ COMMENT ON FUNCTION public.redeem_loyalty_points IS
 -- Companion credit function (used by the signup bonus and order-completed
 -- points award). Idempotent on (user_id, order_id, reason) so a retry of
 -- the same order_completed does not double-award.
+DROP FUNCTION IF EXISTS public.award_loyalty_points(uuid, integer, text, uuid);
+
 CREATE OR REPLACE FUNCTION public.award_loyalty_points(
   p_user_id  uuid,
   p_points   integer,

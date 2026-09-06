@@ -18,10 +18,8 @@ import DollarSign from 'lucide-react/dist/esm/icons/dollar-sign';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import Star from 'lucide-react/dist/esm/icons/star';
-import Store from 'lucide-react/dist/esm/icons/store';
-import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import { useT } from '@/lib/i18n/I18nProvider';
 import { formatEUR } from '@/lib/format';
+import type { LucideIcon } from 'lucide-react';
 
 interface AnalyticsData {
   period_days: number;
@@ -43,7 +41,6 @@ interface AnalyticsData {
 }
 
 export function RestaurantAnalytics({ data }: { data: AnalyticsData }) {
-  const t = useT();
   const [period, setPeriod] = useState<7 | 30>(data.period_days === 30 ? 30 : 7);
 
   const revenueChange = data.prev_period.total_revenue > 0
@@ -209,7 +206,7 @@ export function RestaurantAnalytics({ data }: { data: AnalyticsData }) {
   );
 }
 
-function KpiCard({ icon: Icon, label, value, change, sublabel }: { icon: any; label: string; value: string; change?: number; sublabel?: string }) {
+function KpiCard({ icon: Icon, label, value, change, sublabel }: { icon: LucideIcon; label: string; value: string; change?: number; sublabel?: string }) {
   return (
     <div className="bg-bg-card border-2 border-ink-3/20 rounded-2xl p-3">
       <div className="flex items-center gap-1.5 text-xs text-ink-2 mb-1">
@@ -228,7 +225,7 @@ function KpiCard({ icon: Icon, label, value, change, sublabel }: { icon: any; la
   );
 }
 
-function MiniCard({ label, value, icon: Icon, tone }: { label: string; value: string; icon: any; tone?: 'success' | 'warning' }) {
+function MiniCard({ label, value, icon: Icon, tone }: { label: string; value: string; icon: LucideIcon; tone?: 'success' | 'warning' }) {
   const colors = {
     success: 'text-success-700',
     warning: 'text-warning-700',

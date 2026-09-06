@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminRole } from '@/lib/rbac';
-import { ok, fail, withErrorHandling } from '@/lib/api/response';
+import { ok, withErrorHandling } from '@/lib/api/response';
 import { AnalyticsService } from '@/lib/services/analytics-service';
 
 export const runtime = 'nodejs';

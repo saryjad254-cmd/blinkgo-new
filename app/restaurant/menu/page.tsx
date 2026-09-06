@@ -1,123 +1,50 @@
-import Link from 'next/link';
-import Plus from 'lucide-react/dist/esm/icons/plus';
 import { requireRestaurantId } from '@/lib/rbac';
-import { createServerClient } from '@/lib/supabase/server';
-import { PageHeader } from '@/components/shared/PageHeader';
-import { EmptyStateClient as EmptyState } from '@/components/shared/EmptyStateClient';
-import { MenuManagerClient } from '@/components/restaurant/MenuManagerClient';
-import { cookies } from 'next/headers';
-import type { Locale } from '@/lib/i18n/server-translations';
-import { getServerLocale } from '@/lib/i18n/server-translations';
+import { createServiceClient } from '@/lib/supabase/service';
+import { MenuManagerClient, type RestaurantMenuProduct } from '@/components/restaurant/MenuManagerClient';
+import { getServerTranslations } from '@/lib/i18n/server-translations';
 
 export const dynamic = 'force-dynamic';
-
-async function getProducts(restaurantId: string) {
-  const supabase = createServerClient();
-  const { data, error } = await supabase
-    .from('products')
-    .select('id, name, price, discount_price, is_available, is_featured, sold_count, image_urls, stock, track_stock, category')
-    .eq('restaurant_id', restaurantId)
-    .order('is_featured', { ascending: false })
-    .order('name', { ascending: true });
-
-  if (error) return [];
-  return data ?? [];
-}
-
-async function getCategories(restaurantId: string) {
-  const supabase = createServerClient();
-  const { data } = await supabase
-    .from('categories')
-    .select('id, name')
-    .eq('restaurant_id', restaurantId)
-    .order('name');
-  return data ?? [];
-}
+export const revalidate = 0;
 
 export default async function MenuPage() {
   const { restaurantId } = await requireRestaurantId();
-  const [products, categories] = await Promise.all([
-    getProducts(restaurantId),
-    getCategories(restaurantId),
+  const supabase = createServiceClient();
+  const [{ data: restaurant }, { data: products }, { data: categories }, pendingResult, { locale }] = await Promise.all([
+    supabase.from('restaurants').select('id, name').eq('id', restaurantId).maybeSingle(),
+    supabase
+      .from('products')
+      .select('id, name, description, price, discount_price, is_active, is_available, is_featured, sold_count, image_urls, stock, track_stock, category, preparation_time, prep_time, approval_status, archived_at')
+      .eq('restaurant_id', restaurantId)
+      .eq('approval_status', 'approved')
+      .is('archived_at', null)
+      .order('is_featured', { ascending: false })
+      .order('name', { ascending: true }),
+    supabase.from('categories').select('id, name').eq('restaurant_id', restaurantId).order('name'),
+    supabase.from('product_requests').select('id', { count: 'exact', head: true }).eq('restaurant_id', restaurantId).eq('status', 'pending'),
+    getServerTranslations(),
   ]);
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
-  const locale: Locale = getServerLocale(cookieHeader);
 
-  const T = {
-    de: {
-      title: 'Speisekarte',
-      subtitle: (n: number) => `${n} ${n === 1 ? 'Produkt' : 'Produkte'}`,
-      newProduct: 'Neu',
-      emptyTitle: 'Speisekarte ist leer',
-      emptyDesc: 'Füge dein erstes Produkt hinzu, um Bestellungen zu erhalten',
-      addProduct: 'Produkt hinzufügen',
-    },
-    ar: {
-      title: 'القائمة',
-      subtitle: (n: number) => `${n} منتج`,
-      newProduct: 'جديد',
-      emptyTitle: 'القائمة فارغة',
-      emptyDesc: 'ابدأ بإضافة أول منتج لمطعمك',
-      addProduct: 'إضافة منتج',
-    },
-    en: {
-      title: 'Menu',
-      subtitle: (n: number) => `${n} ${n === 1 ? 'product' : 'products'}`,
-      newProduct: 'New',
-      emptyTitle: 'Menu is empty',
-      emptyDesc: 'Add your first product to start receiving orders',
-      addProduct: 'Add product',
-    },
-  } as const;
-  const t = T[locale];
+  const normalized = ((products ?? []) as RestaurantMenuProduct[]).map((product) => ({
+    ...product,
+    price: Number(product.price ?? 0),
+    discount_price: product.discount_price == null ? null : Number(product.discount_price),
+    sold_count: Number(product.sold_count ?? 0),
+    stock: product.stock == null ? null : Number(product.stock),
+    preparation_time: Number(product.preparation_time ?? product.prep_time ?? 15),
+    is_active: product.is_active !== false,
+    is_available: product.is_available !== false,
+    is_featured: product.is_featured === true,
+    track_stock: product.track_stock === true,
+  }));
 
   return (
-    <>
-      <PageHeader
-        title={t.title}
-        subtitle={t.subtitle(products.length)}
-        action={
-          <Link href="/restaurant/menu/new" className="btn-primary text-sm px-3 py-2">
-            <Plus className="w-4 h-4 ms-1" />
-            {t.newProduct}
-          </Link>
-        }
-      />
-
-      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-6">
-        {products.length === 0 ? (
-          <EmptyState
-            iconName="Utensils"
-            title={t.emptyTitle}
-            description={t.emptyDesc}
-            action={
-              <Link href="/restaurant/menu/new" className="btn-primary">
-                <Plus className="w-4 h-4 ms-2" />
-                {t.addProduct}
-              </Link>
-            }
-          />
-        ) : (
-          <MenuManagerClient
-            initialProducts={products.map((p: any) => ({
-              id: p.id,
-              name: p.name,
-              price: Number(p.price),
-              discount_price: p.discount_price ? Number(p.discount_price) : null,
-              is_available: p.is_available ?? true,
-              is_featured: p.is_featured ?? false,
-              sold_count: p.sold_count ?? 0,
-              stock: p.stock,
-              track_stock: p.track_stock ?? false,
-              category: p.category,
-              image_urls: p.image_urls,
-            }))}
-            categories={categories}
-            locale={locale}
-            restaurantId={restaurantId}
-          />
-        )}
-      </div>
-    </>
+    <MenuManagerClient
+      key={normalized.map((product) => `${product.id}:${product.is_available}:${product.price}:${product.stock}`).join('|')}
+      restaurantName={restaurant?.name ?? 'BlinkGo'}
+      initialProducts={normalized}
+      categories={(categories ?? []) as Array<{ id: string; name: string }>}
+      pendingRequests={pendingResult.count ?? 0}
+      locale={locale}
+    />
   );
 }

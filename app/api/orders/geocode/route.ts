@@ -106,29 +106,29 @@ async function geocodeText(rawText: string): Promise<{ lat: number; lng: number;
   return null;
 }
 
-function extractAddressText(deliveryAddress: any): string | null {
+function extractAddressText(deliveryAddress: unknown): string | null {
   if (!deliveryAddress) return null;
   if (typeof deliveryAddress === 'string') {
     const s = deliveryAddress.trim();
     return s.length ? s : null;
   }
   if (typeof deliveryAddress === 'object') {
+    const address = deliveryAddress as Record<string, unknown>;
     const cand =
-      deliveryAddress.formatted_address ||
-      deliveryAddress.address ||
-      deliveryAddress.street ||
+      address.formatted_address ||
+      address.address ||
+      address.street ||
       null;
     if (typeof cand === 'string' && cand.trim().length >= 3) return cand.trim();
   }
   return null;
 }
 
-function hasCoords(order: any): boolean {
-  return !!(
-    order.customer_latitude && order.customer_longitude
-    || (typeof order.delivery_address === 'object' &&
-        order.delivery_address?.lat && order.delivery_address?.lng)
-  );
+function hasCoords(order: { customer_latitude?: number | null; customer_longitude?: number | null; delivery_address?: unknown }): boolean {
+  if (order.customer_latitude != null && order.customer_longitude != null) return true;
+  if (typeof order.delivery_address !== 'object' || order.delivery_address === null) return false;
+  const address = order.delivery_address as Record<string, unknown>;
+  return typeof address.lat === 'number' && typeof address.lng === 'number';
 }
 
 export async function POST(req: NextRequest) {
@@ -141,16 +141,19 @@ export async function POST(req: NextRequest) {
 
 // v81: keep the original implementation intact, just wrapped.
 async function geocodeOriginal(req: NextRequest) {
-  const supabaseAuth = createServerClient();
+  const supabaseAuth = await createServerClient();
   const { data: { user } } = await supabaseAuth.auth.getUser();
   if (!user) {
     return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: any = {};
-  try { body = await req.json(); } catch { /* empty body is fine */ }
-  const orderId = body?.orderId as string | undefined;
-  const batch = body?.batch === true;
+  let body: Record<string, unknown> = {};
+  try {
+    const payload: unknown = await req.json();
+    if (typeof payload === 'object' && payload !== null) body = payload as Record<string, unknown>;
+  } catch { /* empty body is fine */ }
+  const orderId = typeof body.orderId === 'string' ? body.orderId : undefined;
+  const batch = body.batch === true;
 
   const service = createServiceClient();
 

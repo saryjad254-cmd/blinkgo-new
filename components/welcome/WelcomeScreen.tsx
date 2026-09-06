@@ -3,14 +3,12 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
+import type { LucideIcon } from 'lucide-react';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import Clock from 'lucide-react/dist/esm/icons/clock';
 import Shield from 'lucide-react/dist/esm/icons/shield';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
 import Zap from 'lucide-react/dist/esm/icons/zap';
-import Heart from 'lucide-react/dist/esm/icons/heart';
-import Star from 'lucide-react/dist/esm/icons/star';
 import { Logo } from '@/components/ui/Logo';
 import { Button } from '@/components/ui/Button';
 import { useT, tr } from '@/lib/i18n/I18nProvider';
@@ -18,12 +16,11 @@ import { cn } from '@/lib/cn';
 
 const TRACE_TAG = '[BLINKGO_AUTH_TRACE:v77:welcome_screen]';
 function clientTrace(event: string, data: Record<string, unknown>) {
-  // eslint-disable-next-line no-console
   console.error(TRACE_TAG, event, JSON.stringify(data));
 }
 
 interface Slide {
-  icon: any;
+  icon: LucideIcon;
   titleKey: string;
   descKey: string;
   bgClass: string;

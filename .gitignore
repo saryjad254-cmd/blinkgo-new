@@ -9,6 +9,9 @@ node_modules/
 
 # Next.js build outputs
 .next/
+.next-test/
+.next-push/
+.next-*/
 out/
 build/
 dist/
@@ -43,6 +46,13 @@ pnpm-debug.log*
 # Testing
 coverage/
 .nyc_output/
+artifacts/
+screenshots/
+
+# Delivery archives and local test traces
+*.zip
+.tmp-*
+.mock-*
 
 # Supabase local
 supabase/.branches

@@ -78,8 +78,8 @@ const T = {
   },
 } as const;
 
-export default function AGBPage() {
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
+export default async function AGBPage() {
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale = getServerLocale(cookieHeader) as 'de' | 'ar' | 'en';
   const c = getDisplayCompanyInfo();
   const t = T[locale] || T.de;
@@ -216,10 +216,10 @@ export default function AGBPage() {
       <Clause title={t.s13}>
         <p>
           {locale === 'ar'
-            ? 'لا يتم استبعاد حقوق المستهلك الإلزامية. منصة OS للمفوضية الأوروبية متاحة على ec.europa.eu/consumers/odr. لست ملزماً بالمشاركة في إجراءات التحكيم.'
+            ? 'لا يتم استبعاد حقوق المستهلك الإلزامية. أُوقفت منصة الاتحاد الأوروبي السابقة لتسوية النزاعات عبر الإنترنت في 20 يوليو 2025. تُذكر المشاركة في التحكيم الاستهلاكي في صفحة بيانات الناشر.'
             : locale === 'en'
-            ? 'Mandatory consumer rights are not excluded. The OS platform of the European Commission is available at ec.europa.eu/consumers/odr. We are not obliged to participate in arbitration proceedings.'
-            : 'Zwingende Verbraucherrechte werden nicht ausgeschlossen. Die OS-Plattform der Europäischen Kommission ist unter ec.europa.eu/consumers/odr erreichbar. Wir sind nicht verpflichtet, an Schlichtungsverfahren teilzunehmen.'}
+            ? 'Mandatory consumer rights are not excluded. The former EU Online Dispute Resolution platform was discontinued on 20 July 2025. Our consumer arbitration statement is available in the legal notice.'
+            : 'Zwingende Verbraucherrechte werden nicht ausgeschlossen. Die frühere EU-Plattform zur Online-Streitbeilegung wurde zum 20. Juli 2025 eingestellt. Unsere Erklärung zur Verbraucherschlichtung steht im Impressum.'}
         </p>
       </Clause>
 

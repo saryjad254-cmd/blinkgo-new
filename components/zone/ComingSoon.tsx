@@ -12,6 +12,7 @@ import ArrowRight from 'lucide-react/dist/esm/icons/arrow-right';
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left';
 import Mail from 'lucide-react/dist/esm/icons/mail';
 import User from 'lucide-react/dist/esm/icons/user';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 const COPY = {
   de: {
@@ -107,11 +108,15 @@ export function ComingSoon({ distanceKm }: ComingSoonProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (typeof document !== 'undefined') {
+    if (typeof document === 'undefined') return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
       const m = document.cookie.split(';').find((c) => c.trim().startsWith('blinkgo-locale='));
       const v = m?.split('=')[1]?.trim();
       if (v === 'ar' || v === 'en' || v === 'de') setLocale(v);
-    }
+    });
+    return () => { cancelled = true; };
   }, []);
 
   const t = COPY[locale];
@@ -169,8 +174,8 @@ export function ComingSoon({ distanceKm }: ComingSoonProps) {
         return;
       }
       setSuccess(true);
-    } catch (e: any) {
-      setError(e?.message || 'Failed to submit');
+    } catch (error: unknown) {
+      setError(extractErrorMessage(error, 'Failed to submit'));
     } finally {
       setSubmitting(false);
     }

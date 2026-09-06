@@ -5,10 +5,7 @@ import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Phone from 'lucide-react/dist/esm/icons/phone';
 import Navigation from 'lucide-react/dist/esm/icons/navigation';
 import Store from 'lucide-react/dist/esm/icons/store';
-import Clock from 'lucide-react/dist/esm/icons/clock';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
-import Package from 'lucide-react/dist/esm/icons/package';
-import ChefHat from 'lucide-react/dist/esm/icons/chef-hat';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import CreditCard from 'lucide-react/dist/esm/icons/credit-card';
 import Banknote from 'lucide-react/dist/esm/icons/banknote';
@@ -29,7 +26,7 @@ export interface ActiveDeliveryCardProps {
     payment_method?: string;
     payment_status?: string;
     delivery_instructions?: string | null;
-    delivery_address?: any;
+    delivery_address?: string | DeliveryAddressData | null;
     customer_latitude?: number | null;
     customer_longitude?: number | null;
     restaurant_latitude?: number | null;
@@ -44,6 +41,20 @@ export interface ActiveDeliveryCardProps {
   onNavigateCustomer?: () => void;
   onCallRestaurant?: () => void;
   onCallCustomer?: () => void;
+}
+
+interface DeliveryAddressData {
+  formatted_address?: string;
+  address?: string;
+  street?: string;
+  postal?: string;
+  city?: string;
+  lat?: number;
+  lng?: number;
+  floor?: string;
+  door?: string;
+  instructions?: string;
+  name?: string;
 }
 
 const STATUS_LABELS = {
@@ -64,10 +75,6 @@ const STEP_LABELS = {
 export function ActiveDeliveryCard({
   order,
   locale,
-  onNavigateRestaurant,
-  onNavigateCustomer,
-  onCallRestaurant,
-  onCallCustomer,
 }: ActiveDeliveryCardProps) {
   const isRtl = locale === 'ar';
   const labels = STEP_LABELS[locale] ?? STEP_LABELS.de;
@@ -75,7 +82,7 @@ export function ActiveDeliveryCard({
     STATUS_LABELS[order.status as keyof typeof STATUS_LABELS]?.[locale] ?? order.status;
 
   // Parse customer address
-  const da: any = order.delivery_address;
+  const da = order.delivery_address;
   const customerAddress =
     typeof da === 'object' && da
       ? da.formatted_address || da.address || `${da.street ?? ''}, ${da.postal ?? ''} ${da.city ?? ''}`.trim().replace(/^,\s*/, '')
@@ -97,7 +104,6 @@ export function ActiveDeliveryCard({
   const restaurantLng = order.restaurant_longitude;
 
   const isPickedUp = order.status === 'picked_up';
-  const isReady = order.status === 'ready';
   const isDelivered = order.status === 'delivered';
   const isAtPickupPhase = ['pending', 'confirmed', 'preparing', 'ready'].includes(order.status);
   const isAtDeliveryPhase = isPickedUp;

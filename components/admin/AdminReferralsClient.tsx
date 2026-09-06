@@ -10,7 +10,7 @@ import { AdminLayout, type AdminUser } from './AdminLayout';
 import type { Locale } from '@/lib/i18n/server-translations';
 
 interface AdminReferralsClientProps {
-  referrals: any[];
+  referrals: ReferralRecord[];
   stats: {
     totalReferrals: number;
     completed: number;
@@ -20,6 +20,15 @@ interface AdminReferralsClientProps {
   };
   user: AdminUser;
   locale?: Locale;
+}
+
+interface ReferralRecord {
+  id: string;
+  referee_email: string;
+  code: string;
+  status: string;
+  created_at: string;
+  users?: { name?: string | null } | null;
 }
 
 export function AdminReferralsClient({ referrals, stats, user, locale }: AdminReferralsClientProps) {

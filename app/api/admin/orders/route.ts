@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminRole } from '@/lib/rbac';
 import { createServiceClient } from '@/lib/supabase/service';
 import { toSafeInt } from '@/lib/validation';
+import { safeErrorMessage } from '@/lib/api/safe-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,9 +39,21 @@ export async function GET(request: NextRequest) {
       // v80 audit fix: escape user input (PostgREST filter injection)
       const { escapeIlike } = await import('@/lib/api/escape-ilike');
       const safe = escapeIlike(search);
-      query = query.or(
-        `order_number.ilike.%${safe}%,restaurants.name.ilike.%${safe}%`,
-      );
+      // PostgREST cannot apply an `or` filter to an embedded relation using
+      // `restaurants.name`; doing so made every admin order-number search
+      // return HTTP 500. Resolve matching restaurant IDs first and keep the
+      // final filter on columns of the orders table.
+      const { data: matchedRestaurants, error: restaurantSearchError } = await svc
+        .from('restaurants')
+        .select('id')
+        .ilike('name', `%${safe}%`)
+        .limit(100);
+      if (restaurantSearchError) throw restaurantSearchError;
+      const restaurantIds = (matchedRestaurants ?? []).map((row) => row.id);
+      query = query.or([
+        `order_number.ilike.%${safe}%`,
+        ...(restaurantIds.length ? [`restaurant_id.in.(${restaurantIds.join(',')})`] : []),
+      ].join(','));
     }
 
     const { data, count, error } = await query;
@@ -53,9 +66,9 @@ export async function GET(request: NextRequest) {
       limit,
       offset,
     });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: safeErrorMessage(error) },
       { status: 500 },
     );
   }

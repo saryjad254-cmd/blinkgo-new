@@ -24,7 +24,8 @@
  * matches accordingly.
  */
 import { createServerClient } from '@/lib/supabase/server';
-import { AppError, NotFoundError, AuthorizationError } from '@/lib/errors';
+import { createServiceClient } from '@/lib/supabase/service';
+import { AppError, NotFoundError, AuthorizationError } from '@/lib/foundation';
 import type { AuthedUser } from '@/lib/auth-helper';
 
 /**
@@ -44,60 +45,50 @@ function isAdmin(user: AnyAuthed): boolean {
 /** Assert the user can read an order. Customer owns the order,
  *  restaurant owner owns the restaurant, driver is assigned,
  *  or admin override. Returns the order row for convenience. */
-export async function assertCanReadOrder(
-  user: AnyAuthed,
-  orderId: string,
-): Promise<{
+type OwnerRelation = { owner_id?: string | null } | Array<{ owner_id?: string | null }> | null;
+type OrderOwnershipRow = {
   id: string;
   customer_id: string;
   restaurant_id: string;
   driver_id: string | null;
-  status: string;
-  total: number;
-  payment_method: string | null;
-  payment_status: string | null;
-  stripe_payment_intent_id: string | null;
-  points_redeemed: number | null;
-  order_number: string | null;
-  cancelled_at: string | null;
-  cancellation_reason: string | null;
-  delivery_fee: number | null;
-  service_fee: number | null;
-  tip: number | null;
-  delivery_address: any;
-  delivery_instructions: string | null;
-  items?: any[];
-  restaurant?: any;
-  [k: string]: any;
-}> {
-  const supabase = createServerClient();
-  // Select the order with the common fields used by callers. We use a
-  // single .select() so callers don't need a follow-up query.
+  restaurant?: OwnerRelation;
+};
+
+function relationOwner(relation: OwnerRelation | undefined): string | null {
+  return (Array.isArray(relation) ? relation[0]?.owner_id : relation?.owner_id) ?? null;
+}
+
+export async function assertCanReadOrder(user: AnyAuthed, orderId: string): Promise<void> {
+  // Authentication has already been established by the route guard and the
+  // authenticated user is passed explicitly. Use the service client here so
+  // ownership checks behave identically for cookie sessions and mobile/API
+  // Bearer tokens, then enforce the relationship below before returning data.
+  const supabase = createServiceClient();
   const { data: order, error } = await supabase
     .from('orders')
-    .select('id, customer_id, restaurant_id, driver_id, status, total, payment_method, payment_status, stripe_payment_intent_id, points_redeemed, order_number, cancelled_at, cancellation_reason, delivery_fee, service_fee, tip, delivery_address, delivery_instructions, items:order_items(id, product_id, quantity, price, name, subtotal), restaurant:restaurants!orders_restaurant_id_fkey(owner_id)')
+    .select('id, customer_id, restaurant_id, driver_id, restaurant:restaurants!orders_restaurant_id_fkey(owner_id)')
     .eq('id', orderId)
     .maybeSingle();
   if (error) throw new AppError('Database error', { statusCode: 500, code: 'DB_ERROR' });
   if (!order) throw new NotFoundError('Order');
+  const ownership = order as unknown as OrderOwnershipRow;
 
-  if (isAdmin(user)) return order as any;
+  if (isAdmin(user)) return;
 
-  const isCustomer = order.customer_id === user.id;
-  const ownerId = (order.restaurant as any)?.owner_id;
+  const isCustomer = ownership.customer_id === user.id;
+  const ownerId = relationOwner(ownership.restaurant);
   const isRestaurant = ownerId === user.id;
-  const isDriver = order.driver_id === user.id;
+  const isDriver = ownership.driver_id === user.id;
 
   if (!isCustomer && !isRestaurant && !isDriver) {
     throw new AuthorizationError('You do not have access to this order');
   }
-  return order as any;
 }
 
 /** Assert the user can read a restaurant. Public-by-default for read; only
  *  the owner (or admin) can update. The caller decides read vs write. */
 export async function assertCanReadRestaurant(user: AnyAuthed, restaurantId: string): Promise<{ ownerId: string }> {
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: rest, error } = await supabase
     .from('restaurants')
     .select('id, owner_id, is_active')
@@ -137,15 +128,15 @@ export async function assertCanReadUser(user: AnyAuthed, userId: string): Promis
 /** Assert the user can read an address. Self or admin. */
 export async function assertCanReadAddress(user: AnyAuthed, addressId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: addr, error } = await supabase
     .from('customer_addresses')
-    .select('id, user_id')
+    .select('id, customer_id')
     .eq('id', addressId)
     .maybeSingle();
   if (error) throw new AppError('Database error', { statusCode: 500, code: 'DB_ERROR' });
   if (!addr) throw new NotFoundError('Address');
-  if (addr.user_id !== user.id) {
+  if (addr.customer_id !== user.id) {
     throw new AuthorizationError('You can only access your own addresses');
   }
 }
@@ -154,7 +145,7 @@ export async function assertCanReadAddress(user: AnyAuthed, addressId: string): 
  *  we verify the user can read that order. */
 export async function assertCanReadPayment(user: AnyAuthed, paymentId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: pay, error } = await supabase
     .from('payments')
     .select('id, order_id')
@@ -169,7 +160,7 @@ export async function assertCanReadPayment(user: AnyAuthed, paymentId: string): 
 /** Assert the user can read a notification. Self or admin. */
 export async function assertCanReadNotification(user: AnyAuthed, notificationId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: notif, error } = await supabase
     .from('notifications')
     .select('id, user_id')
@@ -185,7 +176,7 @@ export async function assertCanReadNotification(user: AnyAuthed, notificationId:
 /** Assert the user can read a favorite. Self or admin. */
 export async function assertCanReadFavorite(user: AnyAuthed, favoriteId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: fav, error } = await supabase
     .from('favorites')
     .select('id, user_id')
@@ -202,7 +193,7 @@ export async function assertCanReadFavorite(user: AnyAuthed, favoriteId: string)
  *  the customer who placed the order or the restaurant can read it, or admin. */
 export async function assertCanReadRating(user: AnyAuthed, ratingId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: rating, error } = await supabase
     .from('ratings')
     .select('id, order_id, customer_id')
@@ -217,7 +208,7 @@ export async function assertCanReadRating(user: AnyAuthed, ratingId: string): Pr
       .select('restaurant_id, restaurants(owner_id)')
       .eq('id', rating.order_id)
       .maybeSingle();
-    const ownerId = (order?.restaurants as any)?.owner_id;
+    const ownerId = relationOwner(order?.restaurants as unknown as OwnerRelation);
     if (ownerId !== user.id) {
       throw new AuthorizationError('You can only access ratings for your own orders or restaurant');
     }
@@ -227,7 +218,7 @@ export async function assertCanReadRating(user: AnyAuthed, ratingId: string): Pr
 /** Assert the user can read a loyalty transaction. Self or admin. */
 export async function assertCanReadLoyalty(user: AnyAuthed, transactionId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: tx, error } = await supabase
     .from('loyalty_transactions')
     .select('id, user_id')
@@ -243,7 +234,7 @@ export async function assertCanReadLoyalty(user: AnyAuthed, transactionId: strin
 /** Assert the user can read a support ticket. Self or admin. */
 export async function assertCanReadTicket(user: AnyAuthed, ticketId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: t, error } = await supabase
     .from('support_tickets')
     .select('id, user_id')
@@ -259,7 +250,7 @@ export async function assertCanReadTicket(user: AnyAuthed, ticketId: string): Pr
 /** Assert the user can read a share-link. Self or admin. */
 export async function assertCanReadShareLink(user: AnyAuthed, shareLinkId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: sl, error } = await supabase
     .from('share_links')
     .select('id, user_id')
@@ -275,7 +266,7 @@ export async function assertCanReadShareLink(user: AnyAuthed, shareLinkId: strin
 /** Assert the user can read a driver_working_hours row. Self or admin. */
 export async function assertCanReadDriverHours(user: AnyAuthed, hoursId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: h, error } = await supabase
     .from('driver_working_hours')
     .select('id, driver_id')
@@ -291,7 +282,7 @@ export async function assertCanReadDriverHours(user: AnyAuthed, hoursId: string)
 /** Assert the user can read a push subscription. Self or admin. */
 export async function assertCanReadPushSubscription(user: AnyAuthed, subId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: ps, error } = await supabase
     .from('push_subscriptions')
     .select('id, user_id')
@@ -308,7 +299,7 @@ export async function assertCanReadPushSubscription(user: AnyAuthed, subId: stri
  *  the submitter (if authenticated) or admin can read. */
 export async function assertCanReadExpansionRequest(user: AnyAuthed, reqId: string): Promise<void> {
   if (isAdmin(user)) return;
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: er, error } = await supabase
     .from('expansion_requests')
     .select('id, user_id')

@@ -1,117 +1,86 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
+import { resolveOwnedRestaurant } from '@/lib/services/restaurant-context';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * POST /api/restaurant/busy-mode
- * Body: { busy: boolean, minutes?: number }
- * Toggle busy mode for the current restaurant.
- */
+type RestaurantBusyState = {
+  id: string;
+  is_active?: boolean | null;
+  is_paused?: boolean | null;
+  busy_mode?: boolean | null;
+  busy_mode_until?: string | null;
+};
+
+function messageOf(error: unknown) {
+  return error instanceof Error ? error.message : 'Restaurant busy mode failed';
+}
+
+async function ownedRestaurant(userId: string): Promise<{ data: RestaurantBusyState | null; error: unknown }> {
+  const { service, restaurantId } = await resolveOwnedRestaurant(userId);
+  if (!restaurantId) return { data: null, error: null };
+  const result = await service
+    .from('restaurants')
+    .select('id, is_active, is_paused, busy_mode, busy_mode_until')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  return { data: result.data as RestaurantBusyState | null, error: result.error };
+}
+
 export async function POST(request: NextRequest) {
   const user = await requireApiRole('restaurant');
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'UNAUTHORIZED', code: 'NOT_RESTAURANT' }, { status: 403 });
-  }
-  try {
-    const body = await request.json();
-    const busy: boolean = !!body.busy;
-    const minutes: number = Math.max(1, Math.min(480, Number(body.minutes ?? 15)));
+  if (!user) return NextResponse.json({ ok: false, error: { message: 'Unauthorized' } }, { status: 403 });
 
-    const svc = createServiceClient();
-    const { data: restaurant } = await svc
-      .from('restaurants')
-      .select('id, owner_id')
-      .eq('owner_id', user.id)
-      .maybeSingle();
-    if (!restaurant) {
-      return NextResponse.json({ ok: false, error: 'NO_RESTAURANT' }, { status: 404 });
+  try {
+    const body: unknown = await request.json();
+    if (!body || typeof body !== 'object' || typeof (body as { busy?: unknown }).busy !== 'boolean') {
+      return NextResponse.json({ ok: false, error: { message: 'busy must be a boolean' } }, { status: 400 });
+    }
+    const busy = (body as { busy: boolean }).busy;
+    const rawMinutes = Number((body as { minutes?: unknown }).minutes ?? 15);
+    if (!Number.isFinite(rawMinutes)) return NextResponse.json({ ok: false, error: { message: 'minutes must be numeric' } }, { status: 400 });
+    const minutes = Math.max(1, Math.min(480, Math.round(rawMinutes)));
+
+    const current = await ownedRestaurant(user.id);
+    if (current.error) throw current.error;
+    if (!current.data) return NextResponse.json({ ok: false, error: { message: 'Restaurant not found' } }, { status: 404 });
+    if (busy && (current.data.is_active === false || current.data.is_paused === true)) {
+      return NextResponse.json({ ok: false, error: { message: 'Open the restaurant before enabling busy mode' } }, { status: 409 });
     }
 
     const until = busy ? new Date(Date.now() + minutes * 60_000).toISOString() : null;
-
-    let columnExists = true;
-    try {
-      const { error: probeErr } = await svc
-        .from('restaurants')
-        .select('busy_mode')
-        .eq('id', restaurant.id)
-        .limit(1);
-      if (probeErr && probeErr.message?.includes('column')) columnExists = false;
-    } catch {
-      columnExists = false;
-    }
-    if (!columnExists) {
-      return NextResponse.json({
-        ok: true,
-        busyMode: busy,
-        busyModeUntil: until,
-        storage: 'pending_migration',
-      });
-    }
-
-    const { data, error } = await svc
+    const { data, error } = await createServiceClient()
       .from('restaurants')
-      .update({
-        busy_mode: busy,
-        busy_mode_until: until,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', restaurant.id)
+      .update({ busy_mode: busy, busy_mode_until: until, updated_at: new Date().toISOString() })
+      .eq('id', current.data.id)
       .select('busy_mode, busy_mode_until')
       .single();
+    if (error) throw error;
 
-    if (error) {
-      return NextResponse.json({
-        ok: true,
-        busyMode: busy,
-        busyModeUntil: until,
-        storage: 'pending_migration',
-      });
-    }
-
-    return NextResponse.json({
-      ok: true,
-      busyMode: data?.busy_mode ?? busy,
-      busyModeUntil: data?.busy_mode_until ?? until,
-    });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? 'Error' }, { status: 500 });
+    return NextResponse.json({ ok: true, busyMode: data?.busy_mode ?? busy, busyModeUntil: data?.busy_mode_until ?? until });
+  } catch (error) {
+    console.error('[restaurant/busy-mode] update failed', messageOf(error));
+    return NextResponse.json({ ok: false, error: { message: 'Could not update busy mode' } }, { status: 500 });
   }
 }
 
 export async function GET() {
   const user = await requireApiRole('restaurant');
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 403 });
-  }
-  try {
-    const svc = createServiceClient();
-    let { data: restaurant } = await svc
-      .from('restaurants')
-      .select('id, busy_mode, busy_mode_until, is_paused')
-      .eq('owner_id', user.id)
-      .maybeSingle();
+  if (!user) return NextResponse.json({ ok: false, error: { message: 'Unauthorized' } }, { status: 403 });
 
-    if (!restaurant) {
-      const fallback = await svc
-        .from('restaurants')
-        .select('id, is_paused')
-        .eq('owner_id', user.id)
-        .maybeSingle();
-      if (!fallback.data) {
-        return NextResponse.json({ ok: false, error: 'NO_RESTAURANT' }, { status: 404 });
-      }
-      restaurant = { ...fallback.data, busy_mode: false, busy_mode_until: null } as any;
-    }
+  try {
+    const result = await ownedRestaurant(user.id);
+    if (result.error) throw result.error;
+    if (!result.data) return NextResponse.json({ ok: false, error: { message: 'Restaurant not found' } }, { status: 404 });
     return NextResponse.json({
       ok: true,
-      busyMode: !!(restaurant as any).busy_mode,
-      busyModeUntil: (restaurant as any).busy_mode_until,
-      isPaused: !!(restaurant as any).is_paused,
+      busyMode: Boolean(result.data.busy_mode),
+      busyModeUntil: result.data.busy_mode_until ?? null,
+      isPaused: Boolean(result.data.is_paused),
     });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? 'Error' }, { status: 500 });
+  } catch (error) {
+    console.error('[restaurant/busy-mode] read failed', messageOf(error));
+    return NextResponse.json({ ok: false, error: { message: 'Could not read busy mode' } }, { status: 500 });
   }
 }

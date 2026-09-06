@@ -13,11 +13,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { createServerClient } from '@/lib/supabase/server';
-import { ok, fail, withErrorHandling } from '@/lib/api/response';
+import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity, type AuthedContext } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { assertCanReadOrder } from '@/lib/api/ownership';
-import { AuthenticationError, AuthorizationError, ValidationError, NotFoundError, ConflictError } from '@/lib/errors';
+import { ValidationError, NotFoundError, ConflictError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 
 export const runtime = 'nodejs';
@@ -25,10 +25,8 @@ export const dynamic = 'force-dynamic';
 
 const ALLOWED_STATUSES = ['pending', 'confirmed'];
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   return (await withSecurity(
     secureRoute('moderate', ['customer', 'admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -46,7 +44,7 @@ async function modifyOrder(
     await assertCanReadOrder(ctx.auth.user, orderId);
 
     // 2) Get order
-    const supabaseAuth = createServerClient();
+    const supabaseAuth = await createServerClient();
     const { data: order, error: orderErr } = await supabaseAuth
       .from('orders')
       .select('id, customer_id, status, total, tip, delivery_fee, service_fee, delivery_address, delivery_instructions, items:order_items(id, product_id, quantity, price, name, subtotal)')
@@ -118,7 +116,7 @@ async function modifyOrder(
         .select('subtotal')
         .eq('order_id', order.id);
       const itemsSubtotal = (currentItems ?? []).reduce(
-        (acc, it: any) => acc + Number(it.subtotal ?? 0),
+        (acc, item) => acc + Number(item.subtotal ?? 0),
         0,
       );
       newTotal = itemsSubtotal + Number(order.delivery_fee ?? 0) + Number(order.service_fee ?? 0) + Number(order.tip ?? 0);
@@ -173,9 +171,12 @@ async function modifyOrder(
         .select('restaurant_id, restaurants:restaurant_id(owner_id)')
         .eq('id', order.id)
         .single();
-      if (restaurant?.restaurants && (restaurant.restaurants as any).owner_id) {
+      const restaurantRelation = Array.isArray(restaurant?.restaurants)
+        ? restaurant.restaurants[0]
+        : restaurant?.restaurants;
+      if (restaurantRelation?.owner_id) {
         await svc.from('notifications').insert({
-          user_id: (restaurant.restaurants as any).owner_id,
+          user_id: restaurantRelation.owner_id,
           type: 'order_modified',
           title: 'Bestellung geändert',
           body: `Kunde hat die Bestellung #${order.id.slice(0, 8)} geändert`,

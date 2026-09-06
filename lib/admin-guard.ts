@@ -1,107 +1,77 @@
 /**
  * Admin Guard — Secure Server-Side Auth Helpers
  * ─────────────────────────────────────────────
- * - `requireAdminOrDev` → Allows admin OR if ENABLE_DEV_BYPASS=true
- * - `requireAdmin` → Requires authenticated admin (always)
- * - `requireAuth` → Requires any authenticated user (always)
- *
- * SECURITY:
- *   - JWT signature is verified via Supabase server client (createServerClient).
- *   - Role is read from public.users (NEVER from user_metadata).
- *   - is_active is enforced — disabled accounts are rejected.
- *   - Dev bypass requires explicit opt-in via ENABLE_DEV_BYPASS=true.
+ * Built on @/lib/foundation: uses fail() and Foundation error types.
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
 import { getApiUserWithRole } from './auth-helper';
+import type { ApiAuthResult, AuthProfile } from './auth-helper';
+import { fail, AuthenticationError, AuthorizationError, log } from '@/lib/foundation';
 
 const DEV_BYPASS_ENABLED = process.env.ENABLE_DEV_BYPASS === 'true';
 
 export interface AdminGuardResult {
   ok: boolean;
-  auth?: { user: any; profile: any };
+  auth?: ApiAuthResult;
   error?: NextResponse;
 }
 
-function isActiveAccount(profile: any): boolean {
+function isActiveAccount(profile: AuthProfile): boolean {
   return profile && profile.is_active !== false;
 }
 
-/**
- * Allow if:
- *   1. User is authenticated AND has admin role AND is active
- *   2. OR ENABLE_DEV_BYPASS=true is set (dev only)
- */
-export async function requireAdminOrDev(request?: NextRequest): Promise<AdminGuardResult> {
+export async function requireAdminOrDev(_request?: NextRequest): Promise<AdminGuardResult> {
+  void _request;
   if (DEV_BYPASS_ENABLED && process.env.NODE_ENV !== 'production') {
-    return { ok: true, auth: { user: { id: 'dev' }, profile: { role: 'admin' } } };
+    log.warn('admin.dev_bypass_active');
+    return {
+      ok: true,
+      auth: {
+        user: { id: 'dev', email: null, role: 'admin', name: 'Development admin', isActive: true, isVerified: true },
+        profile: { id: 'dev', email: null, name: 'Development admin', role: 'admin', is_active: true, is_verified: true },
+      },
+    };
   }
 
   const auth = await getApiUserWithRole();
   if (!auth) {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 }),
-    };
+    return { ok: false, error: fail(new AuthenticationError()) };
   }
-  if (auth.profile?.role !== 'admin' && auth.profile?.role !== 'super_admin' && auth.profile?.role !== 'manager') {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'ADMIN_ONLY' }, { status: 403 }),
-    };
+  const role = auth.profile?.role;
+  if (role !== 'admin' && role !== 'super_admin' && role !== 'manager') {
+    return { ok: false, error: fail(new AuthorizationError('Admin access required')) };
   }
   if (!isActiveAccount(auth.profile)) {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'ACCOUNT_DISABLED' }, { status: 403 }),
-    };
+    return { ok: false, error: fail(new AuthorizationError('Account is disabled')) };
   }
   return { ok: true, auth };
 }
 
-/**
- * Require authenticated admin (no dev bypass).
- * Use for: admin dashboard endpoints, sensitive operations.
- */
-export async function requireAdmin(request?: NextRequest): Promise<AdminGuardResult> {
+export async function requireAdmin(_request?: NextRequest): Promise<AdminGuardResult> {
+  void _request;
   const auth = await getApiUserWithRole();
   if (!auth) {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 }),
-    };
+    return { ok: false, error: fail(new AuthenticationError()) };
   }
-  if (auth.profile?.role !== 'admin' && auth.profile?.role !== 'super_admin' && auth.profile?.role !== 'manager') {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'ADMIN_ONLY' }, { status: 403 }),
-    };
+  const role = auth.profile?.role;
+  if (role !== 'admin' && role !== 'super_admin' && role !== 'manager') {
+    return { ok: false, error: fail(new AuthorizationError('Admin access required')) };
   }
   if (!isActiveAccount(auth.profile)) {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'ACCOUNT_DISABLED' }, { status: 403 }),
-    };
+    return { ok: false, error: fail(new AuthorizationError('Account is disabled')) };
   }
   return { ok: true, auth };
 }
 
-/**
- * Require any authenticated, active user.
- */
-export async function requireAuth(request?: NextRequest): Promise<AdminGuardResult> {
+export async function requireAuth(_request?: NextRequest): Promise<AdminGuardResult> {
+  void _request;
   const auth = await getApiUserWithRole();
   if (!auth) {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 401 }),
-    };
+    return { ok: false, error: fail(new AuthenticationError()) };
   }
   if (!isActiveAccount(auth.profile)) {
-    return {
-      ok: false,
-      error: NextResponse.json({ ok: false, error: 'ACCOUNT_DISABLED' }, { status: 403 }),
-    };
+    return { ok: false, error: fail(new AuthorizationError('Account is disabled')) };
   }
   return { ok: true, auth };
 }

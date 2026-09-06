@@ -20,11 +20,14 @@ import crypto from 'crypto';
 import { createServiceClient } from '@/lib/supabase/service';
 import { authRateLimiters } from '@/lib/rate-limit';
 import { isValidEmail, sanitizeEmail } from '@/lib/validation';
-import { ok, withErrorHandling, fail } from '@/lib/api/response';
+import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { logger } from '@/lib/logging';
 import { getCanonicalBaseUrl } from '@/lib/auth/redirect-url';
+import { getEmailRouter } from '@/lib/integrations/email/router';
+import { assertTrustedEmailUrl, emailIdempotencyKey, normalizeEmailLocale } from '@/lib/integrations/email/safety';
+import { buildBlinkGoBrandedEmail } from '@/lib/integrations/email/branding';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,50 +39,52 @@ function getServiceClient() {
 }
 
 function buildMagicLinkEmailHtml(link: string, expiresInMin: number, locale: string): string {
+  const safeLocale = normalizeEmailLocale(locale);
+  const trustedLink = assertTrustedEmailUrl(link);
   const t = {
     de: { title: 'Dein BlinkGo Anmelde-Link', greeting: 'Hallo!', body: 'Klicke auf den Button um dich bei BlinkGo anzumelden:', cta: 'Bei BlinkGo anmelden', copy: 'Oder kopiere diesen Link:', footer: `Der Link ist ${expiresInMin} Minuten gültig und kann nur einmal verwendet werden.` },
     ar: { title: 'رابط تسجيل الدخول إلى BlinkGo', greeting: 'مرحباً!', body: 'انقر على الزر لتسجيل الدخول إلى BlinkGo:', cta: 'تسجيل الدخول إلى BlinkGo', copy: 'أو انسخ هذا الرابط:', footer: `الرابط صالح لمدة ${expiresInMin} دقيقة ويمكن استخدامه مرة واحدة فقط.` },
     en: { title: 'Your BlinkGo Sign-in Link', greeting: 'Hello!', body: 'Click the button to sign in to BlinkGo:', cta: 'Sign in to BlinkGo', copy: 'Or copy this link:', footer: `This link is valid for ${expiresInMin} minutes and can be used only once.` },
   };
-  const c = t[locale as 'de' | 'ar' | 'en'] ?? t.de;
-  return `
-    <div dir="${locale === 'ar' ? 'rtl' : 'ltr'}" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 480px; margin: 0 auto; padding: 32px 16px; background: #0a0a0a; color: #f5f5f5;">
-      <div style="text-align: center; margin-bottom: 24px;">
-        <h1 style="background: linear-gradient(135deg, #DC2626, #ef4444); -webkit-background-clip: text; -webkit-text-fill-color: transparent; font-size: 32px; margin: 0;">BlinkGo</h1>
-      </div>
-      <h2 style="color: #f5f5f5; font-size: 22px; margin: 0 0 16px;">${c.greeting}</h2>
-      <p style="color: #d4d4d4; font-size: 16px; line-height: 1.5;">${c.body}</p>
-      <a href="${link}" style="display: inline-block; background: linear-gradient(135deg, #DC2626 0%, #ef4444 100%); color: white; padding: 14px 28px; border-radius: 12px; text-decoration: none; font-weight: bold; margin: 24px 0;">${c.cta}</a>
-      <p style="color: #a3a3a3; font-size: 14px;">${c.copy}</p>
-      <p style="background: #171717; padding: 12px; border-radius: 8px; word-break: break-all; font-size: 12px; color: #d4d4d4; border: 1px solid #262626;">${link}</p>
-      <p style="color: #737373; font-size: 12px; margin-top: 24px;">${c.footer}</p>
-    </div>
-  `;
+  const c = t[safeLocale];
+  const securityNote = {
+    de: 'Wenn du diese Anmeldung nicht angefordert hast, kannst du diese E-Mail sicher ignorieren.',
+    ar: 'إذا لم تطلب تسجيل الدخول هذا، يمكنك تجاهل هذه الرسالة بأمان.',
+    en: 'If you did not request this sign-in, you can safely ignore this email.',
+  }[safeLocale];
+  return buildBlinkGoBrandedEmail({
+    locale: safeLocale,
+    preheader: c.title,
+    headline: c.title,
+    paragraphs: [c.greeting, c.body, c.footer],
+    cta: { label: c.cta, url: trustedLink },
+    fallbackLabel: c.copy,
+    securityNote,
+  });
 }
 
 async function sendMagicLinkEmail(to: string, link: string, locale: string): Promise<boolean> {
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) {
-    logger.info('Magic link (no email service configured):', { to, link });
-    return true;
-  }
   try {
-    const { Resend } = await import('resend');
-    const r = new Resend(resendKey);
+    const safeLocale = normalizeEmailLocale(locale);
+    const trustedLink = assertTrustedEmailUrl(link);
     const subject = {
       de: 'Dein BlinkGo Anmelde-Link',
       ar: 'رابط تسجيل الدخول إلى BlinkGo',
       en: 'Your BlinkGo Sign-in Link',
-    }[locale] || 'Your BlinkGo Sign-in Link';
-    await r.emails.send({
-      from: process.env.EMAIL_FROM || 'BlinkGo <noreply@blinkgo.de>',
+    }[safeLocale];
+    const result = await getEmailRouter().send({
+      from: process.env.EMAIL_FROM || 'BlinkGo <auth@blinkgo.de>',
+      reply_to: process.env.COMPANY_SUPPORT_EMAIL || undefined,
       to,
       subject,
-      html: buildMagicLinkEmailHtml(link, TOKEN_TTL_MIN, locale),
+      html: buildMagicLinkEmailHtml(trustedLink, TOKEN_TTL_MIN, safeLocale),
+      text: `${subject}\n\n${trustedLink}`,
+      tags: { type: 'magic_link', locale: safeLocale },
+      idempotency_key: emailIdempotencyKey('magic-link', trustedLink),
     });
-    return true;
+    return result.success;
   } catch (e) {
-    logger.error('Magic link email send failed', { err: String(e) });
+    logger.error('Magic link email send failed', { error_type: e instanceof Error ? e.name : 'unknown' });
     return false;
   }
 }
@@ -105,6 +110,21 @@ async function magicLinkHandler(req: NextRequest): Promise<NextResponse> {
       return ok({ sent: true });
     }
 
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      const requestId = `magic-${crypto.randomBytes(6).toString('hex')}`;
+      return NextResponse.json(
+        {
+          ok: false,
+          error: {
+            code: 'MAGIC_LINK_UNAVAILABLE',
+            message: 'Magic link is not configured',
+            requestId,
+          },
+        },
+        { status: 503, headers: { 'X-Request-Id': requestId } },
+      );
+    }
+
     const supabase = getServiceClient();
     const { data: user } = await supabase
       .from('users')
@@ -113,7 +133,7 @@ async function magicLinkHandler(req: NextRequest): Promise<NextResponse> {
       .maybeSingle();
 
     if (!user || !user.is_active) {
-      logger.info('Magic link requested for non-existent or inactive user', { email });
+      logger.info('Magic link requested for non-existent or inactive user');
       return ok({ sent: true });
     }
 

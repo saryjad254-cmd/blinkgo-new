@@ -1,14 +1,17 @@
 /**
- * Logging — barrel export
- * ────────────────────────
- * Single import point for all logging concerns.
- * The actual implementation lives in lib/logging/logger.ts
- * (PII redaction, request context, performance timing).
+ * @deprecated — re-export from @/lib/foundation.
+ * Use `import { log, logger, generateRequestId, startTimer } from '@/lib/foundation'`.
  */
-
 export {
+  log,
   logger,
   generateRequestId,
   startTimer,
+  ConsoleLogger,
+  setLevel,
+  getLevel,
+  withRequestLogger,
   type LogContext,
-} from './logging/logger';
+  type LogLevel,
+  type Logger,
+} from '@/lib/foundation/logger';

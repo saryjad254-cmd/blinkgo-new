@@ -1,0 +1,84 @@
+[
+  {
+    "id": "pizza",
+    "category": "food",
+    "canonical": "pizza",
+    "synonyms": [
+      { "term": "pizza", "locale": "en" },
+      { "term": "pizza", "locale": "de" },
+      { "term": "pizzen", "locale": "de" },
+      { "term": "pizze", "locale": "it" },
+      { "term": "pizzeria", "locale": "it" },
+      { "term": "pizzaria", "locale": "en" },
+      { "term": "بيتز", "locale": "ar" },
+      { "term": "بيتزا", "locale": "ar" },
+      { "term": "بيطسا", "locale": "ar" },
+      { "term": "披萨", "locale": "zh" },
+      { "term": "pitsa", "locale": "ar" }
+    ]
+  },
+  {
+    "id": "burger",
+    "category": "food",
+    "canonical": "burger",
+    "synonyms": [
+      { "term": "burger", "locale": "en" },
+      { "term": "burger", "locale": "de" },
+      { "term": "burgers", "locale": "en" },
+      { "term": "hamburger", "locale": "en" },
+      { "term": "hamburger", "locale": "de" },
+      { "term": "برغر", "locale": "ar" },
+      { "term": "برجر", "locale": "ar" },
+      { "term": "بركر", "locale": "ar" },
+      { "term": "همبرغر", "locale": "ar" },
+      { "term": "汉堡", "locale": "zh" },
+      { "term": "burgar", "locale": "en" }
+    ]
+  },
+  {
+    "id": "fries",
+    "category": "food",
+    "canonical": "fries",
+    "synonyms": [
+      { "term": "fries", "locale": "en" },
+      { "term": "fry", "locale": "en" },
+      { "term": "french fries", "locale": "en" },
+      { "term": "chips", "locale": "en" },
+      { "term": "pommes", "locale": "de" },
+      { "term": "pommes frites", "locale": "de" },
+      { "term": "fritten", "locale": "de" },
+      { "term": "kartoffeln", "locale": "de" },
+      { "term": "بطاطس", "locale": "ar" },
+      { "term": "بوم فريت", "locale": "ar" },
+      { "term": "薯条", "locale": "zh" }
+    ]
+  },
+  {
+    "id": "sushi",
+    "category": "food",
+    "canonical": "sushi",
+    "synonyms": [
+      { "term": "sushi", "locale": "en" },
+      { "term": "sushi", "locale": "de" },
+      { "term": "maki", "locale": "de" },
+      { "term": "nigiri", "locale": "de" },
+      { "term": "sashimi", "locale": "de" },
+      { "term": "سوشي", "locale": "ar" },
+      { "term": "سوشى", "locale": "ar" },
+      { "term": "寿司", "locale": "zh" }
+    ]
+  },
+  {
+    "id": "italian",
+    "category": "cuisine",
+    "canonical": "Italian",
+    "synonyms": [
+      { "term": "italian", "locale": "en" },
+      { "term": "italienisch", "locale": "de" },
+      { "term": "italienishe", "locale": "de" },
+      { "term": "italia", "locale": "it" },
+      { "term": "إيطالي", "locale": "ar" },
+      { "term": "italienisces", "locale": "de" }
+    ]
+  }
+]

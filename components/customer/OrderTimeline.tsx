@@ -30,18 +30,12 @@ function getStepIndex(status: string): number {
   }
 }
 
-function getETA(order: any, _locale: string): string {
-  // Hook into ETA logic if available; fallback to a generic placeholder
-  const avgMins = 25;
-  if (_locale === 'ar') return `~${avgMins} دقيقة`;
-  return `~${avgMins} ${_locale === 'en' ? 'min' : 'Min.'}`;
-}
-
 function OrderTimelineInner({ order }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const sub = t.customer.trackingSubsteps;
+  const isPickup = order.fulfillment_type === 'pickup';
 
-  const steps = [
+  const deliverySteps = [
     { id: 'placed', label: t.customer.orderPlaced, sub: sub?.placed, icon: Package },
     { id: 'confirmed', label: t.customer.orderStatus.confirmed, sub: sub?.confirmed, icon: Store },
     { id: 'preparing', label: t.customer.orderStatus.preparing, sub: sub?.preparing, icon: ChefHat },
@@ -49,9 +43,19 @@ function OrderTimelineInner({ order }: Props) {
     { id: 'picked_up', label: t.customer.driverOnWay, sub: sub?.picked_up, icon: Truck },
     { id: 'delivered', label: t.customer.orderStatus.delivered, sub: sub?.delivered, icon: Home },
   ];
+  const pickupSteps = [
+    { id: 'placed', label: t.customer.orderPlaced, sub: sub?.placed, icon: Package },
+    { id: 'confirmed', label: t.customer.orderStatus.confirmed, sub: sub?.confirmed, icon: Store },
+    { id: 'preparing', label: t.customer.orderStatus.preparing, sub: sub?.preparing, icon: ChefHat },
+    { id: 'ready', label: locale === 'ar' ? 'جاهز للاستلام' : locale === 'en' ? 'Ready for pickup' : 'Abholbereit', sub: locale === 'ar' ? 'توجه إلى المطعم وأظهر رمز الاستلام' : locale === 'en' ? 'Go to the restaurant and show your pickup code' : 'Zum Restaurant gehen und Abholcode zeigen', icon: Check },
+    { id: 'delivered', label: locale === 'ar' ? 'تم الاستلام' : locale === 'en' ? 'Picked up' : 'Abgeholt', sub: locale === 'ar' ? 'تم تسليم الطلب لك' : locale === 'en' ? 'The restaurant handed over your order' : 'Das Restaurant hat die Bestellung übergeben', icon: Home },
+  ];
+  const steps = isPickup ? pickupSteps : deliverySteps;
 
   const isCancelled = order.status === 'cancelled';
-  const currentStepIdx = getStepIndex(order.status);
+  const currentStepIdx = isPickup
+    ? (({ pending: 0, confirmed: 1, preparing: 2, ready: 3, picked_up: 4, delivered: 4 } as Partial<Record<string, number>>)[order.status] ?? 0)
+    : getStepIndex(order.status);
 
   if (isCancelled) {
     return (
@@ -74,7 +78,7 @@ function OrderTimelineInner({ order }: Props) {
   return (
     <div className="card-glass p-5">
       <div className="flex items-center justify-between mb-4">
-        <h3 className="font-extrabold text-text">{t.customer.orderStatus?.delivered ? t.customer.delivery : t.customer.orderPlaced}</h3>
+        <h3 className="font-extrabold text-text">{isPickup ? (locale === 'ar' ? 'الاستلام من المطعم' : locale === 'en' ? 'Restaurant pickup' : 'Selbstabholung') : t.customer.delivery}</h3>
       </div>
       <ol className="relative">
         <div className="absolute top-0 bottom-0 end-5 w-0.5 bg-edge" aria-hidden="true" />
@@ -111,5 +115,6 @@ function OrderTimelineInner({ order }: Props) {
 // Memoize to avoid re-renders when order object hasn't changed
 export const OrderTimeline = memo(OrderTimelineInner, (prev, next) => {
   return prev.order?.status === next.order?.status &&
-         prev.order?.id === next.order?.id;
+         prev.order?.id === next.order?.id &&
+         prev.order?.fulfillment_type === next.order?.fulfillment_type;
 });

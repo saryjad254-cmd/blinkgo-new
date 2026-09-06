@@ -22,21 +22,19 @@ import { useOnlineStatus } from '@/lib/hooks/use-online-status';
 import { apiGet } from '@/lib/api/client';
 import { DriverShiftCard } from './DriverShiftCard';
 import { DriverQuickActions } from './DriverQuickActions';
-import { ActiveDeliveryCardV2 } from './ActiveDeliveryCardV2';
+import { ActiveDeliveryCardV2, type ActiveDeliveryOrder } from './ActiveDeliveryCardV2';
 import { DriverGPSStatusPill } from './DriverGPSStatusPill';
 import { DriverBatteryBanner } from './DriverBatteryBanner';
-import { Skeleton } from '@/components/ui/Skeleton';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { computeETA } from '@/lib/utils/driver-eta';
 import Truck from 'lucide-react/dist/esm/icons/truck';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import { sendDriverLocation } from '@/lib/realtime/location-service';
 
 export interface DriverDashboardV2Props {
   driverId: string;
   driverName: string;
-  initialActiveOrder: any | null;
+  initialActiveOrder: ActiveDeliveryOrder | null;
   initialAvailableCount: number;
   initialShiftEarnings: number;
   initialShiftDeliveries: number;
@@ -45,7 +43,6 @@ export interface DriverDashboardV2Props {
 }
 
 export function DriverDashboardV2({
-  driverId,
   driverName,
   initialActiveOrder,
   initialAvailableCount,
@@ -58,18 +55,14 @@ export function DriverDashboardV2({
   const { locale } = useI18n();
   const [isOnline, setIsOnline] = useState(initialIsOnline);
   const [onlineSince, setOnlineSince] = useState<string | null>(initialOnlineSince);
-  const [activeOrder, setActiveOrder] = useState<any | null>(initialActiveOrder);
-  const [availableCount, setAvailableCount] = useState(initialAvailableCount);
+  const [activeOrder, setActiveOrder] = useState<ActiveDeliveryOrder | null>(initialActiveOrder);
+  const availableCount = initialAvailableCount;
   const [shiftEarnings, setShiftEarnings] = useState(initialShiftEarnings);
   const [shiftDeliveries, setShiftDeliveries] = useState(initialShiftDeliveries);
   const [busy, setBusy] = useState(false);
-  const [eta, setEta] = useState<{ km: number; min: number } | null>(null);
-  const [stage, setStage] = useState<'to_restaurant' | 'at_restaurant' | 'to_customer' | 'at_customer' | 'completed'>(
-    initialActiveOrder ? 'to_restaurant' : 'completed'
-  );
 
   const networkOnline = useOnlineStatus();
-  const wakeLock = useWakeLock(isOnline);
+  useWakeLock(isOnline);
 
   // Smoothed GPS
   const smoothedGPS = useSmoothedGPS({
@@ -91,46 +84,48 @@ export function DriverDashboardV2({
       }).catch(() => {});
     },
   });
+  const gpsFix = smoothedGPS.current;
 
-  // Compute ETA based on current GPS + next waypoint
-  useEffect(() => {
-    if (!smoothedGPS.current || !activeOrder) {
-      setEta(null);
-      return;
-    }
-    const target = stage === 'to_restaurant' || stage === 'at_restaurant'
-      ? { lat: activeOrder.restaurant_latitude, lng: activeOrder.restaurant_longitude }
-      : { lat: activeOrder.customer_latitude, lng: activeOrder.customer_longitude };
-    const result = computeETA(
-      { lat: smoothedGPS.current.lat, lng: smoothedGPS.current.lng },
-      target,
-      'driving-traffic'
-    );
-    setEta({ km: result.distanceKm, min: Math.ceil(result.etaSeconds / 60) });
-  }, [smoothedGPS.current?.lat, smoothedGPS.current?.lng, activeOrder?.id, stage]);
-
-  // Auto-determine stage from active order status
-  useEffect(() => {
-    if (!activeOrder) {
-      setStage('completed');
-      return;
-    }
+  const stage = useMemo<'to_restaurant' | 'at_restaurant' | 'to_customer' | 'at_customer'>(() => {
+    if (!activeOrder) return 'to_restaurant';
     switch (activeOrder.status) {
       case 'pending':
       case 'confirmed':
       case 'preparing':
-        setStage('to_restaurant');
-        break;
+        return 'to_restaurant';
       case 'ready':
-        setStage('at_restaurant');
-        break;
+        return 'at_restaurant';
       case 'picked_up':
-        setStage('to_customer');
-        break;
+      case 'delivering': {
+        if (gpsFix && activeOrder.customer_latitude != null && activeOrder.customer_longitude != null) {
+          const dropoff = computeETA(
+            { lat: gpsFix.lat, lng: gpsFix.lng },
+            { lat: activeOrder.customer_latitude, lng: activeOrder.customer_longitude },
+            'driving-traffic',
+          );
+          if (dropoff.distanceKm <= 0.08) return 'at_customer';
+        }
+        return 'to_customer';
+      }
       default:
-        setStage('to_customer');
+        return 'to_customer';
     }
-  }, [activeOrder?.id, activeOrder?.status]);
+  }, [activeOrder, gpsFix]);
+
+  // ETA is derived from the current fix and order so it cannot drift out of
+  // sync during fast realtime status updates.
+  const eta = (() => {
+    if (!gpsFix || !activeOrder) return null;
+    const target = stage === 'to_restaurant' || stage === 'at_restaurant'
+      ? { lat: activeOrder.restaurant_latitude, lng: activeOrder.restaurant_longitude }
+      : { lat: activeOrder.customer_latitude, lng: activeOrder.customer_longitude };
+    const result = computeETA(
+      { lat: gpsFix.lat, lng: gpsFix.lng },
+      target,
+      'driving-traffic'
+    );
+    return { km: result.distanceKm, min: Math.ceil(result.etaSeconds / 60) };
+  })();
 
   // Toggle online
   const handleToggleOnline = useCallback(async () => {
@@ -186,7 +181,7 @@ export function DriverDashboardV2({
     const interval = setInterval(async () => {
       if (!networkOnline) return;
       try {
-        const ar = await apiGet<any>('/api/driver/active-order', { cacheTtl: 10000 });
+        const ar = await apiGet<{ order: ActiveDeliveryOrder | null }>('/api/driver/active-order', { cacheTtl: 10000 });
         if (ar.ok && ar.data?.order) {
           setActiveOrder(ar.data.order);
         } else {
@@ -204,7 +199,7 @@ export function DriverDashboardV2({
     if (!isOnline) return;
     const interval = setInterval(async () => {
       try {
-        const sr = await apiGet<any>('/api/driver/stats', { cacheTtl: 5000 });
+        const sr = await apiGet<{ todayEarnings?: number; todayDeliveries?: number }>('/api/driver/stats', { cacheTtl: 5000 });
         if (sr.ok && sr.data) {
           setShiftEarnings(Number(sr.data.todayEarnings ?? 0));
           setShiftDeliveries(Number(sr.data.todayDeliveries ?? 0));
@@ -294,7 +289,6 @@ export function DriverDashboardV2({
                 try {
                   const res = await fetch(`/api/driver/orders/${activeOrder.id}/pickup`, { method: 'POST' });
                   if (res.ok) {
-                    const updated = await res.json();
                     setActiveOrder({ ...activeOrder, status: 'picked_up' });
                   }
                 } finally { setBusy(false); }
@@ -305,14 +299,12 @@ export function DriverDashboardV2({
                 window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`, '_blank');
               }
             }}
-            onMarkArrived={() => {/* handled via geofence auto-detection */}}
             onComplete={async () => {
               setBusy(true);
               try {
                 const res = await fetch(`/api/driver/orders/${activeOrder.id}/complete`, { method: 'POST' });
                 if (res.ok) {
                   setActiveOrder(null);
-                  setStage('completed');
                   setShiftDeliveries(c => c + 1);
                   setShiftEarnings(e => e + (activeOrder.tip ?? 0) + (activeOrder.delivery_fee ?? 0));
                 }

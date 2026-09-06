@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const manager = getWebhookManager();
     const result = await manager.test(id);
     return NextResponse.json({ ok: true, ...result });
-  } catch (e) {
+  } catch {
     return NextResponse.json({ ok: false, error: 'Failed' }, { status: 500 });
   }
 }

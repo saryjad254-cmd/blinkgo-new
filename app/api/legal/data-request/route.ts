@@ -7,26 +7,22 @@
  *
  * Behavior:
  *  1. Validate input (type, name, email, length limits)
- *  2. Try to insert into `data_subject_requests` table if it exists
- *     (defensive — schema may be added later, no migration now)
- *  3. Always log the request via structured logger so it appears
- *     in audit trail regardless of schema state
+ *  2. Persist into the service-only `data_subject_requests` table
+ *  3. Log only the opaque request id and type (never request PII)
  *  4. If legal email is configured, attempt to send notification
  *     (optional — never blocks the user response)
  *
  * Rate limit: 5 per IP per hour to prevent abuse.
  *
- * We do NOT add a new table per the v65 architecture freeze.
- * The request is logged + stored as best-effort and routed to
- * the legal contact email.
+ * The legal contact email is an additional alert, not the source of truth.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { logger } from '@/lib/logging';
 import { rateLimit } from '@/lib/rate-limit';
-import { ok, fail, withErrorHandling } from '@/lib/api/response';
-import { ValidationError, RateLimitError } from '@/lib/errors';
+import { ok, withErrorHandling } from '@/lib/api/response';
+import { ValidationError } from '@/lib/errors';
 
 const VALID_TYPES = ['access', 'rectification', 'erasure', 'restriction', 'portability', 'objection', 'consent_withdrawal'];
 
@@ -60,7 +56,7 @@ export async function POST(req: NextRequest) {
 
     const requestId = `dsar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const createdAt = new Date().toISOString();
-    const ip = req.headers.get('x-forwarded-for') || req.headers.get('x-real-ip') || 'unknown';
+    const ip = (req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || '').slice(0, 64) || null;
     const userAgent = req.headers.get('user-agent') || 'unknown';
 
     const record = {
@@ -76,11 +72,7 @@ export async function POST(req: NextRequest) {
       created_at: createdAt,
     };
 
-    // Always log — this is the source of truth in current build
-    logger.info('dsar_submitted', {  ...record  });
-
-    // Try to insert into a possible `data_subject_requests` table.
-    // If the table doesn't exist, this fails silently and we still return ok.
+    // Persist first. Never put DSAR contents, email addresses or IPs in logs.
     let persisted = false;
     try {
       const svc = createServiceClient();
@@ -90,9 +82,8 @@ export async function POST(req: NextRequest) {
       } else {
         logger.warn('dsar_persist_failed', {  error: error.message  });
       }
-    } catch (e: any) {
-      // Table doesn't exist or service not configured — not blocking
-      logger.warn('dsar_persist_skipped', {  reason: e?.message  });
+    } catch (error: unknown) {
+      logger.warn('dsar_persist_skipped', { reason: error instanceof Error ? error.name : 'unknown' });
     }
 
     // Optional: email the legal contact. Best-effort.
@@ -100,19 +91,30 @@ export async function POST(req: NextRequest) {
     try {
       const legalEmail = process.env.COMPANY_LEGAL_EMAIL || process.env.COMPANY_SUPPORT_EMAIL;
       if (legalEmail && process.env.RESEND_API_KEY) {
-        const { Resend } = await import('resend');
-        const resend = new Resend(process.env.RESEND_API_KEY);
-        await resend.emails.send({
-          from: process.env.EMAIL_FROM || 'BlinkGo <onboarding@resend.dev>',
+        const { getEmailRouter } = await import('@/lib/integrations/email/router');
+        const { emailIdempotencyKey } = await import('@/lib/integrations/email/safety');
+        const result = await getEmailRouter().send({
+          from: process.env.EMAIL_FROM || 'BlinkGo <noreply@blinkgo.de>',
           to: legalEmail,
-          subject: `[DSAR] ${type} — ${name}`,
+          subject: `[DSAR] ${type} — ${requestId}`,
           text: `New Data Subject Request\n\nID: ${requestId}\nType: ${type}\nName: ${name}\nEmail: ${email}\nAccount: ${account_email || 'n/a'}\nDetails: ${details || 'n/a'}\nCreated: ${createdAt}\nIP: ${ip}\n`,
+          tags: { type: 'data_subject_request' },
+          idempotency_key: emailIdempotencyKey('dsar', requestId),
         });
-        emailSent = true;
+        emailSent = result.success;
       }
-    } catch (e: any) {
-      logger.warn('dsar_email_failed', {  reason: e?.message  });
+    } catch (error: unknown) {
+      logger.warn('dsar_email_failed', { reason: error instanceof Error ? error.name : 'unknown' });
     }
+
+    if (!persisted) {
+      logger.error('dsar_submission_unavailable', { request_id: requestId, type });
+      return NextResponse.json(
+        { ok: false, error: { code: 'DSAR_UNAVAILABLE', message: 'Your request could not be recorded. Please try again.' } },
+        { status: 503 },
+      );
+    }
+    logger.info('dsar_submitted', { request_id: requestId, type });
 
     return ok({
       request_id: requestId,

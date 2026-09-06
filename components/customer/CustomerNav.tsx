@@ -2,13 +2,11 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import Store from 'lucide-react/dist/esm/icons/store';
+import Home from 'lucide-react/dist/esm/icons/home';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
 import ShoppingCart from 'lucide-react/dist/esm/icons/shopping-cart';
 import UserIcon from 'lucide-react/dist/esm/icons/user';
 import Search from 'lucide-react/dist/esm/icons/search';
-import Heart from 'lucide-react/dist/esm/icons/heart';
-import Bell from 'lucide-react/dist/esm/icons/bell';
 import { useCart } from '@/lib/cart-store';
 import { LogoutButton } from '@/components/shared/LogoutButton';
 import { BlinkLogo } from '@/components/brand/BlinkLogo';
@@ -24,9 +22,8 @@ export function CustomerNav() {
   const itemCount = useCart((s) => s.items.reduce((sum, i) => sum + i.quantity, 0));
 
   const LINKS = [
+    { href: '/home',        icon: Home,        getLabel: () => t.nav.home || 'Home' },
     { href: '/search',      icon: Search,      getLabel: () => t.common.search },
-    { href: '/restaurants', icon: Store,       getLabel: () => t.nav.restaurants },
-    { href: '/favorites',   icon: Heart,       getLabel: () => t.nav.favorites },
     { href: '/orders',      icon: ShoppingBag, getLabel: () => t.nav.orders },
     { href: '/cart',        icon: ShoppingCart, getLabel: () => t.nav.cart, badge: true },
     { href: '/profile',     icon: UserIcon,    getLabel: () => t.nav.profile },
@@ -40,12 +37,11 @@ export function CustomerNav() {
           <div className="flex items-center justify-between h-16">
             {/* Logo — fixed size, never crops, scales on hover */}
             <Link
-              href="/search"
+              href="/home"
               aria-label="BlinkGo home"
-              className="flex items-center transition-transform hover:scale-105 active:scale-95 shrink-0"
-              style={{ width: '140px', height: '48px' }}
+              className="flex min-h-12 shrink-0 items-center rounded-xl transition-transform hover:scale-[1.02] active:scale-[.98]"
             >
-              <BlinkLogo size="md" variant="horizontal" className="w-full h-full" />
+              <BlinkLogo size="md" variant="horizontal" priority />
             </Link>
 
             {/* Nav Links */}
@@ -94,17 +90,11 @@ export function CustomerNav() {
       <header className="md:hidden sticky top-0 z-sticky bg-bg/95 backdrop-blur-2xl border-b border-edge">
         <div className="px-4 py-3 flex items-center justify-between min-h-[56px]">
           <Link
-            href="/search"
+            href="/home"
             aria-label="BlinkGo home"
-            className="flex items-center gap-2 shrink-0"
-            style={{ height: '40px' }}
+            className="flex min-h-11 shrink-0 items-center rounded-xl"
           >
-            <div style={{ width: '40px', height: '40px' }} className="shrink-0">
-              <BlinkLogo size="sm" variant="mark" className="w-full h-full" />
-            </div>
-            <span className="font-black italic text-text-primary text-lg tracking-tighter whitespace-nowrap">
-              Blink<span className="text-brand-red">Go</span>
-            </span>
+            <BlinkLogo size="sm" variant="horizontal" priority />
           </Link>
           <div className="flex items-center gap-1">
             <ThemeToggle />

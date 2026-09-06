@@ -48,14 +48,17 @@ async function oauthHandler(req: NextRequest): Promise<NextResponse> {
     const reqOrigin = req.nextUrl.origin;
 
     if (!provider || !SUPPORTED_PROVIDERS.includes(provider)) {
-      return fail(new Error('INVALID_PROVIDER'));
+      return NextResponse.json(
+        { ok: false, error: { code: 'INVALID_PROVIDER', message: 'Unsupported OAuth provider' } },
+        { status: 400 },
+      );
     }
 
     let appUrl: string;
     try {
       appUrl = getCanonicalBaseUrl(reqOrigin);
-    } catch (e: any) {
-      logger.error('OAuth init: missing APP_URL', { err: e?.message });
+    } catch (error: unknown) {
+      logger.error('OAuth init: missing APP_URL', { err: error instanceof Error ? error.message : String(error) });
       return fail(new Error('APP_URL_NOT_CONFIGURED: Server is missing APP_URL. Contact the operator.'));
     }
 
@@ -63,6 +66,17 @@ async function oauthHandler(req: NextRequest): Promise<NextResponse> {
       `${appUrl}/auth/callback` +
       `?next=${encodeURIComponent(next)}` +
       `&lang=${locale}`;
+
+    if (
+      !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+      !process.env.SUPABASE_SERVICE_ROLE_KEY
+    ) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'OAUTH_UNAVAILABLE', message: 'OAuth is not configured' } },
+        { status: 503 },
+      );
+    }
 
     const supabase = createServiceClient();
 

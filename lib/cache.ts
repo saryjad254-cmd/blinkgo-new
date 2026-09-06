@@ -74,29 +74,30 @@ class LRUCache<K, V> {
 }
 
 // Hot caches (in-memory, in-process)
-export const searchCache = new LRUCache<string, any>(500);
-export const restaurantCache = new LRUCache<string, any>(1000);
-export const categoryCache = new LRUCache<string, any>(100);
-export const userCache = new LRUCache<string, any>(2000);
-export const productCache = new LRUCache<string, any>(2000);
+export const searchCache = new LRUCache<string, unknown>(500);
+export const restaurantCache = new LRUCache<string, unknown>(1000);
+export const categoryCache = new LRUCache<string, unknown>(100);
+export const userCache = new LRUCache<string, unknown>(2000);
+export const productCache = new LRUCache<string, unknown>(2000);
+const genericCache = new LRUCache<string, unknown>(1000);
 
 /**
  * Memoize with TTL — wraps an async function to cache results.
  */
-export function memoize<T extends (...args: any[]) => Promise<any>>(
-  fn: T,
-  keyFn: (...args: Parameters<T>) => string,
+export function memoize<TArgs extends unknown[], TResult>(
+  fn: (...args: TArgs) => Promise<TResult>,
+  keyFn: (...args: TArgs) => string,
   ttlMs: number = 60_000,
-  cache: LRUCache<string, any> = new LRUCache(1000),
-): T {
-  return (async (...args: Parameters<T>) => {
+  cache: LRUCache<string, TResult> = new LRUCache<string, TResult>(1000),
+): (...args: TArgs) => Promise<TResult> {
+  return async (...args: TArgs) => {
     const key = keyFn(...args);
     const cached = cache.get(key);
     if (cached !== null) return cached;
     const result = await fn(...args);
     cache.set(key, result, ttlMs);
     return result;
-  }) as T;
+  };
 }
 
 /**
@@ -148,15 +149,17 @@ export function cacheKey(method: string, url: string, userId?: string): string {
 /**
  * Get a cache by name (for backwards compatibility).
  */
-export function getCache(name: string = 'default'): LRUCache<string, any> {
+export function getCache<T = unknown>(name: string = 'default'): LRUCache<string, T> {
+  let selected: LRUCache<string, unknown>;
   switch (name) {
-    case 'search': return searchCache;
-    case 'restaurants': return restaurantCache;
-    case 'categories': return categoryCache;
-    case 'users': return userCache;
-    case 'products': return productCache;
-    default: return new LRUCache(1000);
+    case 'search': selected = searchCache; break;
+    case 'restaurants': selected = restaurantCache; break;
+    case 'categories': selected = categoryCache; break;
+    case 'users': selected = userCache; break;
+    case 'products': selected = productCache; break;
+    default: selected = genericCache;
   }
+  return selected as LRUCache<string, T>;
 }
 
 
@@ -171,32 +174,29 @@ export async function cached<T>(
   key: string,
   ttlOrFn: number | (() => Promise<T>),
   fnOrUndefined?: (() => Promise<T>) | string[],
-  tagsOrUndefined?: string[],
+  tagsOrFunction?: string[] | (() => Promise<T>),
 ): Promise<T> {
   // Detect overload: (key, fn) or (key, ttl, fn) or (key, ttl, fn, tags)
   let ttlSec: number;
   let fn: () => Promise<T>;
-  let _tags: string[] | undefined;
 
   if (typeof ttlOrFn === 'function') {
     fn = ttlOrFn;
     ttlSec = 60;
-    _tags = undefined;
   } else {
     ttlSec = ttlOrFn;
     if (Array.isArray(fnOrUndefined)) {
-      _tags = fnOrUndefined;
-      fn = tagsOrUndefined as any;
+      if (typeof tagsOrFunction !== 'function') throw new TypeError('A cache compute function is required after tags');
+      fn = tagsOrFunction;
     } else {
-      fn = fnOrUndefined as any;
-      _tags = undefined;
+      if (!fnOrUndefined) throw new TypeError('A cache compute function is required');
+      fn = fnOrUndefined;
     }
   }
 
-  const lru = new LRUCache<string, any>(1000);
-  const hit = lru.get(key);
+  const hit = genericCache.get(key);
   if (hit !== null) return hit as T;
   const result = await fn();
-  lru.set(key, result, ttlSec * 1000);
+  genericCache.set(key, result, ttlSec * 1000);
   return result;
 }

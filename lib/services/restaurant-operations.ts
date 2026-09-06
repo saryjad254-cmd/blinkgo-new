@@ -11,8 +11,11 @@ import { logAuditEvent } from './audit-service';
 export async function setRestaurantPaused(
   restaurantId: string,
   paused: boolean,
-  adminId: string
+  adminId: string,
+  reason: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  const normalizedReason = reason.trim().slice(0, 500);
+  if (normalizedReason.length < 5) return { ok: false, error: 'Reason required (min 5 chars)' };
   try {
     const svc = createServiceClient();
 
@@ -47,7 +50,7 @@ export async function setRestaurantPaused(
       action: paused ? 'restaurant.paused' : 'restaurant.unpaused',
       resourceType: 'restaurant',
       resourceId: restaurantId,
-      metadata: { restaurant_name: restaurant.name, previous_state: restaurant.is_paused },
+      metadata: { restaurant_name: restaurant.name, previous_state: restaurant.is_paused, reason: normalizedReason },
     });
 
     return { ok: true };

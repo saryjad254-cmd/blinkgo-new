@@ -23,16 +23,29 @@
  *  - Other users' data
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
-import { ok, withErrorHandling } from '@/lib/api/response';
+import { withErrorHandling } from '@/lib/api/response';
 import { logger } from '@/lib/logging';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+interface DataExportPayload {
+  exported_at: string;
+  user_id: string;
+  format: string;
+  sections: Record<string, unknown>;
+}
+
+const SENSITIVE_EXPORT_KEY = /(?:password|secret|token|authorization|api[_-]?key|client_secret|refresh_token)/i;
+
+function stringifySafeExport(payload: DataExportPayload): string {
+  return JSON.stringify(payload, (key, value) => SENSITIVE_EXPORT_KEY.test(key) ? undefined : value, 2);
+}
+
+export async function GET() {
   return withErrorHandling(async () => {
     const auth = await requireApiRole(['customer', 'driver', 'restaurant', 'admin']);
     if (!auth) {
@@ -41,7 +54,7 @@ export async function GET(req: NextRequest) {
     const userId = auth.id;
 
     const svc = createServiceClient();
-    const exportPayload: any = {
+    const exportPayload: DataExportPayload = {
       exported_at: new Date().toISOString(),
       user_id: userId,
       format: 'BlinkGo Data Export v1',
@@ -49,7 +62,11 @@ export async function GET(req: NextRequest) {
     };
 
     // 1. Profile
-    const { data: profile } = await svc.from('users').select('*').eq('id', userId).single();
+    const { data: profile } = await svc
+      .from('users')
+      .select('id, email, name, phone, role, is_active, is_verified, created_at, updated_at')
+      .eq('id', userId)
+      .single();
     exportPayload.sections.profile = profile || null;
 
     // 2. Orders
@@ -85,7 +102,7 @@ export async function GET(req: NextRequest) {
         .order('created_at', { ascending: false })
         .limit(100);
       exportPayload.sections.support_messages = support || [];
-    } catch (e: any) {
+    } catch {
       exportPayload.sections.support_messages = null;
     }
 
@@ -110,7 +127,7 @@ export async function GET(req: NextRequest) {
     // Log export (without PII)
     logger.info('data_export', {  user_id: userId, sections: Object.keys(exportPayload.sections)  });
 
-    return new NextResponse(JSON.stringify(exportPayload, null, 2), {
+    return new NextResponse(stringifySafeExport(exportPayload), {
       status: 200,
       headers: {
         'Content-Type': 'application/json; charset=utf-8',

@@ -9,8 +9,8 @@ import { AdminLayout, type AdminUser } from './AdminLayout';
 import type { Locale } from '@/lib/i18n/server-translations';
 
 interface AdminLoyaltyClientProps {
-  balances: any[];
-  transactions: any[];
+  balances: unknown[];
+  transactions: LoyaltyTransaction[];
   stats: {
     totalPoints: number;
     totalEarned: number;
@@ -21,9 +21,19 @@ interface AdminLoyaltyClientProps {
   locale?: Locale;
 }
 
+interface LoyaltyTransaction {
+  id: string;
+  amount: number;
+  reason: string;
+  description?: string | null;
+  created_at: string;
+  users?: { name?: string | null } | null;
+}
+
 export function AdminLoyaltyClient({ balances, transactions, stats, user, locale }: AdminLoyaltyClientProps) {
   const t = useT();
   const isAr = locale === 'ar';
+  const numberLocale = locale === 'ar' ? 'ar' : locale === 'en' ? 'en-GB' : 'de-DE';
 
   const statCards = [
     { label: t.loyalty.balance, value: stats.totalPoints, icon: Coins, color: 'from-golden-yellow to-brand-yellow-600' },
@@ -46,7 +56,7 @@ export function AdminLoyaltyClient({ balances, transactions, stats, user, locale
                 <Icon className="h-4 w-4" />
               </div>
               <div className="mt-2 text-xs text-zinc-500">{c.label}</div>
-              <div className="text-2xl font-black text-ink-1 dark:text-zinc-100">{c.value.toLocaleString()}</div>
+              <div className="text-2xl font-black text-ink-1 dark:text-zinc-100">{c.value.toLocaleString(numberLocale)}</div>
             </div>
           );
         })}
@@ -91,7 +101,7 @@ export function AdminLoyaltyClient({ balances, transactions, stats, user, locale
                   </td>
                   <td className="p-4 text-zinc-600 dark:text-zinc-400">{tx.reason}</td>
                   <td className="p-4 text-zinc-500">{tx.description}</td>
-                  <td className="p-4 text-xs text-zinc-500">{new Date(tx.created_at).toLocaleString()}</td>
+                  <td className="p-4 text-xs text-zinc-500">{new Date(tx.created_at).toLocaleString(numberLocale)}</td>
                 </tr>
               ))
             )}

@@ -15,12 +15,25 @@ import { logger } from '@/lib/logging/logger';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+type DriverUserRelation = { name?: string | null; rating?: number | null } | Array<{ name?: string | null; rating?: number | null }> | null;
+type DriverLocationRow = {
+  driver_id: string;
+  last_location_lat: number | string;
+  last_location_lng: number | string;
+  last_location_at: string;
+  users?: DriverUserRelation;
+};
+
+function driverUser(relation: DriverUserRelation | undefined) {
+  return Array.isArray(relation) ? relation[0] : relation;
+}
+
+export async function GET(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => heatmap() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function heatmap(): Promise<NextResponse> {
@@ -28,7 +41,7 @@ async function heatmap(): Promise<NextResponse> {
     const user = await requireApiRole(['admin', 'super_admin', 'manager']);
     if (!user) throw new AuthorizationError('Admin access required');
 
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     // Get all online drivers with recent location
     const cutoff = new Date(Date.now() - 5 * 60 * 1000).toISOString();
     const { data, error } = await supabase
@@ -44,10 +57,10 @@ async function heatmap(): Promise<NextResponse> {
       return ok({ drivers: [], count: 0 });
     }
 
-    const drivers = (data ?? []).map((d: any) => ({
+    const drivers = ((data ?? []) as DriverLocationRow[]).map((d) => ({
       id: d.driver_id,
-      name: d.users?.name ?? 'Unknown',
-      rating: d.users?.rating ?? 0,
+      name: driverUser(d.users)?.name ?? 'Unknown',
+      rating: driverUser(d.users)?.rating ?? 0,
       lat: Number(d.last_location_lat),
       lng: Number(d.last_location_lng),
       last_update: d.last_location_at,

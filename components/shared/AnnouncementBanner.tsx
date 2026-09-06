@@ -1,7 +1,4 @@
-import X from 'lucide-react/dist/esm/icons/x';
-import Megaphone from 'lucide-react/dist/esm/icons/megaphone';
 import { cookies } from 'next/headers';
-import { cn } from '@/lib/cn';
 import { DismissibleAnnouncement } from './DismissibleAnnouncement';
 
 interface Props {
@@ -13,8 +10,8 @@ interface Props {
  * hydration mismatch. Then hand off to the client component for the
  * actual interactive dismiss button.
  */
-export function AnnouncementBanner({ audience }: Props) {
-  const cookieStore = cookies();
+export async function AnnouncementBanner({ audience }: Props) {
+  const cookieStore = await cookies();
   const cookieName = `announcement-dismissed-${audience}`;
   const initiallyDismissed = cookieStore.get(cookieName)?.value === '1';
 

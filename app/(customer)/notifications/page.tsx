@@ -1,8 +1,8 @@
-import { cookies } from 'next/headers';
+'use client';
+
 import { PageHeader } from '@/components/shared/PageHeader';
 import { NotificationsFullCenter } from '@/components/notifications/NotificationsFullCenter';
-
-export const dynamic = 'force-dynamic';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 
 const T = {
   de: { title: 'Benachrichtigungen', subtitle: 'Bleib auf dem Laufenden' },
@@ -10,22 +10,16 @@ const T = {
   en: { title: 'Notifications', subtitle: 'Stay up to date' },
 } as const;
 
-function detectLocale(): 'de' | 'ar' | 'en' {
-  const c = cookies().get('blinkgo-locale')?.value;
-  if (c === 'ar') return 'ar';
-  if (c === 'en') return 'en';
-  return 'de';
-}
-
 export default function NotificationsPage() {
-  const locale = detectLocale();
+  const { locale: currentLocale } = useI18n();
+  const locale: 'de' | 'ar' | 'en' = currentLocale === 'ar' || currentLocale === 'en' ? currentLocale : 'de';
   const t = T[locale];
 
   return (
     <>
-      <PageHeader title={t.title} subtitle={t.subtitle} back />
+      <PageHeader title={t.title} subtitle={t.subtitle} back backHref="/home" />
       <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6">
-        <NotificationsFullCenter locale={locale} />
+        <NotificationsFullCenter locale={locale} scope="customer" />
       </div>
     </>
   );

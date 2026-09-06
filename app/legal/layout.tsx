@@ -2,11 +2,12 @@ import { getServerLocale } from '@/lib/i18n/server-translations';
 import { LegalFooter } from '@/components/legal/LegalFooter';
 import Link from 'next/link';
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left';
+import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
-export default function LegalLayout({ children }: { children: React.ReactNode }) {
-  const cookieHeader = require('next/headers').cookies().getAll().map((c: any) => `${c.name}=${c.value}`).join('; ');
+export default async function LegalLayout({ children }: { children: React.ReactNode }) {
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale = getServerLocale(cookieHeader);
 
   return (

@@ -4,7 +4,6 @@ import { useRouter } from 'next/navigation';
 import LogOut from 'lucide-react/dist/esm/icons/log-out';
 import ArrowRight from 'lucide-react/dist/esm/icons/arrow-right';
 import { Card } from '@/components/ui/Card';
-import { useI18n } from '@/lib/i18n/I18nProvider';
 
 interface Props {
   label: string;
@@ -13,7 +12,6 @@ interface Props {
 
 export function LogoutCardButton({ label, rtl }: Props) {
   const router = useRouter();
-  const { locale } = useI18n();
 
   async function handleLogout() {
     try {
@@ -21,7 +19,8 @@ export function LogoutCardButton({ label, rtl }: Props) {
     } catch (e) {
       console.error('Logout failed:', e);
     }
-    window.location.href = '/';
+    router.replace('/');
+    router.refresh();
   }
 
   return (

@@ -1,22 +1,17 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import DollarSign from 'lucide-react/dist/esm/icons/dollar-sign';
+import { useMemo } from 'react';
 import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
 import Calendar from 'lucide-react/dist/esm/icons/calendar';
 import Truck from 'lucide-react/dist/esm/icons/truck';
 import Flame from 'lucide-react/dist/esm/icons/flame';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
-import ArrowUpRight from 'lucide-react/dist/esm/icons/arrow-up-right';
 import Clock from 'lucide-react/dist/esm/icons/clock';
-import Award from 'lucide-react/dist/esm/icons/award';
 import Star from 'lucide-react/dist/esm/icons/star';
-import Zap from 'lucide-react/dist/esm/icons/zap';
-import Target from 'lucide-react/dist/esm/icons/target';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Link from 'next/link';
-import { BarChart, LineChart, ProgressBar, SparkLine } from '@/components/charts/Charts';
+import { BarChart, LineChart } from '@/components/charts/Charts';
 import { cn } from '@/lib/cn';
 import { formatEUR } from '@/lib/format';
 
@@ -43,15 +38,11 @@ interface DriverEarningsDashboardProps {
   monthCount: number;
   allTimeTotal: number;
   allTimeCount: number;
-  weeklyGoal: number;
   recentDeliveries: DeliveryEarning[];
   weeklyEarnings: { day: string; amount: number; count: number }[];
   hourlyEarnings: { hour: number; amount: number; count: number }[];
-  monthlyEarnings: { day: string; amount: number; count: number }[];
-  weekTrendPct?: number;
-  peakHours?: number[];
+  weekTrendPct?: number | null;
   avgTime?: number;
-  avgEarnings?: number;
   locale: 'de' | 'ar' | 'en';
 }
 
@@ -92,7 +83,7 @@ const LOCALE_LABELS = {
     vsLastMonth: 'vs. letzten Monat',
     todayGoal: 'Tagesziel',
     bonusUnlocked: 'Bonus freigeschaltet!',
-    bonusLocked: 'Noch {remaining} € bis zum Bonus',
+    bonusLocked: 'Noch {remaining} bis zum Bonusziel von {threshold}',
     keepItUp: 'Weiter so!',
   },
   ar: {
@@ -131,7 +122,7 @@ const LOCALE_LABELS = {
     vsLastMonth: 'مقارنة بالشهر الماضي',
     todayGoal: 'هدف اليوم',
     bonusUnlocked: 'تم فتح المكافأة!',
-    bonusLocked: 'باقي {remaining} € للمكافأة',
+    bonusLocked: 'متبقٍ {remaining} للوصول إلى هدف المكافأة {threshold}',
     keepItUp: 'استمر!',
   },
   en: {
@@ -170,7 +161,7 @@ const LOCALE_LABELS = {
     vsLastMonth: 'vs. last month',
     todayGoal: 'Today goal',
     bonusUnlocked: 'Bonus unlocked!',
-    bonusLocked: '{remaining} € to bonus',
+    bonusLocked: '{remaining} remaining to the {threshold} bonus target',
     keepItUp: 'Keep it up!',
   },
 } as const;
@@ -185,23 +176,14 @@ export function DriverEarningsDashboard({
   monthCount,
   allTimeTotal,
   allTimeCount,
-  weeklyGoal,
   recentDeliveries,
   hourlyEarnings,
   weeklyEarnings,
-  monthlyEarnings,
   weekTrendPct: weekTrendPctProp,
-  peakHours: peakHoursProp,
-  avgTime: avgTimeProp,
-  avgEarnings: avgEarningsProp,
+  avgTime = 0,
   locale,
 }: DriverEarningsDashboardProps) {
   const t = LOCALE_LABELS[locale] ?? LOCALE_LABELS.de;
-
-  // Compute daily goal based on weekly goal / 7
-  const dailyGoal = Math.round(weeklyGoal / 7);
-  const bonusThreshold = 200;
-  const bonusRemaining = Math.max(0, bonusThreshold - todayTotal);
 
   // Generate default weekly data if not provided
   const weeklyData = useMemo(() => {
@@ -230,29 +212,9 @@ export function DriverEarningsDashboard({
     return [];
   }, [hourlyEarnings]);
 
-  // Generate 30-day monthly data
-  const monthlyData = useMemo(() => {
-    if (monthlyEarnings && monthlyEarnings.length > 0) {
-      return monthlyEarnings.map((d) => ({ label: d.day, value: d.amount }));
-    }
-    return Array.from({ length: 30 }).map((_, i) => ({
-      label: String(i + 1),
-      value: 0,
-    }));
-  }, [monthlyEarnings]);
-
-  // Avg per delivery
-  const avgPerDelivery = weekCount > 0 ? weekTotal / weekCount : 0;
-  const avgTime =
-    weekCount > 0
-      ? recentDeliveries
-          .filter((d) => Date.now() - new Date(d.delivered_at).getTime() < 7 * 86400000)
-          .reduce((s, d) => s + d.duration_min, 0) / weekCount
-      : 0;
-
   // Trend
   // Use the real weekTrendPct from props (server-computed)
-  const weekTrendPct = weekTrendPctProp ?? 0;
+  const weekTrendPct = weekTrendPctProp;
 
   return (
     <div className="space-y-4" dir={locale === 'ar' ? 'rtl' : 'ltr'}>
@@ -284,38 +246,6 @@ export function DriverEarningsDashboard({
             </p>
           </div>
 
-          {/* Daily progress + bonus */}
-          <div className="space-y-2.5 pt-2">
-            <ProgressBar
-              value={todayTotal}
-              max={dailyGoal}
-              height={10}
-              accent="bg-gradient-to-r from-white/40 to-white"
-              showLabel={false}
-            />
-            <div className="flex items-center justify-between text-xs">
-              <span className="text-white/80 font-medium">
-                {t.todayGoal}: {formatEUR(dailyGoal)}
-              </span>
-              <span className="text-white font-extrabold">
-                {Math.round((todayTotal / Math.max(1, dailyGoal)) * 100)}%
-              </span>
-            </div>
-
-            {bonusRemaining > 0 ? (
-              <div className="px-3 py-2 rounded-xl bg-white/15 backdrop-blur-sm flex items-center gap-2">
-                <Zap className="w-4 h-4 text-yellow-300 flex-shrink-0" />
-                <span className="text-xs text-white font-bold">
-                  {t.bonusLocked.replace('{remaining}', formatEUR(bonusRemaining))}
-                </span>
-              </div>
-            ) : (
-              <div className="px-3 py-2 rounded-xl bg-brand-yellow-400/30 backdrop-blur-sm flex items-center gap-2">
-                <Award className="w-4 h-4 text-yellow-300 flex-shrink-0" />
-                <span className="text-xs text-white font-extrabold">{t.bonusUnlocked}</span>
-              </div>
-            )}
-          </div>
         </div>
       </section>
 
@@ -327,8 +257,8 @@ export function DriverEarningsDashboard({
           label={t.week}
           value={formatEUR(weekTotal)}
           subValue={t.deliveriesCount(weekCount)}
-          trend={weekTrendPct > 0 ? `+${weekTrendPct.toFixed(0)}%` : `${weekTrendPct.toFixed(0)}%`}
-          trendPositive={weekTrendPct > 0}
+          trend={weekTrendPct == null ? undefined : weekTrendPct > 0 ? `+${weekTrendPct.toFixed(0)}%` : `${weekTrendPct.toFixed(0)}%`}
+          trendPositive={weekTrendPct != null && weekTrendPct > 0}
         />
         <StatBox
           icon={<TrendingUp className="w-4 h-4" />}
@@ -390,7 +320,7 @@ export function DriverEarningsDashboard({
           <LineChart
             data={hourlyData.map((d) => ({ label: `${d.hour}`, value: d.amount }))}
             height={120}
-            accent="#F5B819"
+            accent="#FFC107"
             fill
           />
           <div className="grid grid-cols-3 gap-2 pt-2">
@@ -429,7 +359,7 @@ export function DriverEarningsDashboard({
           </header>
           <div className="space-y-2">
             {recentDeliveries.slice(0, 6).map((d) => (
-              <DeliveryRow key={d.id} d={d} locale={locale} t={t} />
+              <DeliveryRow key={d.id} d={d} locale={locale} />
             ))}
           </div>
         </section>
@@ -554,11 +484,9 @@ function PeakBadge({
 function DeliveryRow({
   d,
   locale,
-  t,
 }: {
   d: DeliveryEarning;
   locale: 'de' | 'ar' | 'en';
-  t: any;
 }) {
   const dateLocale = locale === 'ar' ? 'ar' : locale === 'en' ? 'en-GB' : 'de-DE';
   const dateStr = new Date(d.delivered_at).toLocaleString(dateLocale, {
@@ -588,14 +516,8 @@ function DeliveryRow({
           <div className="flex items-center justify-between gap-2 mt-0.5">
             <p className="text-[10px] text-text-muted">{dateStr}</p>
             <div className="flex items-center gap-2 text-[10px] text-text-muted">
-              <span className="flex items-center gap-0.5">
-                <MapPin className="w-2.5 h-2.5" />
-                {d.distance_km.toFixed(1)} km
-              </span>
-              <span className="flex items-center gap-0.5">
-                <Clock className="w-2.5 h-2.5" />
-                {d.duration_min.toFixed(0)} min
-              </span>
+              {d.distance_km > 0 && <span className="flex items-center gap-0.5"><MapPin className="w-2.5 h-2.5" />{d.distance_km.toFixed(1)} km</span>}
+              {d.duration_min > 0 && <span className="flex items-center gap-0.5"><Clock className="w-2.5 h-2.5" />{d.duration_min.toFixed(0)} min</span>}
               {d.tip > 0 && (
                 <span className="text-accent-400 font-extrabold flex items-center gap-0.5">
                   <Star className="w-2.5 h-2.5 fill-accent-400" />

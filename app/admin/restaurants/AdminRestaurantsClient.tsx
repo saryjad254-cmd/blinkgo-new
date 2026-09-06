@@ -1,15 +1,20 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Store from 'lucide-react/dist/esm/icons/store';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import Phone from 'lucide-react/dist/esm/icons/phone';
+import { useRouter } from 'next/navigation';
 import Plus from 'lucide-react/dist/esm/icons/plus';
-import X from 'lucide-react/dist/esm/icons/x';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
-import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
+
+interface RestaurantSummary {
+  id: string;
+  name: string;
+  address: string | null;
+  cuisine?: string[] | null;
+  rating?: number | null;
+  is_active: boolean;
+}
 
 const T = {
   de: {
@@ -102,25 +107,12 @@ export function AdminRestaurantsClient({
   user: AdminUser;
   locale?: 'de' | 'ar' | 'en';
 }) {
+  const router = useRouter();
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [restaurants, setRestaurants] = useState<any[]>([]);
+  const [restaurants, setRestaurants] = useState<RestaurantSummary[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
-
-  const [form, setForm] = useState({
-    name: '',
-    email: '',
-    phone: '',
-    address: '',
-    password: '',
-    cuisine: '',
-    latitude: '',
-    longitude: '',
-  });
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
 
   const fetchRestaurants = async () => {
     setLoading(true);
@@ -129,15 +121,17 @@ export function AdminRestaurantsClient({
       url.searchParams.set('limit', '100');
       if (search) url.searchParams.set('q', search);
       const res = await fetch(url.toString());
-      const data = await res.json();
-      if (res.ok && data.ok) setRestaurants(data.restaurants);
+      const data = await res.json() as { ok?: boolean; restaurants?: RestaurantSummary[] };
+      if (res.ok && data.ok && Array.isArray(data.restaurants)) setRestaurants(data.restaurants);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchRestaurants();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void fetchRestaurants(); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -147,38 +141,7 @@ export function AdminRestaurantsClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreating(true);
-    setCreateError(null);
-    try {
-      const body = {
-        ...form,
-        cuisine: form.cuisine.split(',').map((s) => s.trim()).filter(Boolean),
-        latitude: form.latitude ? Number(form.latitude) : undefined,
-        longitude: form.longitude ? Number(form.longitude) : undefined,
-      };
-      const res = await fetch('/api/admin/restaurants', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setCreateError(data.error || 'Failed');
-        return;
-      }
-      setForm({ name: '', email: '', phone: '', address: '', password: '', cuisine: '', latitude: '', longitude: '' });
-      setShowCreate(false);
-      fetchRestaurants();
-    } catch (e: any) {
-      setCreateError(e.message);
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const toggleActive = async (r: any) => {
+  const toggleActive = async (r: RestaurantSummary) => {
     // Disabling a restaurant hides it from all customers and stops new
     // orders. Always confirm before doing so.
     const willDisable = r.is_active;
@@ -216,65 +179,13 @@ export function AdminRestaurantsClient({
           </div>
           <button
             type="button"
-            onClick={() => setShowCreate(true)}
+            onClick={() => router.push('/admin/onboarding?type=restaurant')}
             className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-brand-gradient text-white text-sm font-extrabold hover:opacity-90"
           >
             <Plus className="w-4 h-4" />
             {t.newRestaurant}
           </button>
         </header>
-
-        {/* Create modal */}
-        {showCreate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
-            <form
-              onSubmit={handleCreate}
-              className="w-full max-w-md max-h-[90vh] overflow-y-auto bg-surface-elevated rounded-2xl border border-edge p-6 space-y-3"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-extrabold text-white">{t.createRestaurant}</h2>
-                <button type="button" onClick={() => setShowCreate(false)} aria-label="Schließen" className="w-8 h-8 rounded-lg bg-ink-700 flex items-center justify-center text-text-secondary hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-500/50">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-              {createError && (
-                <div className="rounded-xl bg-red-500/10 border border-red-500/30 p-3 text-xs text-red-400">
-                  {createError}
-                </div>
-              )}
-              {[
-                { k: 'name', p: t.name2, dir: undefined, type: 'text' },
-                { k: 'email', p: t.email, dir: 'ltr' as const, type: 'email' },
-                { k: 'phone', p: t.phone2, dir: 'ltr' as const, type: 'tel' },
-                { k: 'address', p: t.address2, dir: undefined, type: 'text' },
-                { k: 'password', p: t.password, dir: 'ltr' as const, type: 'password' },
-                { k: 'cuisine', p: t.cuisine2, dir: undefined, type: 'text' },
-                { k: 'latitude', p: 'Lat', dir: 'ltr' as const, type: 'number' },
-                { k: 'longitude', p: 'Lng', dir: 'ltr' as const, type: 'number' },
-              ].map((field) => (
-                <input
-                  key={field.k}
-                  type={field.type}
-                  placeholder={field.p}
-                  value={(form as any)[field.k]}
-                  onChange={(e) => setForm({ ...form, [field.k]: e.target.value })}
-                  required={['name', 'email', 'address', 'password'].includes(field.k)}
-                  dir={field.dir}
-                  className="w-full h-11 px-4 rounded-xl bg-ink-700 border border-edge text-white placeholder:text-text-muted focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20 focus:outline-none"
-                />
-              ))}
-              <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setShowCreate(false)} className="flex-1 h-11 rounded-xl bg-ink-700 text-text-secondary font-bold">
-                  {t.cancel}
-                </button>
-                <button type="submit" disabled={creating} className="flex-1 h-11 rounded-xl bg-brand-gradient text-white font-extrabold disabled:opacity-50">
-                  {t.create}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
 
         <input
           type="text"

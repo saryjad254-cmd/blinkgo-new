@@ -24,8 +24,8 @@ const roundedClass = {
 export function Skeleton({ className = '', aspect, width, height, rounded = 'md' }: SkeletonProps) {
   const style: React.CSSProperties = {
     aspectRatio: aspect ? `${aspect}` : undefined,
-    width: width as any,
-    height: height as any,
+    width,
+    height,
   };
   return (
     <div

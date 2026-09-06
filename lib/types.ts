@@ -3,7 +3,7 @@
  * يُستخدم في الـ web/ و mobile/ (مستقبلاً)
  */
 
-export type UserRole = 'customer' | 'driver' | 'restaurant' | 'admin';
+export type UserRole = 'customer' | 'driver' | 'restaurant' | 'manager' | 'admin' | 'super_admin';
 
 export interface User {
   id: string;
@@ -32,6 +32,8 @@ export interface Restaurant {
   is_active: boolean;
   min_order_amount: number;
   delivery_fee: number;
+  pickup_enabled?: boolean;
+  pickup_instructions?: string | null;
   opening_hours?: Array<{ day: string; is_open: boolean; open_time: string; close_time: string }>;
   estimated_delivery_time: string;
   rating: number;
@@ -65,6 +67,8 @@ export type OrderStatus =
   | 'delivering'
   | 'delivered'
   | 'cancelled'
+  | 'could_not_deliver'
+  | 'cancel_refund_pending'
   | 'refunded';
 
 export interface Order {
@@ -73,6 +77,8 @@ export interface Order {
   customer_id: string;
   restaurant_id: string;
   driver_id: string | null;
+  fulfillment_type: 'delivery' | 'pickup';
+  pickup_code: string | null;
   status: OrderStatus;
   subtotal: number;
   delivery_fee: number;
@@ -84,7 +90,7 @@ export interface Order {
   payment_method: 'cash' | 'stripe' | 'wallet';
   payment_status: 'pending' | 'paid' | 'failed' | 'refunded';
   delivery_instructions: string | null;
-  delivery_address: Record<string, any>;
+  delivery_address: Record<string, any> | null;
   customer_latitude: number | null;
   customer_longitude: number | null;
   driver_latitude: number | null;
@@ -114,6 +120,13 @@ export interface OrderItem {
   product_price: number;
   quantity: number;
   subtotal: number;
+  configuration?: {
+    substitution_preference?: 'best_match' | 'contact_me' | 'refund_item';
+    replacement_id?: string;
+    original_product_id?: string;
+    original_product_name?: string;
+    fulfillment_status?: 'substituted' | 'unavailable_refund';
+  };
 }
 
 export interface DriverStatus {
@@ -135,6 +148,8 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   delivering: 'قيد التوصيل',
   delivered: 'تم التسليم',
   cancelled: 'ملغي',
+  could_not_deliver: 'تعذّر التسليم',
+  cancel_refund_pending: 'إلغاء قيد الاسترداد',
   refunded: 'مسترد',
 };
 
@@ -148,5 +163,7 @@ export const ORDER_STATUS_COLORS: Record<OrderStatus, string> = {
   delivering: 'badge-warning',
   delivered: 'badge-success',
   cancelled: 'badge-danger',
+  could_not_deliver: 'badge-danger',
+  cancel_refund_pending: 'badge-warning',
   refunded: 'badge-danger',
 };

@@ -2,10 +2,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
     <linearGradient id="fav-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#DC2626"/>
-      <stop offset="50%" stop-color="#DC2626"/>
-      <stop offset="50%" stop-color="#F5B819"/>
-      <stop offset="100%" stop-color="#F5B819"/>
+      <stop offset="0%" stop-color="#E10600"/>
+      <stop offset="50%" stop-color="#E10600"/>
+      <stop offset="50%" stop-color="#FFC107"/>
+      <stop offset="100%" stop-color="#FFC107"/>
     </linearGradient>
   </defs>
   <rect width="64" height="64" rx="12" fill="url(#fav-bg)"/>

@@ -15,6 +15,7 @@ interface BottomSheetProps {
   size?: 'sm' | 'md' | 'lg' | 'full';
   showHandle?: boolean;
   showClose?: boolean;
+  closeLabel?: string;
   className?: string;
   /** Disable backdrop click (for important confirmations) */
   persistent?: boolean;
@@ -48,6 +49,7 @@ export function BottomSheet({
   size = 'md',
   showHandle = true,
   showClose = true,
+  closeLabel = 'Close',
   className,
   persistent = false,
 }: BottomSheetProps) {
@@ -122,9 +124,9 @@ export function BottomSheet({
             {showClose && (
               <button
                 onClick={onClose}
-                aria-label="Close"
+                aria-label={closeLabel}
                 className={cn(
-                  'flex-shrink-0 w-9 h-9 rounded-full',
+                  'flex-shrink-0 w-11 h-11 rounded-full',
                   'bg-surface-light hover:bg-surface text-text-secondary hover:text-text',
                   'flex items-center justify-center',
                   'transition-all duration-150 active:scale-95',

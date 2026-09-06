@@ -1,5 +1,5 @@
 'use client';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 
 import { useT } from '@/lib/i18n/I18nProvider';
 
@@ -11,7 +11,16 @@ import Package from 'lucide-react/dist/esm/icons/package';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 
 interface ShareOrderViewProps {
-  order: any;
+  order: {
+    order_number: string;
+    status: string;
+    restaurants?: RestaurantRelation | RestaurantRelation[] | null;
+  };
+}
+
+interface RestaurantRelation {
+  name?: string | null;
+  address?: string | null;
 }
 
 const STATUS_FLOW = ['pending', 'confirmed', 'preparing', 'ready', 'picked_up', 'delivering', 'delivered'];
@@ -19,6 +28,7 @@ const STATUS_FLOW = ['pending', 'confirmed', 'preparing', 'ready', 'picked_up', 
 export function ShareOrderView({ order }: ShareOrderViewProps) {
   const t = useT();
   const idx = STATUS_FLOW.indexOf(order.status);
+  const restaurant = Array.isArray(order.restaurants) ? order.restaurants[0] : order.restaurants;
   const steps = [
     { key: 'confirmed', label: 'Confirmed', icon: CheckCircle2 },
     { key: 'preparing', label: 'Preparing', icon: ChefHat },
@@ -47,14 +57,14 @@ export function ShareOrderView({ order }: ShareOrderViewProps) {
             {'Restaurant'}
           </div>
           <div className="mt-1 text-lg font-bold text-ink-1 dark:text-zinc-100">
-            {order.restaurants?.name ?? '—'}
+            {restaurant?.name ?? '—'}
           </div>
-          <div className="text-sm text-zinc-500">{order.restaurants?.address}</div>
+          <div className="text-sm text-zinc-500">{restaurant?.address}</div>
         </div>
 
         {/* Status stepper */}
         <div className="space-y-3">
-          {steps.map((step, i) => {
+          {steps.map((step) => {
             const stepIdx = STATUS_FLOW.indexOf(step.key);
             const passed = stepIdx <= idx;
             const current = stepIdx === idx;

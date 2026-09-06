@@ -1,19 +1,18 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Check from 'lucide-react/dist/esm/icons/check';
 import X from 'lucide-react/dist/esm/icons/x';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import Bell from 'lucide-react/dist/esm/icons/bell';
 import BellRing from 'lucide-react/dist/esm/icons/bell-ring';
 import Volume2 from 'lucide-react/dist/esm/icons/volume-2';
 import VolumeX from 'lucide-react/dist/esm/icons/volume-x';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
-import { useT } from '@/lib/i18n/I18nProvider';
-import { createBrowserClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/cn';
+import { useLiveNow } from '@/lib/hooks/use-live-now';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 export interface AvailableOrder {
   id: string;
@@ -23,7 +22,7 @@ export interface AvailableOrder {
   status: string;
   customer_id: string;
   customer_name?: string;
-  delivery_address?: any;
+  delivery_address?: unknown;
   item_count?: number;
   item_summary?: string;
   /** ms since order was placed */
@@ -64,25 +63,27 @@ export function AcceptOrderCard({
   isHero = true,
   locale = 'de',
   soundEnabled: initialSound,
-  index = 0,
 }: Props) {
   const router = useRouter();
-  const t = useT();
   const [loading, setLoading] = useState<'accept' | 'decline' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [justAccepted, setJustAccepted] = useState(false);
   const [justDeclined, setJustDeclined] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(initialSound ?? true);
+  const [prepMinutes, setPrepMinutes] = useState(20);
+  const nowMs = useLiveNow(30_000);
 
   // Localized labels
   const labels = {
     title: locale === 'ar' ? 'طلب جديد' : locale === 'en' ? 'New order' : 'Neue Bestellung',
     subtitle:
       locale === 'ar'
-        ? 'قبول الطلب خلال 60 ثانية للحصول على أفضل تقييم'
+        ? 'حدد وقت الجاهزية الواقعي ثم اقبل الطلب'
         : locale === 'en'
-        ? 'Accept within 60 seconds for the best rating'
-        : 'Innerhalb 60 Sek. annehmen für beste Bewertung',
+        ? 'Choose a realistic pickup-ready time, then accept the order'
+        : 'Realistische Abholzeit wählen und Bestellung annehmen',
+    prepPromise: locale === 'ar' ? 'جاهز للاستلام خلال' : locale === 'en' ? 'Ready for pickup in' : 'Abholbereit in',
+    minutes: locale === 'ar' ? 'دقيقة' : locale === 'en' ? 'min' : 'Min.',
     freshBadge: locale === 'ar' ? 'جديد' : locale === 'en' ? 'NEW' : 'NEU',
     accept: locale === 'ar' ? 'قبول الطلب' : locale === 'en' ? 'Accept order' : 'Bestellung annehmen',
     acceptSubtitle:
@@ -117,7 +118,7 @@ export function AcceptOrderCard({
   };
 
   // Calculate age
-  const ageMs = order.age_ms ?? (Date.now() - new Date(order.created_at).getTime());
+  const ageMs = order.age_ms ?? (nowMs > 0 ? nowMs - new Date(order.created_at).getTime() : 0);
   const ageMin = Math.max(0, Math.floor(ageMs / 60000));
   const ageText =
     ageMin < 1
@@ -134,25 +135,22 @@ export function AcceptOrderCard({
     setJustAccepted(true);
 
     try {
-      const supabase = createBrowserClient();
-      const { error: updateError } = await supabase
-        .from('orders')
-        .update({
-          status: 'confirmed',
-          accepted_at: new Date().toISOString(),
-        })
-        .eq('id', order.id);
-
-      if (updateError) throw updateError;
+      const response = await fetch('/api/orders/status', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Accept-Language': locale },
+        body: JSON.stringify({ order_id: order.id, status: 'confirmed', metadata: { estimated_prep_minutes: prepMinutes } }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) throw new Error(extractErrorMessage(payload, 'Failed to accept'));
 
       // 600ms success state → navigate
       setTimeout(() => router.push(`/restaurant/orders/${order.id}`), 700);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setJustAccepted(false);
-      setError(e.message ?? 'Failed to accept');
+      setError(e instanceof Error ? e.message : 'Failed to accept');
       setLoading(null);
     }
-  }, [loading, order.id, router]);
+  }, [loading, locale, order.id, prepMinutes, router]);
 
   const handleDecline = useCallback(async () => {
     if (loading) return;
@@ -161,27 +159,24 @@ export function AcceptOrderCard({
     setJustDeclined(true);
 
     try {
-      const supabase = createBrowserClient();
-      const { error: updateError } = await supabase
-        .from('orders')
-        .update({
-          status: 'cancelled',
-          cancelled_at: new Date().toISOString(),
-        })
-        .eq('id', order.id);
-
-      if (updateError) throw updateError;
+      const response = await fetch('/api/orders/status', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Accept-Language': locale },
+        body: JSON.stringify({ order_id: order.id, status: 'cancelled', metadata: { reason: 'restaurant_declined' } }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) throw new Error(extractErrorMessage(payload, 'Failed to decline'));
 
       setTimeout(() => {
         // Refresh list
         router.refresh();
       }, 700);
-    } catch (e: any) {
+    } catch (e: unknown) {
       setJustDeclined(false);
-      setError(e.message ?? 'Failed to decline');
+      setError(e instanceof Error ? e.message : 'Failed to decline');
       setLoading(null);
     }
-  }, [loading, order.id, router]);
+  }, [loading, locale, order.id, router]);
 
   // Pulse animation state for fresh orders
   const showFreshBadge = isFresh || ageMin < 1;
@@ -305,7 +300,13 @@ export function AcceptOrderCard({
 
       {/* CTA: Accept + Decline (only shown when not already actioned) */}
       {!justAccepted && !justDeclined && (
-        <div className="relative grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2.5">
+        <div className="relative space-y-3">
+          <div data-testid="calendar-prep-estimate" className="rounded-2xl border border-amber-400/20 bg-amber-400/[0.07] p-3" dir={locale === 'ar' ? 'rtl' : 'ltr'}>
+            <p className="text-xs font-extrabold text-amber-300">{labels.prepPromise}</p>
+            <div className="mt-2 grid grid-cols-4 gap-1.5">{[10, 15, 20, 30].map((minutes) => <button key={minutes} type="button" onClick={() => setPrepMinutes(minutes)} aria-pressed={prepMinutes === minutes} className={cn('min-h-10 rounded-xl text-xs font-extrabold', prepMinutes === minutes ? 'bg-amber-400 text-black' : 'bg-black/20 text-zinc-300')}>{minutes}</button>)}</div>
+            <p className="mt-2 text-center text-xs font-bold text-zinc-300">{prepMinutes} {labels.minutes}</p>
+          </div>
+          <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-[1fr_auto]">
           {/* Accept — primary, large, animated */}
           <button
             type="button"
@@ -363,6 +364,7 @@ export function AcceptOrderCard({
             <X className="w-4 h-4" />
             <span className="hidden sm:inline">{labels.decline}</span>
           </button>
+          </div>
         </div>
       )}
 

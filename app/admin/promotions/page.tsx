@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminPromotionsPage() {
   const user = await requireRole('admin');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const { data: profile } = await supabase
     .from('users')
     .select('name, email, role')
@@ -23,7 +23,7 @@ export default async function AdminPromotionsPage() {
     .from('restaurants')
     .select('id, name')
     .eq('is_active', true);
-  const cookieHeader = cookies()
+  const cookieHeader = (await cookies())
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');

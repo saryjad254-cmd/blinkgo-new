@@ -1,25 +1,24 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import Search from 'lucide-react/dist/esm/icons/search';
 import Filter from 'lucide-react/dist/esm/icons/filter';
 import X from 'lucide-react/dist/esm/icons/x';
 import Download from 'lucide-react/dist/esm/icons/download';
 import Calendar from 'lucide-react/dist/esm/icons/calendar';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Store from 'lucide-react/dist/esm/icons/store';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import Package from 'lucide-react/dist/esm/icons/package';
 import Truck from 'lucide-react/dist/esm/icons/truck';
-import ChefHat from 'lucide-react/dist/esm/icons/chef-hat';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
-import Home from 'lucide-react/dist/esm/icons/home';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import { useI18n } from '@/lib/i18n/I18nProvider';
-import { formatEUR, formatDateDE } from '@/lib/format';
+import { formatEUR } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { computeEarnings } from '@/lib/services/driver-earnings';
+import { createCsv } from '@/lib/security/csv';
 
 type DateRange = 'all' | 'today' | 'week' | 'month' | 'quarter';
 type StatusFilter = 'all' | 'delivered' | 'cancelled' | 'picked_up' | 'ready';
@@ -44,7 +43,7 @@ interface HistoryItem {
  * filters and CSV export.
  */
 export default function DriverHistoryPage() {
-  const { t, locale } = useI18n();
+  const { locale } = useI18n();
   const isRtl = locale === 'ar';
 
   const [items, setItems] = useState<HistoryItem[]>([]);
@@ -55,45 +54,46 @@ export default function DriverHistoryPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [restaurantFilter, setRestaurantFilter] = useState<string>('all');
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [referenceTime] = useState(() => Date.now());
 
   // Load history
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     setError(null);
-    let cancelled = false;
     try {
-      const res = await fetch('/api/driver/history', { cache: 'no-store' });
+      const res = await fetch('/api/driver/history', { cache: 'no-store', signal });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (cancelled) return;
-      setItems(data?.orders ?? []);
-    } catch (e: any) {
-      if (!cancelled) {
-        setError(
-          locale === 'ar'
-            ? 'تعذّر تحميل السجل. تحقق من اتصالك وحاول مرة أخرى.'
-            : locale === 'en'
-            ? 'We could not load your history. Check your connection and try again.'
-            : 'Verlauf konnte nicht geladen werden. Bitte Internet prüfen und erneut versuchen.'
-        );
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!data?.ok) throw new Error(data?.error?.message || 'Failed to load history');
+      setItems(data?.data?.orders ?? []);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      setError(
+        locale === 'ar'
+          ? 'تعذّر تحميل السجل. تحقق من اتصالك وحاول مرة أخرى.'
+          : locale === 'en'
+          ? 'We could not load your history. Check your connection and try again.'
+          : 'Verlauf konnte nicht geladen werden. Bitte Internet prüfen und erneut versuchen.'
+      );
     } finally {
-      if (!cancelled) setLoading(false);
+      if (!signal?.aborted) setLoading(false);
     }
-  };
+  }, [locale]);
 
   useEffect(() => {
-    loadHistory();
-    return () => { /* cleanup handled in loadHistory */ };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const controller = new AbortController();
+    queueMicrotask(() => void loadHistory(controller.signal));
+    return () => controller.abort();
+  }, [loadHistory]);
 
   // Date range filter
-  const now = new Date();
-  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
-  const weekStart = new Date(todayStart); weekStart.setDate(weekStart.getDate() - 7);
-  const monthStart = new Date(todayStart); monthStart.setDate(monthStart.getDate() - 30);
-  const quarterStart = new Date(todayStart); quarterStart.setDate(quarterStart.getDate() - 90);
+  const { todayStart, weekStart, monthStart, quarterStart } = useMemo(() => {
+    const today = new Date(referenceTime); today.setHours(0, 0, 0, 0);
+    const week = new Date(today); week.setDate(week.getDate() - 7);
+    const month = new Date(today); month.setDate(month.getDate() - 30);
+    const quarter = new Date(today); quarter.setDate(quarter.getDate() - 90);
+    return { todayStart: today, weekStart: week, monthStart: month, quarterStart: quarter };
+  }, [referenceTime]);
 
   // Unique restaurants for the filter
   const restaurants = useMemo(() => {
@@ -128,7 +128,7 @@ export default function DriverHistoryPage() {
       if (dateRange === 'quarter' && d < quarterStart) return false;
       return true;
     });
-  }, [items, search, statusFilter, restaurantFilter, dateRange]);
+  }, [items, search, statusFilter, restaurantFilter, dateRange, todayStart, weekStart, monthStart, quarterStart]);
 
   // Summary stats for filtered
   const stats = useMemo(() => {
@@ -136,7 +136,7 @@ export default function DriverHistoryPage() {
     let totalTip = 0;
     let count = 0;
     for (const it of filtered) {
-      totalEarnings += Number(it.delivery_fee ?? 0) * 0.8 + Number(it.tip ?? 0);
+      totalEarnings += computeEarnings(it).total;
       totalTip += Number(it.tip ?? 0);
       count += 1;
     }
@@ -150,18 +150,18 @@ export default function DriverHistoryPage() {
       it.order_number,
       it.status,
       it.restaurants?.name ?? '',
-      (Number(it.delivery_fee ?? 0) * 0.8 + Number(it.tip ?? 0)).toFixed(2),
+      computeEarnings(it).total.toFixed(2),
       Number(it.tip ?? 0).toFixed(2),
       new Date(it.delivered_at || it.created_at).toISOString(),
     ]);
-    const csv = [headers, ...rows].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const csv = createCsv([headers, ...rows]);
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `driver-history-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
   };
 
   const filtersActive = search || dateRange !== 'all' || statusFilter !== 'all' || restaurantFilter !== 'all';
@@ -174,7 +174,7 @@ export default function DriverHistoryPage() {
           <Link
             href="/driver/dashboard"
             className="w-12 h-12 rounded-full bg-ink-700 text-text-secondary flex items-center justify-center touch-manipulation active:scale-95"
-            aria-label="Back"
+            aria-label={locale === 'ar' ? 'رجوع' : locale === 'en' ? 'Back' : 'Zurück'}
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 12H5M12 19l-7-7 7-7" />
@@ -361,7 +361,7 @@ export default function DriverHistoryPage() {
             <p className="text-sm font-extrabold text-red-300">{error}</p>
             <button
               type="button"
-              onClick={loadHistory}
+              onClick={() => void loadHistory()}
               className="h-10 px-4 rounded-pill bg-red-500 hover:bg-red-600 text-white text-xs font-extrabold touch-manipulation"
             >
               {locale === 'ar' ? 'إعادة المحاولة' : locale === 'en' ? 'Retry' : 'Erneut versuchen'}
@@ -390,7 +390,7 @@ export default function DriverHistoryPage() {
           ) : (
             filtered.map((it) => {
               const ts = it.delivered_at || it.created_at;
-              const earning = Number(it.delivery_fee ?? 0) * 0.8 + Number(it.tip ?? 0);
+              const earning = computeEarnings(it).total;
               const expanded = expandedId === it.id;
               return (
                 <article

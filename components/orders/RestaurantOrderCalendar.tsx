@@ -1,18 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
-import Package from 'lucide-react/dist/esm/icons/package';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import StoreIcon from 'lucide-react/dist/esm/icons/store';
-import Phone from 'lucide-react/dist/esm/icons/phone';
-import Calendar from 'lucide-react/dist/esm/icons/calendar';
-import Filter from 'lucide-react/dist/esm/icons/filter';
-import Bell from 'lucide-react/dist/esm/icons/bell';
 import { OrderCalendar } from './OrderCalendar';
 import { cn } from '@/lib/cn';
 import { AcceptOrderCard, type AvailableOrder } from '@/components/restaurant/AcceptOrderCard';
+import { useLiveNow } from '@/lib/hooks/use-live-now';
 
 interface RestaurantOrder {
   id: string;
@@ -21,7 +15,7 @@ interface RestaurantOrder {
   total: number;
   created_at: string;
   customer_id: string;
-  delivery_address?: any;
+  delivery_address?: unknown;
   item_count?: number;
   item_summary?: string;
   customer_name?: string;
@@ -42,13 +36,14 @@ interface Props {
  * treatment — large, animated, easy to tap.
  */
 export function RestaurantOrderCalendar({ orders, locale, isDashboard = false }: Props) {
+  const nowMs = useLiveNow(30_000);
   // Find the topmost pending order for the hero CTA
   const topPending = orders.find((o) => o.status === 'pending');
 
   const renderOrder = (order: RestaurantOrder) => {
     // Special: top pending order → big AcceptOrderCard
     if (isDashboard && order.id === topPending?.id) {
-      const ageMs = Date.now() - new Date(order.created_at).getTime();
+      const ageMs = nowMs > 0 ? nowMs - new Date(order.created_at).getTime() : 0;
       return (
         <AcceptOrderCard
           key={order.id}
@@ -64,7 +59,7 @@ export function RestaurantOrderCalendar({ orders, locale, isDashboard = false }:
             item_count: order.item_count,
             item_summary: order.item_summary,
             age_ms: ageMs,
-          } as AvailableOrder}
+          } satisfies AvailableOrder}
           isHero
           isFresh={ageMs < 120000}
           locale={locale}

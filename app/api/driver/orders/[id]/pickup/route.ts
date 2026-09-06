@@ -10,7 +10,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
@@ -21,12 +20,10 @@ import { logger } from '@/lib/logging';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ALLOWED_FROM = ['ready'];
+const ALLOWED_FROM = ['assigned', 'ready'];
 
-export async function POST(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+export async function POST(_req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   return (await withSecurity(
     secureRoute('moderate', ['driver', 'admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -59,7 +56,7 @@ async function pickupOrder(
     if (!ALLOWED_FROM.includes(order.status)) {
       throw new ConflictError(
         `Cannot pickup order in status: ${order.status}`,
-        { current_status: order.status, code: 'INVALID_TRANSITION' },
+        { meta: { current_status: order.status }, code: 'INVALID_TRANSITION' },
       );
     }
 
@@ -73,7 +70,7 @@ async function pickupOrder(
         updated_at: now,
       })
       .eq('id', orderId)
-      .eq('status', 'ready')
+      .in('status', ALLOWED_FROM)
       .select()
       .single();
     if (updErr || !updated) {

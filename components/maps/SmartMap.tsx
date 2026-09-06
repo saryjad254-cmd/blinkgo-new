@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
-import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { GoogleMap as GoogleMapComponent } from './GoogleMap';
 import { OSMMap, type MapMarker } from './OSMMap';
@@ -60,13 +59,13 @@ export function SmartMap(props: Props) {
     decide();
 
     // Failsafe timeout - if nothing resolves in 8s, use OSM
-    const t = setTimeout(() => {
+    const fallbackTimer = setTimeout(() => {
       if (!cancelled) setMode((prev) => (prev === 'checking' ? 'osm' : prev));
     }, 8000);
 
     return () => {
       cancelled = true;
-      clearTimeout(t);
+      clearTimeout(fallbackTimer);
     };
   }, []);
 

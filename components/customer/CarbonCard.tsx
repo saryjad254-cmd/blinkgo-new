@@ -92,6 +92,7 @@ export const CarbonCard = memo(function CarbonCard({ items, orderNumber }: Props
   return (
     <div className="card overflow-hidden">
       <div className={`bg-gradient-to-br ${colorMap[badge.color]} text-white p-4`}>
+        <span className="sr-only">#{orderNumber}</span>
         <div className="flex items-center gap-2 mb-2">
           <Leaf className="w-5 h-5" />
           <h3 className="font-bold">{c.title}</h3>

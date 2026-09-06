@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminCouponsPage() {
   const user = await requireRole('admin');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
 
   const { data: profile } = await supabase
     .from('users')
@@ -23,7 +23,7 @@ export default async function AdminCouponsPage() {
     .order('created_at', { ascending: false })
     .limit(200);
 
-  const cookieHeader = cookies()
+  const cookieHeader = (await cookies())
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');

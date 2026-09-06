@@ -13,8 +13,8 @@ import { cookies } from 'next/headers';
 
 export const dynamic = 'force-dynamic';
 
-export default function DriverTermsPage() {
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
+export default async function DriverTermsPage() {
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale = getServerLocale(cookieHeader) as 'de' | 'ar' | 'en';
   const c = getDisplayCompanyInfo();
   const isDraft = c.legalReviewStatus !== 'APPROVED';

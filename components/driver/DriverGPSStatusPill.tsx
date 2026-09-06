@@ -46,6 +46,9 @@ export function DriverGPSStatusPill({ status, accuracy, fixCount }: DriverGPSSta
       {status === 'active' && accuracy != null && (
         <span className="text-ink-2">· ±{Math.round(accuracy)}m</span>
       )}
+      {status === 'active' && fixCount != null && (
+        <span className="sr-only">GPS fixes: {fixCount}</span>
+      )}
     </div>
   );
 }

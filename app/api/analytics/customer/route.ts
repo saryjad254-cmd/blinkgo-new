@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
 import {
@@ -13,20 +13,23 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const auth = await requireApiRole(['admin']);
   if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
   try {
     const db = createServiceClient();
 
-    const { data: orders } = await db.from('orders').select('customer_id, total, created_at');
+    const [orderResult, customerResult] = await Promise.all([
+      db.from('orders').select('customer_id, total, created_at'),
+      db.from('users').select('id, created_at, last_order_at').eq('role', 'customer'),
+    ]);
+    if (orderResult.error) throw orderResult.error;
+    if (customerResult.error) throw customerResult.error;
+    const orders = orderResult.data ?? [];
+    const customers = customerResult.data ?? [];
 
-    const { data: customers } = await db.from('users')
-      .select('id, created_at, last_order_at')
-      .eq('role', 'customer');
-
-    const orderRows = (orders || []).map((o) => ({
+    const orderRows = orders.map((o) => ({
       customer_id: o.customer_id,
       total: o.total || 0,
       created_at: o.created_at,
@@ -55,7 +58,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      total_customers: stats.length,
+      total_customers: customers.length,
       repeat_rate: repeatRate,
       avg_ltv: ltv.avg_ltv,
       total_ltv: ltv.total_ltv,

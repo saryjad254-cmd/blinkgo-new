@@ -3,59 +3,43 @@
  * ────────────────────
  * GET /api/announcements?audience=customer
  * Returns active announcements for the user's role.
+ *
+ * Migrated to apiRoute() — the canonical API entry point.
  */
-import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
-import { ok, withErrorHandling } from '@/lib/api/response';
-import { withSecurity } from '@/lib/api/security';
-import { secureRoute } from '@/lib/api/security-helpers';
-import { logger } from '@/lib/logging';
+import { apiRoute, ok, log, tier } from '@/lib/api/canonical';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ROLE_TO_AUDIENCE = {
+const ROLE_TO_AUDIENCE: Record<string, string> = {
   customer: 'customers',
   driver: 'drivers',
   restaurant_owner: 'restaurants',
   admin: 'admins',
   super_admin: 'admins',
+  restaurant: 'restaurants',
+  manager: 'admins',
 };
 
-export async function GET(req: NextRequest): Promise<NextResponse> {
-  return (await withSecurity(
-    secureRoute('open'),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (_ctx, r) => listAnnouncements(r as NextRequest) as any,
-  )(req)) as unknown as NextResponse;
-}
-
-async function listAnnouncements(req: NextRequest): Promise<NextResponse> {
-  return withErrorHandling(async () => {
-    const url = new URL(req.url);
-    const audienceParam = url.searchParams.get('audience');
+export const GET = apiRoute({
+  method: 'GET',
+  auth: 'optional',
+  rateLimit: tier('open'),
+  cacheControl: 'public, s-maxage=60, stale-while-revalidate=300',
+  handler: async ({ user, query }) => {
+    const audienceParam = typeof query.audience === 'string' ? query.audience : null;
 
     let audiences = ['all'];
     if (audienceParam) {
       audiences = ['all', audienceParam];
-    } else {
-      // Try to get user role
-      const supabase = createServerClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        const { data: profile } = await supabase
-          .from('users')
-          .select('role')
-          .eq('id', user.id)
-          .single();
-        if (profile?.role) {
-          const mapped = (ROLE_TO_AUDIENCE as any)[profile.role];
-          if (mapped) audiences = ['all', mapped];
-        }
-      }
+    } else if (user) {
+      // Use the authenticated user's role to determine the audience
+      const mapped = ROLE_TO_AUDIENCE[user.role];
+      if (mapped) audiences = ['all', mapped];
     }
 
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data, error } = await supabase
       .from('system_announcements')
       .select('*')
@@ -67,12 +51,9 @@ async function listAnnouncements(req: NextRequest): Promise<NextResponse> {
       .limit(5);
 
     if (error) {
-      logger.warn('public announcements fetch failed', {}, error);
+      log.warn('public announcements fetch failed', { error: error.message });
       return ok({ announcements: [] });
     }
-    // PERF: announcements rarely change — share across users via CDN cache.
-    const response = ok({ announcements: data ?? [] });
-    response.headers.set('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
-    return response;
-  });
-}
+    return ok({ announcements: data ?? [] });
+  },
+});

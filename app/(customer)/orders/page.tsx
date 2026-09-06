@@ -8,6 +8,31 @@ import { logger } from '@/lib/logging';
 
 export const dynamic = 'force-dynamic';
 
+interface OrderRow {
+  id: string;
+  order_number: string;
+  status: string;
+  total: number | string | null;
+  created_at: string;
+  restaurants: {
+    id: string;
+    name: string;
+    cover_url: string | null;
+    cuisine: string[] | string | null;
+  } | Array<{
+    id: string;
+    name: string;
+    cover_url: string | null;
+    cuisine: string[] | string | null;
+  }> | null;
+}
+
+interface OrderItemRow {
+  order_id: string;
+  product_name: string | null;
+  quantity: number | null;
+}
+
 /**
  * Orders page — premium, defensive.
  *
@@ -27,7 +52,7 @@ export const dynamic = 'force-dynamic';
 export default async function OrdersPage() {
   const user = await requireRole('customer');
   const { t, locale } = await getServerTranslations();
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
 
   const { data: orders, error } = await supabase
     .from('orders')
@@ -49,7 +74,7 @@ export default async function OrdersPage() {
     logger.error('orders.page: failed to load orders', { userId: user.id, error: error.message, code: error.code });
     return (
       <>
-        <PageHeader title={t.nav.orders} back />
+        <PageHeader title={t.nav.orders} back backHref="/home" />
         <div className="max-w-3xl mx-auto px-4 py-6">
           <EmptyState
             iconName="AlertCircle"
@@ -72,31 +97,41 @@ export default async function OrdersPage() {
   }
 
   // Fetch items for each order — uses `product_name` (the actual column)
-  const orderIds = (orders ?? []).map((o: any) => o.id);
-  let itemMap: Record<string, { count: number; preview: string }> = {};
+  const typedOrders = (orders ?? []) as OrderRow[];
+  const orderIds = typedOrders.map((order) => order.id);
+  const itemMap: Record<string, { count: number; preview: string }> = {};
   if (orderIds.length > 0) {
     const { data: items } = await supabase
       .from('order_items')
       .select('order_id, product_name, quantity')
       .in('order_id', orderIds);
-    for (const it of items ?? []) {
-      const id = (it as any).order_id;
+    for (const it of (items ?? []) as OrderItemRow[]) {
+      const id = it.order_id;
       if (!itemMap[id]) itemMap[id] = { count: 0, preview: '' };
-      itemMap[id].count += Number((it as any).quantity || 1);
-      if (!itemMap[id].preview) itemMap[id].preview = (it as any).product_name || '';
+      itemMap[id].count += Number(it.quantity || 1);
+      if (!itemMap[id].preview) itemMap[id].preview = it.product_name || '';
     }
   }
 
-  const hydratedOrders = (orders ?? []).map((o: any) => ({
-    id: o.id,
-    order_number: o.order_number,
-    status: o.status,
-    total: Number(o.total || 0),
-    created_at: o.created_at,
-    restaurant: o.restaurants || null,
-    item_count: itemMap[o.id]?.count || 0,
-    preview_name: itemMap[o.id]?.preview || '',
-  }));
+  const hydratedOrders = typedOrders.map((o) => {
+    const relation = Array.isArray(o.restaurants) ? o.restaurants[0] : o.restaurants;
+    const restaurant = relation
+      ? {
+          ...relation,
+          cuisine: Array.isArray(relation.cuisine) ? relation.cuisine.join(', ') : relation.cuisine,
+        }
+      : null;
+    return {
+      id: o.id,
+      order_number: o.order_number,
+      status: o.status,
+      total: Number(o.total || 0),
+      created_at: o.created_at,
+      restaurant,
+      item_count: itemMap[o.id]?.count || 0,
+      preview_name: itemMap[o.id]?.preview || '',
+    };
+  });
 
   return (
     <>
@@ -112,6 +147,7 @@ export default async function OrdersPage() {
             : ''
         }
         back
+        backHref="/home"
       />
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6">
         {hydratedOrders.length === 0 ? (

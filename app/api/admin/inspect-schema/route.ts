@@ -8,12 +8,12 @@ import { ok, withErrorHandling } from '@/lib/api/response';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => inspectSchema() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function inspectSchema(): Promise<NextResponse> {
@@ -23,12 +23,14 @@ async function inspectSchema(): Promise<NextResponse> {
 
     const supabase = createServiceClient();
     const tables = ['orders', 'restaurants', 'users', 'order_items', 'notifications'];
-    const results: any = {};
+    const results: Record<string, { fields?: string[]; error?: string }> = {};
 
     for (const t of tables) {
       const { data, error } = await supabase.from(t).select('*').limit(1);
       if (!error && data && data[0]) {
-        results[t] = { fields: Object.keys(data[0]), sample: data[0] };
+        // Never expose row samples here: these tables can contain customer,
+        // payment and notification data. Schema inspection only needs names.
+        results[t] = { fields: Object.keys(data[0]) };
       } else {
         results[t] = { error: error?.message || 'no data' };
       }

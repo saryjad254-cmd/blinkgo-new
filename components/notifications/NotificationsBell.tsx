@@ -1,9 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import Bell from 'lucide-react/dist/esm/icons/bell';
 import Check from 'lucide-react/dist/esm/icons/check';
-import X from 'lucide-react/dist/esm/icons/x';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import Inbox from 'lucide-react/dist/esm/icons/inbox';
 import Package from 'lucide-react/dist/esm/icons/package';
@@ -11,9 +12,9 @@ import Truck from 'lucide-react/dist/esm/icons/truck';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
-import { useT, safeT } from '@/lib/i18n/I18nProvider';
 import { createBrowserClient } from '@/lib/supabase/client';
 import { cn } from '@/lib/cn';
+import type { RealtimeChannel, RealtimePostgresInsertPayload } from '@supabase/supabase-js';
 
 export interface Notification {
   id: string;
@@ -21,9 +22,34 @@ export interface Notification {
   title: string;
   body: string;
   type: 'order' | 'driver' | 'restaurant' | 'promo' | 'info' | 'success' | 'warning';
-  data: any;
+  data: Record<string, unknown>;
   read_at: string | null;
   created_at: string;
+}
+
+interface NotificationLabels {
+  title: string;
+  empty: string;
+  emptyDesc: string;
+  markAll: string;
+  new: string;
+  justNow: string;
+  minutesAgo: (count: number) => string;
+  hoursAgo: (count: number) => string;
+  daysAgo: (count: number) => string;
+  viewAll: string;
+  open: string;
+}
+
+function isNotification(value: unknown): value is Notification {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string'
+    && typeof record.user_id === 'string'
+    && typeof record.title === 'string'
+    && typeof record.body === 'string'
+    && typeof record.type === 'string'
+    && typeof record.created_at === 'string';
 }
 
 interface NotificationsBellProps {
@@ -47,8 +73,8 @@ interface NotificationsBellProps {
  * - Full-page mode for /notifications route
  */
 export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: NotificationsBellProps) {
-  const t = useT();
   const loc = (localeProp ?? 'de') as 'de' | 'ar' | 'en';
+  const pathname = usePathname();
 
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -57,7 +83,7 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
   const containerRef = useRef<HTMLDivElement>(null);
 
   // 3-locale labels
-  const labels = {
+  const labels: NotificationLabels = {
     title: loc === 'ar' ? 'الإشعارات' : loc === 'en' ? 'Notifications' : 'Benachrichtigungen',
     empty: loc === 'ar' ? 'لا توجد إشعارات' : loc === 'en' ? 'No notifications' : 'Keine Benachrichtigungen',
     emptyDesc:
@@ -93,8 +119,8 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
         setNotifications([]);
         return;
       }
-      setNotifications((data ?? []) as Notification[]);
-    } catch (e) {
+      setNotifications((data ?? []).filter(isNotification));
+    } catch {
       setNotifications([]);
     } finally {
       setLoading(false);
@@ -107,14 +133,16 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
   }, []);
 
   useEffect(() => {
-    fetchNotifications();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void fetchNotifications(); });
+    return () => { cancelled = true; };
   }, [fetchNotifications]);
 
   // Subscribe to realtime updates (optional — fallback to polling if it fails)
   useEffect(() => {
     if (!userId) return;
     const supabase = createBrowserClient();
-    let channel: any = null;
+    let channel: RealtimeChannel | null = null;
     try {
       channel = supabase
         .channel(`notifications-changes-${userId}`)
@@ -126,8 +154,11 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
             table: 'notifications',
             filter: `user_id=eq.${userId}`,
           },
-          (payload: any) => {
-            setNotifications((prev) => [payload.new as Notification, ...prev].slice(0, 20));
+          (payload: RealtimePostgresInsertPayload<Record<string, unknown>>) => {
+            const newNotification = payload.new;
+            if (isNotification(newNotification)) {
+              setNotifications((prev) => [newNotification, ...prev].slice(0, 20));
+            }
           },
         )
         .subscribe();
@@ -162,7 +193,14 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
       }
     };
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [open]);
 
   // Mark as read
@@ -261,6 +299,8 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label={labels.title}
+        aria-expanded={open}
+        aria-controls="notifications-bell-panel"
         className={cn(
           'relative w-10 h-10 rounded-full flex items-center justify-center',
           'bg-surface-elevated border border-edge text-text-secondary',
@@ -286,6 +326,9 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
 
       {open && (
         <div
+          id="notifications-bell-panel"
+          role="dialog"
+          aria-label={labels.title}
           className={cn(
             'absolute mt-2 w-[calc(100vw-2rem)] max-w-md',
             loc === 'ar' ? 'left-0' : 'right-0',
@@ -342,6 +385,7 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
                     n={n}
                     locale={loc}
                     labels={labels}
+                    pathname={pathname}
                     onClick={() => markAsRead(n.id)}
                     onNavigate={() => setOpen(false)}
                   />
@@ -353,12 +397,13 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
           {/* Footer */}
           {notifications.length > 0 && (
             <footer className="px-4 py-2.5 border-t border-edge bg-surface-elevated text-center">
-              <a
+              <Link
                 href="/notifications"
+                onClick={() => setOpen(false)}
                 className="text-[10px] font-extrabold text-text-secondary hover:text-white uppercase tracking-wider"
               >
                 {labels.viewAll} →
-              </a>
+              </Link>
             </footer>
           )}
         </div>
@@ -370,59 +415,76 @@ export function NotificationsBell({ variant = 'dropdown', locale: localeProp }: 
 interface NotificationItemProps {
   n: Notification;
   locale: 'de' | 'ar' | 'en';
-  labels: any;
+  labels: NotificationLabels;
+  pathname: string;
   onClick: () => void;
   onNavigate: () => void;
 }
 
-function NotificationItem({ n, locale, labels, onClick, onNavigate }: NotificationItemProps) {
+function notificationTarget(notification: Notification, pathname: string): string | null {
+  const explicitTarget = notification.data.href ?? notification.data.url;
+  if (typeof explicitTarget === 'string' && /^\/(?!\/)/.test(explicitTarget)) return explicitTarget;
+
+  const orderId = notification.data.order_id;
+  if (typeof orderId === 'string') {
+    const safeId = encodeURIComponent(orderId);
+    if (pathname.startsWith('/driver')) return `/driver/orders/${safeId}`;
+    if (pathname.startsWith('/restaurant')) return `/restaurant/orders/${safeId}`;
+    if (pathname.startsWith('/admin')) return `/admin/orders/${safeId}`;
+    return `/orders/${safeId}`;
+  }
+
+  const restaurantId = notification.data.restaurant_id;
+  return typeof restaurantId === 'string' ? `/restaurants/${encodeURIComponent(restaurantId)}` : null;
+}
+
+function NotificationItem({ n, locale, labels, pathname, onClick, onNavigate }: NotificationItemProps) {
   const icon = useMemo(() => notificationIcon(n.type), [n.type]);
   const accent = useMemo(() => notificationAccent(n.type), [n.type]);
   const isUnread = !n.read_at;
-
-  const target = useMemo(() => {
-    if (n.data?.order_id) return `/orders/${n.data.order_id}`;
-    if (n.data?.restaurant_id) return `/restaurant/menu/${n.data.restaurant_id}`;
-    return null;
-  }, [n.data]);
-
-  const Wrapper: any = target ? 'a' : 'div';
-  const wrapperProps: any = target
-    ? { href: target, onClick: () => { onClick(); onNavigate(); } }
-    : { onClick };
+  const target = useMemo(() => notificationTarget(n, pathname), [n, pathname]);
+  const className = cn(
+    'w-full flex items-start gap-3 p-3 text-start hover:bg-surface-elevated transition-colors cursor-pointer',
+    isUnread && 'bg-brand-red-500/[0.04]',
+  );
+  const content = (
+    <>
+      <div
+        className={cn(
+          'w-9 h-9 rounded-xl flex items-center justify-center text-white flex-shrink-0',
+          accent,
+        )}
+      >
+        {icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-start justify-between gap-2">
+          <p className={cn('text-sm font-bold text-text leading-tight', isUnread && 'text-white')}>
+            {n.title}
+          </p>
+          {isUnread && (
+            <span className="w-2 h-2 rounded-full bg-brand-red-500 flex-shrink-0 mt-1.5 animate-pulse" />
+          )}
+        </div>
+        <p className="text-xs text-text-secondary line-clamp-2 mt-0.5">{n.body}</p>
+        <p className="text-[10px] text-text-muted mt-1.5 font-medium uppercase tracking-wider">
+          {timeAgo(n.created_at, locale, labels)}
+        </p>
+      </div>
+    </>
+  );
 
   return (
     <li>
-      <Wrapper
-        {...wrapperProps}
-        className={cn(
-          'flex items-start gap-3 p-3 hover:bg-surface-elevated transition-colors cursor-pointer',
-          isUnread && 'bg-brand-red-500/[0.04]',
-        )}
-      >
-        <div
-          className={cn(
-            'w-9 h-9 rounded-xl flex items-center justify-center text-white flex-shrink-0',
-            accent,
-          )}
-        >
-          {icon}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-start justify-between gap-2">
-            <p className={cn('text-sm font-bold text-text leading-tight', isUnread && 'text-white')}>
-              {n.title}
-            </p>
-            {isUnread && (
-              <span className="w-2 h-2 rounded-full bg-brand-red-500 flex-shrink-0 mt-1.5 animate-pulse" />
-            )}
-          </div>
-          <p className="text-xs text-text-secondary line-clamp-2 mt-0.5">{n.body}</p>
-          <p className="text-[10px] text-text-muted mt-1.5 font-medium uppercase tracking-wider">
-            {timeAgo(n.created_at, locale, labels)}
-          </p>
-        </div>
-      </Wrapper>
+      {target ? (
+        <Link href={target} onClick={() => { onClick(); onNavigate(); }} className={className}>
+          {content}
+        </Link>
+      ) : (
+        <button type="button" onClick={onClick} className={className}>
+          {content}
+        </button>
+      )}
     </li>
   );
 }
@@ -435,7 +497,7 @@ function NotificationCard({
 }: {
   n: Notification;
   locale: 'de' | 'ar' | 'en';
-  labels: any;
+  labels: NotificationLabels;
   onClick: () => void;
 }) {
   const icon = notificationIcon(n.type);
@@ -513,7 +575,7 @@ function notificationAccent(type: string) {
   }
 }
 
-function timeAgo(iso: string, locale: 'de' | 'ar' | 'en', labels: any): string {
+function timeAgo(iso: string, locale: 'de' | 'ar' | 'en', labels: NotificationLabels): string {
   const ms = Date.now() - new Date(iso).getTime();
   if (ms < 60_000) return labels.justNow;
   const min = Math.floor(ms / 60_000);

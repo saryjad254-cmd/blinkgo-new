@@ -1,8 +1,13 @@
-// Simple admin authentication for admin API routes
-// Either: logged-in admin user OR a valid X-Admin-Key header
+/**
+ * Simple admin authentication for admin API routes.
+ * Either: logged-in admin user OR a valid X-Admin-Key header.
+ *
+ * Built on @/lib/foundation: uses fail() for response shape consistency.
+ */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
+import { fail, AuthenticationError } from '@/lib/foundation';
 
 export async function requireAdmin(req: NextRequest): Promise<NextResponse | null> {
   // Option 1: Admin secret (for server-to-server, scripts, cron jobs)
@@ -13,7 +18,7 @@ export async function requireAdmin(req: NextRequest): Promise<NextResponse | nul
   }
 
   // Option 2: Logged-in admin user
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -28,9 +33,5 @@ export async function requireAdmin(req: NextRequest): Promise<NextResponse | nul
     }
   }
 
-  // Deny
-  return NextResponse.json(
-    { ok: false, error: 'UNAUTHORIZED', message: 'Admin access required' },
-    { status: 401 },
-  );
+  return fail(new AuthenticationError('Admin access required'));
 }

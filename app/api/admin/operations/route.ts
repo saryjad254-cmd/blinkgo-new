@@ -28,9 +28,9 @@ export async function GET(request: NextRequest) {
       finance,
       generatedAt: new Date().toISOString(),
     });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Failed to load operations' },
+      { ok: false, error: error instanceof Error ? error.message : 'Failed to load operations' },
       { status: 500 }
     );
   }

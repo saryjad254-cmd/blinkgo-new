@@ -9,10 +9,11 @@ import type { EmailProvider, EmailMessage, EmailResult, EmailProviderName } from
 import { ResendProvider } from './resend';
 import { SendGridProvider } from './sendgrid';
 import { IntegrationError } from '../types';
+import { assertTrustedEmailUrl, emailIdempotencyKey, escapeEmailHtml, normalizeEmailLocale } from './safety';
 
 export class EmailRouter {
   private providers: Map<EmailProviderName, EmailProvider> = new Map();
-  private defaultFrom = process.env.EMAIL_FROM || 'BlinkGo <noreply@blinkgo.com>';
+  private defaultFrom = process.env.EMAIL_FROM || 'BlinkGo <noreply@blinkgo.de>';
 
   constructor() {
     this.providers.set('resend', new ResendProvider());
@@ -44,74 +45,84 @@ export class EmailRouter {
   // ── Templates ──────────────────────────────────
 
   async sendWelcome(to: string, name: string, locale: string = 'en'): Promise<EmailResult> {
-    const templates = emailTemplates[locale] || emailTemplates.en;
+    const templates = emailTemplates[normalizeEmailLocale(locale)] || emailTemplates.en;
+    const safeName = escapeEmailHtml(name);
     return this.send({
       from: this.defaultFrom,
       to,
       subject: templates.welcome.subject,
-      html: templates.welcome.html(name),
+      html: templates.welcome.html(safeName),
       text: templates.welcome.text(name),
       tags: { type: 'welcome' },
+      idempotency_key: emailIdempotencyKey('welcome', to),
     });
   }
 
   async sendPasswordReset(to: string, name: string, resetLink: string, locale: string = 'en'): Promise<EmailResult> {
-    const templates = emailTemplates[locale] || emailTemplates.en;
+    const templates = emailTemplates[normalizeEmailLocale(locale)] || emailTemplates.en;
+    const safeLink = assertTrustedEmailUrl(resetLink);
     return this.send({
       from: this.defaultFrom,
       to,
       subject: templates.passwordReset.subject,
-      html: templates.passwordReset.html(name, resetLink),
-      text: templates.passwordReset.text(name, resetLink),
+      html: templates.passwordReset.html(escapeEmailHtml(name), escapeEmailHtml(safeLink)),
+      text: templates.passwordReset.text(name, safeLink),
       tags: { type: 'password_reset' },
+      idempotency_key: emailIdempotencyKey('password-reset', safeLink),
     });
   }
 
   async sendOrderConfirmation(to: string, name: string, orderId: string, total: number, restaurantName: string, locale: string = 'en'): Promise<EmailResult> {
-    const templates = emailTemplates[locale] || emailTemplates.en;
+    const templates = emailTemplates[normalizeEmailLocale(locale)] || emailTemplates.en;
     return this.send({
       from: this.defaultFrom,
       to,
       subject: 'Order ' + orderId + ' confirmed',
-      html: templates.orderConfirmation.html(name, orderId, total, restaurantName),
+      html: templates.orderConfirmation.html(escapeEmailHtml(name), escapeEmailHtml(orderId), total, escapeEmailHtml(restaurantName)),
       text: templates.orderConfirmation.text(name, orderId, total, restaurantName),
       tags: { type: 'order_confirmation', order_id: orderId },
+      idempotency_key: emailIdempotencyKey('order-confirmation', orderId),
     });
   }
 
   async sendDriverAssignment(to: string, name: string, orderId: string, restaurantName: string, customerAddress: string, locale: string = 'en'): Promise<EmailResult> {
-    const templates = emailTemplates[locale] || emailTemplates.en;
+    const templates = emailTemplates[normalizeEmailLocale(locale)] || emailTemplates.en;
     return this.send({
       from: this.defaultFrom,
       to,
       subject: 'New delivery: Order ' + orderId,
-      html: templates.driverAssignment.html(name, orderId, restaurantName, customerAddress),
+      html: templates.driverAssignment.html(escapeEmailHtml(name), escapeEmailHtml(orderId), escapeEmailHtml(restaurantName), escapeEmailHtml(customerAddress)),
       text: templates.driverAssignment.text(name, orderId, restaurantName, customerAddress),
       tags: { type: 'driver_assignment', order_id: orderId },
+      idempotency_key: emailIdempotencyKey('driver-assignment', `${orderId}:${to}`),
     });
   }
 
   async sendRestaurantOnboarding(to: string, name: string, restaurantName: string, dashboardLink: string, locale: string = 'en'): Promise<EmailResult> {
-    const templates = emailTemplates[locale] || emailTemplates.en;
+    const templates = emailTemplates[normalizeEmailLocale(locale)] || emailTemplates.en;
+    const safeLink = assertTrustedEmailUrl(dashboardLink);
     return this.send({
       from: this.defaultFrom,
       to,
       subject: templates.restaurantOnboarding.subject,
-      html: templates.restaurantOnboarding.html(name, restaurantName, dashboardLink),
-      text: templates.restaurantOnboarding.text(name, restaurantName, dashboardLink),
+      html: templates.restaurantOnboarding.html(escapeEmailHtml(name), escapeEmailHtml(restaurantName), escapeEmailHtml(safeLink)),
+      text: templates.restaurantOnboarding.text(name, restaurantName, safeLink),
       tags: { type: 'restaurant_onboarding' },
+      idempotency_key: emailIdempotencyKey('restaurant-onboarding', `${to}:${restaurantName}`),
     });
   }
 
   async sendReceipt(to: string, name: string, orderId: string, items: { name: string; qty: number; price: number }[], total: number, locale: string = 'en'): Promise<EmailResult> {
-    const templates = emailTemplates[locale] || emailTemplates.en;
+    const templates = emailTemplates[normalizeEmailLocale(locale)] || emailTemplates.en;
+    const safeItems = items.map((item) => ({ ...item, name: escapeEmailHtml(item.name) }));
     return this.send({
       from: this.defaultFrom,
       to,
       subject: 'Receipt for order ' + orderId,
-      html: templates.receipt.html(name, orderId, items, total),
+      html: templates.receipt.html(escapeEmailHtml(name), escapeEmailHtml(orderId), safeItems, total),
       text: templates.receipt.text(name, orderId, items, total),
       tags: { type: 'receipt', order_id: orderId },
+      idempotency_key: emailIdempotencyKey('receipt', orderId),
     });
   }
 }

@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
       // v80 audit fix: escape user input (PostgREST filter injection)
       const { escapeIlike } = await import('@/lib/api/escape-ilike');
       const safe = escapeIlike(search);
-      q = q.or(`email.ilike.%${safe}%,full_name.ilike.%${safe}%`);
+      q = q.or(`email.ilike.%${safe}%,name.ilike.%${safe}%`);
     }
     const { data, error } = await q;
     if (error) {
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
     const requestedRole: string = typeof body.role === 'string' ? body.role : 'customer';
     const isSuperAdmin = auth.role === 'super_admin';
     let role: string;
-    if (SUPER_ONLY_ROLES.includes(requestedRole as any)) {
+    if ((SUPER_ONLY_ROLES as readonly string[]).includes(requestedRole)) {
       if (!isSuperAdmin) {
         return NextResponse.json(
           { ok: false, error: 'Only super_admin can create admin/manager accounts' },
@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
         );
       }
       role = requestedRole;
-    } else if (ALLOWED_CREATE_ROLES.includes(requestedRole as any)) {
+    } else if ((ALLOWED_CREATE_ROLES as readonly string[]).includes(requestedRole)) {
       role = requestedRole;
     } else {
       return NextResponse.json({ ok: false, error: 'Invalid role' }, { status: 400 });
@@ -82,7 +82,7 @@ export async function POST(req: NextRequest) {
       .from('users')
       .insert({
         email,
-        full_name: typeof body.full_name === 'string' ? body.full_name.slice(0, 100) : null,
+        name: typeof body.full_name === 'string' ? body.full_name.slice(0, 100) : null,
         role,
         phone: typeof body.phone === 'string' ? body.phone.slice(0, 20) : null,
         is_verified: false,
@@ -108,14 +108,30 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
-  const auth = await requireApiRole(['admin', 'super_admin', 'manager']);
+  const auth = await requireApiRole(['admin', 'super_admin']);
   if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
   try {
-    const body = await req.json();
-    if (body.bulkAction && Array.isArray(body.userIds)) {
+    const rawBody: unknown = await req.json().catch(() => null);
+    const body = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as Record<string, unknown>
+      : {};
+    if ((body.bulkAction === 'suspend' || body.bulkAction === 'unsuspend') && Array.isArray(body.userIds)) {
+      const userIds = [...new Set(body.userIds.filter((id): id is string => typeof id === 'string' && id.length > 0))].slice(0, 100);
+      if (userIds.length === 0) return NextResponse.json({ ok: false, error: 'userIds required' }, { status: 400 });
+      if (userIds.includes(auth.id)) return NextResponse.json({ ok: false, error: 'Cannot change your own account state' }, { status: 400 });
+
       const db = createServiceClient();
+      const { data: targets, error: targetError } = await db.from('users').select('id, role').in('id', userIds);
+      if (targetError) return NextResponse.json({ ok: false, error: safeErrorMessage(targetError) }, { status: 400 });
+      if ((targets ?? []).some((target) => target.role === 'super_admin')) {
+        return NextResponse.json({ ok: false, error: 'Super-admin accounts cannot be changed in bulk' }, { status: 403 });
+      }
+      if (auth.role !== 'super_admin' && (targets ?? []).some((target) => target.role === 'admin' || target.role === 'manager')) {
+        return NextResponse.json({ ok: false, error: 'Only super_admin can change admin or manager accounts' }, { status: 403 });
+      }
+
       const update = body.bulkAction === 'suspend' ? { is_active: false } : { is_active: true };
-      const { data, error } = await db.from('users').update(update).in('id', body.userIds).select('id');
+      const { data, error } = await db.from('users').update(update).in('id', userIds).select('id');
       if (error) return NextResponse.json({ ok: false, error: safeErrorMessage(error) }, { status: 400 });
       for (const u of data || []) {
         await recordAudit({
@@ -128,7 +144,7 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true, count: (data || []).length });
     }
     return NextResponse.json({ ok: false, error: 'Invalid request' }, { status: 400 });
-  } catch (e) {
+  } catch {
     return NextResponse.json({ ok: false, error: 'Failed' }, { status: 500 });
   }
 }

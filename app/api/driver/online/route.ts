@@ -13,24 +13,43 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { createServerClient } from '@/lib/supabase/server';
-import { getApiUserWithRole } from '@/lib/auth-helper';
+import { isDriverVerificationComplete } from '@/lib/driver/verification';
+import { safeErrorMessage } from '@/lib/api/safe-error';
+import {
+  isDriverWithinWorkingHours,
+  normalizeDriverWorkingHours,
+  type DriverWorkingHour,
+} from '@/lib/driver/working-hours';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const DAY_NAMES_DE = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+type ServiceClient = ReturnType<typeof createServiceClient>;
+type DriverRole = 'driver' | 'admin' | 'super_admin';
 
-async function getDriverFromRequest(): Promise<{ user: any; profile: any } | null> {
+interface DriverAuth {
+  user: { id: string; email: string | null };
+  profile: {
+    id: string;
+    email: string | null;
+    name: string | null;
+    role: DriverRole;
+    is_active: boolean;
+    is_verified: boolean;
+  };
+}
+
+async function getDriverFromRequest(): Promise<DriverAuth | null> {
   // SECURITY: Always use the Supabase server client (signature-verified).
   // Role is read from public.users (NEVER from user_metadata).
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
     const { data: profile } = await supabase
       .from('users')
-      .select('id, email, name, role, is_active')
+      .select('id, email, name, role, is_active, is_verified')
       .eq('id', user.id)
       .single();
 
@@ -40,30 +59,19 @@ async function getDriverFromRequest(): Promise<{ user: any; profile: any } | nul
 
     return {
       user: { id: user.id, email: user.email ?? profile.email },
-      profile,
+      profile: profile as DriverAuth['profile'],
     };
   } catch {
     return null;
   }
 }
 
-function getCurrentMinutes(): number {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
-}
-
-function isInWorkingHours(hours: any[]): boolean {
-  if (!hours || hours.length !== 7) return false;
-  const now = new Date();
-  const day = now.getDay();
-  const currentMinutes = getCurrentMinutes();
-  const todayHours = hours.find((h) => h.day_of_week === day);
-  if (!todayHours || !todayHours.is_enabled) return false;
-  const [startH, startM] = todayHours.start_time.split(':').map(Number);
-  const [endH, endM] = todayHours.end_time.split(':').map(Number);
-  const startMinutes = startH * 60 + startM;
-  const endMinutes = endH * 60 + endM;
-  return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+async function loadWorkingHours(client: ServiceClient, driverId: string): Promise<DriverWorkingHour[] | null> {
+  const { data, error } = await client
+    .from('driver_working_hours')
+    .select('day_of_week,start_time,end_time,is_enabled')
+    .eq('driver_id', driverId);
+  return error ? null : normalizeDriverWorkingHours(data);
 }
 
 export async function POST(req: NextRequest) {
@@ -74,10 +82,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, error: 'Driver only' }, { status: 403 });
     }
 
-    const body = await req.json().catch(() => ({}));
-    const isOnline = !!body.is_online;
+    const body: unknown = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object' || Array.isArray(body) || typeof (body as Record<string, unknown>).is_online !== 'boolean') {
+      return NextResponse.json({ ok: false, error: 'is_online_must_be_boolean' }, { status: 400 });
+    }
+    const isOnline = (body as { is_online: boolean }).is_online;
     const driverId = auth.user.id;
     const supabase = createServiceClient();
+
+    if (isOnline && auth.profile.role === 'driver') {
+      let { data: driverProfile } = await supabase.from('drivers').select('id,user_id,vehicle_type,is_approved,status').eq('user_id', driverId).maybeSingle();
+      if (!driverProfile) ({ data: driverProfile } = await supabase.from('drivers').select('id,user_id,vehicle_type,is_approved,status').eq('id', driverId).maybeSingle());
+      const { data: documents } = await supabase.from('driver_documents').select('document_type,status,uploaded_at').eq('driver_id', driverId);
+      const evidenceComplete = driverProfile && isDriverVerificationComplete(driverProfile.vehicle_type, documents ?? []);
+      if (!auth.profile.is_verified || !driverProfile?.is_approved || driverProfile.status !== 'active' || !evidenceComplete) {
+        return NextResponse.json({
+          ok: false,
+          error: 'driver_verification_required',
+          message: 'Ihre Fahrerunterlagen müssen vor der Aktivierung vollständig geprüft werden.',
+          message_ar: 'يجب اعتماد جميع مستندات السائق قبل الاتصال واستقبال الطلبات.',
+          message_en: 'All driver documents must be approved before going online.',
+        }, { status: 403 });
+      }
+    }
 
     // Get current user_metadata
     const { data: userData } = await supabase.auth.admin.getUserById(driverId);
@@ -85,28 +112,9 @@ export async function POST(req: NextRequest) {
 
     if (isOnline) {
       // ===== GOING ONLINE =====
-      // Validate working hours BEFORE allowing online
-      let workingHours = existingMeta.working_hours;
-
-      // If no working hours in metadata, try to load from DB
-      if (!workingHours || workingHours.length !== 7) {
-        try {
-          const { data: dbHours } = await supabase
-            .from('driver_working_hours')
-            .select('*')
-            .eq('driver_id', driverId);
-          if (dbHours && dbHours.length === 7) {
-            workingHours = dbHours.map((h: any) => ({
-              day_of_week: h.day_of_week,
-              start_time: h.start_time,
-              end_time: h.end_time,
-              is_enabled: h.is_enabled,
-            }));
-          }
-        } catch {
-          // ignore
-        }
-      }
+      // Working hours are authorization data. Never trust user_metadata here;
+      // drivers can update their own metadata through Supabase Auth.
+      const workingHours = await loadWorkingHours(supabase, driverId);
 
       if (!workingHours || workingHours.length !== 7) {
         return NextResponse.json({
@@ -118,7 +126,7 @@ export async function POST(req: NextRequest) {
         }, { status: 403 });
       }
 
-      if (!isInWorkingHours(workingHours)) {
+      if (!isDriverWithinWorkingHours(workingHours)) {
         return NextResponse.json({
           ok: false,
           error: 'outside_working_hours',
@@ -139,18 +147,28 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      // Ensure a driver_status row exists (so the order auto-assign can find this driver)
+      // Preserve an existing assignment when the driver reconnects. The old
+      // code reset is_on_delivery/current_order_id to false/null here, which
+      // made auto-dispatch assign a second order to an already busy driver.
       try {
+        const { data: activeOrder } = await supabase
+          .from('orders')
+          .select('id')
+          .eq('driver_id', driverId)
+          .in('status', ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivering'])
+          .order('accepted_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
         await supabase
           .from('driver_status')
           .upsert({
             driver_id: driverId,
             is_online: true,
-            is_on_delivery: false,
-            current_order_id: null,
+            is_on_delivery: Boolean(activeOrder),
+            current_order_id: activeOrder?.id ?? null,
             updated_at: new Date().toISOString(),
           }, { onConflict: 'driver_id' });
-      } catch (e) {
+      } catch {
         // non-fatal — the order status auto-assign will retry on the next 'ready' transition
       }
 
@@ -179,9 +197,9 @@ export async function POST(req: NextRequest) {
             // Pick closest
             let bestOrderId: string | null = null;
             let bestDistance = Infinity;
-            if (ds.latitude && ds.longitude) {
+            if (Number.isFinite(ds.latitude) && Number.isFinite(ds.longitude)) {
               for (const o of readyOrders) {
-                if (!o.restaurant_latitude || !o.restaurant_longitude) continue;
+                if (!Number.isFinite(o.restaurant_latitude) || !Number.isFinite(o.restaurant_longitude)) continue;
                 const R = 6371;
                 const dLat = ((ds.latitude - o.restaurant_latitude) * Math.PI) / 180;
                 const dLng = ((ds.longitude - o.restaurant_longitude) * Math.PI) / 180;
@@ -196,9 +214,11 @@ export async function POST(req: NextRequest) {
                   bestOrderId = o.id;
                 }
               }
-            } else {
-              bestOrderId = readyOrders[0].id;
             }
+            // GPS is an optimisation, not a prerequisite for dispatch. If no
+            // ready order has usable restaurant coordinates, claim the oldest
+            // one instead of leaving it permanently unassigned.
+            bestOrderId ??= readyOrders[0].id;
             if (bestOrderId) {
               // Atomic assign
               const { data: claimed } = await supabase
@@ -233,10 +253,18 @@ export async function POST(req: NextRequest) {
             }
           }
         }
-      } catch (e) {
+      } catch (error: unknown) {
         // Non-fatal — the driver is still online even if auto-dispatch fails
-        console.error('Auto-dispatch on go-online failed (non-fatal)', e);
+        console.error('Auto-dispatch on go-online failed (non-fatal)', error);
       }
+
+      // Keep the legacy profile mirror synchronized for reports and screens
+      // that have not yet migrated to driver_status. Dispatch decisions still
+      // use driver_status as the authoritative source.
+      await supabase
+        .from('drivers')
+        .update({ is_online: true, is_available: !assignedOrderId })
+        .or(`id.eq.${driverId},user_id.eq.${driverId}`);
 
       return NextResponse.json({
         ok: true,
@@ -313,9 +341,14 @@ export async function POST(req: NextRequest) {
             current_order_id: inFlightOrderId,     // KEEP the order id
             updated_at: new Date().toISOString(),
           }, { onConflict: 'driver_id' });
-      } catch (e) {
+      } catch {
         // non-fatal
       }
+
+      await supabase
+        .from('drivers')
+        .update({ is_online: false, is_available: false })
+        .or(`id.eq.${driverId},user_id.eq.${driverId}`);
 
       return NextResponse.json({
         ok: true,
@@ -324,9 +357,9 @@ export async function POST(req: NextRequest) {
         in_flight_order_id: inFlightOrderId,
       });
     }
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Online toggle error:', err);
-    return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: safeErrorMessage(err) }, { status: 500 });
   }
 }
 
@@ -336,13 +369,32 @@ export async function GET() {
     if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
     const supabase = createServiceClient();
-    const { data: userData } = await supabase.auth.admin.getUserById(auth.user.id);
+    const [{ data: userData }, { data: dispatchStatus }] = await Promise.all([
+      supabase.auth.admin.getUserById(auth.user.id),
+      supabase.from('driver_status').select('is_online,is_on_delivery,current_order_id').eq('driver_id', auth.user.id).maybeSingle(),
+    ]);
     const meta = userData?.user?.user_metadata || {};
-    let isOnline = !!meta.is_online;
+    let isOnline = Boolean(dispatchStatus?.is_online);
     const changedBy = meta.online_changed_by || null;
     const changedAt = meta.online_changed_at || null;
 
-    // SAFETY: if is_online=true but it's not manual or hours changed, force offline
+    if (auth.profile.role === 'driver') {
+      let { data: driverProfile } = await supabase.from('drivers').select('id,user_id,vehicle_type,is_approved,status,is_online').eq('user_id', auth.user.id).maybeSingle();
+      if (!driverProfile) ({ data: driverProfile } = await supabase.from('drivers').select('id,user_id,vehicle_type,is_approved,status,is_online').eq('id', auth.user.id).maybeSingle());
+      const { data: documents } = await supabase.from('driver_documents').select('document_type,status,uploaded_at').eq('driver_id', auth.user.id);
+      const evidenceComplete = driverProfile && isDriverVerificationComplete(driverProfile.vehicle_type, documents ?? []);
+      const verifiedForDispatch = auth.profile.is_verified && driverProfile?.is_approved && driverProfile.status === 'active' && evidenceComplete;
+      if (!verifiedForDispatch) {
+        isOnline = false;
+        await Promise.all([
+          supabase.from('driver_status').update({ is_online: false, is_on_delivery: false, current_order_id: null }).eq('driver_id', auth.user.id),
+          driverProfile ? supabase.from('drivers').update({ is_online: false, is_available: false, status: 'pending' }).eq('id', driverProfile.id) : Promise.resolve(),
+        ]);
+      }
+    }
+
+    // SAFETY: if the trusted dispatch state is online, the manual action and
+    // current working hours must still be valid.
     if (isOnline) {
       // Check 1: must be marked as manual ('driver')
       if (changedBy !== 'driver') {
@@ -358,24 +410,8 @@ export async function GET() {
         isOnline = false;
       } else {
         // Check 2: must still be within working hours
-        let workingHours = meta.working_hours;
-        if (!workingHours || workingHours.length !== 7) {
-          try {
-            const { data: dbHours } = await supabase
-              .from('driver_working_hours')
-              .select('*')
-              .eq('driver_id', auth.user.id);
-            if (dbHours && dbHours.length === 7) {
-              workingHours = dbHours.map((h: any) => ({
-                day_of_week: h.day_of_week,
-                start_time: h.start_time,
-                end_time: h.end_time,
-                is_enabled: h.is_enabled,
-              }));
-            }
-          } catch {}
-        }
-        if (!workingHours || !isInWorkingHours(workingHours)) {
+        const workingHours = await loadWorkingHours(supabase, auth.user.id);
+        if (!workingHours || !isDriverWithinWorkingHours(workingHours)) {
           // Out of hours - auto revert
           await supabase.auth.admin.updateUserById(auth.user.id, {
             user_metadata: {
@@ -396,8 +432,8 @@ export async function GET() {
       changed_by: changedBy,
       changed_at: changedAt,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     console.error('Online GET error:', err);
-    return NextResponse.json({ ok: false, error: err.message }, { status: 500 });
+    return NextResponse.json({ ok: false, error: safeErrorMessage(err) }, { status: 500 });
   }
 }

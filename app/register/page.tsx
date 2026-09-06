@@ -1,357 +1,120 @@
 'use client';
 
-import { useState, Suspense, useEffect } from 'react';
+import { Suspense, useState, type FormEvent } from 'react';
 import Link from 'next/link';
-import { useRouter, useSearchParams } from 'next/navigation';
-import Mail from 'lucide-react/dist/esm/icons/mail';
-import Lock from 'lucide-react/dist/esm/icons/lock';
-import User from 'lucide-react/dist/esm/icons/user';
-import ArrowRight from 'lucide-react/dist/esm/icons/arrow-right';
+import { useRouter } from 'next/navigation';
+import Eye from 'lucide-react/dist/esm/icons/eye';
+import EyeOff from 'lucide-react/dist/esm/icons/eye-off';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
-import CheckCircle from 'lucide-react/dist/esm/icons/check-circle';
-import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
+import { AuthAlert, AuthShell, FieldLabel, authInputClass, authPrimaryButtonClass } from '@/components/auth/AuthShell';
+import { AUTH_COPY } from '@/components/auth/auth-copy';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { extractErrorMessage } from '@/lib/api/error-helper';
+import { CUSTOMER_TERMS_VERSION, PRIVACY_NOTICE_VERSION } from '@/lib/legal/versions';
 
-const COPY: Record<string, any> = {
-  de: {
-    title: 'Konto erstellen',
-    subtitle: 'Werde Teil von BlinkGo und bestelle in Sekunden',
-    name: 'Name *',
-    namePh: 'Vor- und Nachname',
-    email: 'E-Mail *',
-    emailPh: 'deine@email.de',
-    phone: 'Telefon (optional)',
-    phonePh: '+49 176 ...',
-    password: 'Passwort *',
-    passwordPh: 'Mindestens 8 Zeichen',
-    confirmPassword: 'Passwort bestätigen *',
-    confirmPasswordPh: 'Passwort wiederholen',
-    submit: 'Konto erstellen',
-    loading: 'Wird erstellt…',
-    haveAccount: 'Schon ein Konto?',
-    login: 'Anmelden',
-    back: '← Zurück zum Login',
-    errRequired: 'Bitte alle Pflichtfelder ausfüllen',
-    errShortPwd: 'Passwort muss mindestens 8 Zeichen haben',
-    errMismatch: 'Passwörter stimmen nicht überein',
-    errInvalidEmail: 'Bitte gültige E-Mail eingeben',
-    errFailed: 'Registrierung fehlgeschlagen',
-    success: 'Konto erstellt! Wir leiten dich zur Code-Eingabe weiter…',
-  },
-  ar: {
-    title: 'إنشاء حساب',
-    subtitle: 'انضم لـ BlinkGo واطلب في ثوان',
-    name: 'الاسم *',
-    namePh: 'الاسم الكامل',
-    email: 'البريد الإلكتروني *',
-    emailPh: 'بريدك@email.com',
-    phone: 'الهاتف (اختياري)',
-    phonePh: '+964 770 ...',
-    password: 'كلمة المرور *',
-    passwordPh: '٨ أحرف على الأقل',
-    confirmPassword: 'تأكيد كلمة المرور *',
-    confirmPasswordPh: 'أعد كلمة المرور',
-    submit: 'إنشاء الحساب',
-    loading: 'جاري الإنشاء…',
-    haveAccount: 'عندك حساب؟',
-    login: 'تسجيل الدخول',
-    back: '→ العودة إلى تسجيل الدخول',
-    errRequired: 'يرجى ملء جميع الحقول المطلوبة',
-    errShortPwd: 'كلمة المرور يجب أن تكون 8 أحرف على الأقل',
-    errMismatch: 'كلمات المرور غير متطابقة',
-    errInvalidEmail: 'يرجى إدخال بريد إلكتروني صالح',
-    errFailed: 'فشل التسجيل',
-    success: 'تم إنشاء الحساب! سنوجهك لإدخال رمز التأكيد…',
-  },
-  en: {
-    title: 'Create account',
-    subtitle: 'Join BlinkGo and order in seconds',
-    name: 'Name *',
-    namePh: 'First and last name',
-    email: 'Email *',
-    emailPh: 'your@email.com',
-    phone: 'Phone (optional)',
-    phonePh: '+1 555 ...',
-    password: 'Password *',
-    passwordPh: 'At least 8 characters',
-    confirmPassword: 'Confirm password *',
-    confirmPasswordPh: 'Repeat password',
-    submit: 'Create account',
-    loading: 'Creating…',
-    haveAccount: 'Already have an account?',
-    login: 'Sign in',
-    back: '→ Back to login',
-    errRequired: 'Please fill all required fields',
-    errShortPwd: 'Password must be at least 8 characters',
-    errMismatch: 'Passwords do not match',
-    errInvalidEmail: 'Please enter a valid email',
-    errFailed: 'Registration failed',
-    success: 'Account created! Taking you to the verification step…',
-  },
-};
+const REGISTER_LEGAL_COPY = {
+  de: { phoneInvalid: 'Bitte gib eine gültige Telefonnummer ein.', legalRequired: 'Bitte bestätige die AGB und die Datenschutzhinweise.', prefix: 'Ich habe die', terms: 'AGB', connector: 'und die', privacy: 'Datenschutzhinweise', suffix: 'gelesen und akzeptiere sie.' },
+  ar: { phoneInvalid: 'يرجى إدخال رقم هاتف صالح.', legalRequired: 'يرجى الموافقة على الشروط وسياسة الخصوصية.', prefix: 'قرأت', terms: 'الشروط والأحكام', connector: 'و', privacy: 'سياسة الخصوصية', suffix: 'وأوافق عليهما.' },
+  en: { phoneInvalid: 'Enter a valid phone number.', legalRequired: 'Accept the Terms and Privacy Policy to continue.', prefix: 'I have read and accept the', terms: 'Terms', connector: 'and', privacy: 'Privacy Policy', suffix: '.' },
+} as const;
 
-function RegisterFormInner() {
+function RegisterInner() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const { locale, setLocale } = useI18n();
-  const t = COPY[locale] ?? COPY.de;
-
-  // Re-sync locale if the URL has ?lang= (emails + OAuth land here)
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const urlLang = searchParams.get('lang');
-    if ((urlLang === 'ar' || urlLang === 'en' || urlLang === 'de') && urlLang !== locale) {
-      setLocale(urlLang);
-    }
-  }, [searchParams, locale, setLocale]);
-
+  const { locale } = useI18n();
+  const copy = AUTH_COPY[locale];
+  const legalCopy = REGISTER_LEGAL_COPY[locale];
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [legalError, setLegalError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
     setError(null);
-
-    if (!name || !email || !password || !confirmPassword) {
-      setError(t.errRequired);
+    setLegalError(null);
+    const normalizedName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPhone = phone.trim();
+    if (!normalizedName || !normalizedEmail || !password || !confirmPassword) return setError(copy.register.required);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return setError(copy.register.invalidEmail);
+    if (normalizedPhone && !/^\+?[0-9\s\-()]{6,20}$/.test(normalizedPhone)) return setError(legalCopy.phoneInvalid);
+    if (password.length < 8 || password.length > 128) return setError(copy.register.weakPassword);
+    if (password !== confirmPassword) return setError(copy.register.mismatch);
+    if (!acceptedTerms) {
+      setLegalError(legalCopy.legalRequired);
       return;
     }
-    if (!emailValid) {
-      setError(t.errInvalidEmail);
-      return;
-    }
-    if (password.length < 8) {
-      setError(t.errShortPwd);
-      return;
-    }
-    if (password !== confirmPassword) {
-      setError(t.errMismatch);
-      return;
-    }
-
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/register', {
+      const response = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, phone, password, role: 'customer' }),
+        body: JSON.stringify({
+          name: normalizedName,
+          email: normalizedEmail,
+          phone: normalizedPhone,
+          password,
+          role: 'customer',
+          acceptedTerms: true,
+          termsVersion: CUSTOMER_TERMS_VERSION,
+          privacyVersion: PRIVACY_NOTICE_VERSION,
+          locale,
+        }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.ok) {
-        throw new Error(extractErrorMessage(data, t.errFailed));
-      }
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload?.ok) throw new Error(extractErrorMessage(payload, copy.register.failed));
       setSuccess(true);
-      // Auto-redirect to the OTP verification page (production-grade flow)
-      // Email is passed via query param so the verify page can pre-fill it
-      const target = `/auth/verify?email=${encodeURIComponent(email)}`;
-      setTimeout(() => router.push(target), 700);
-    } catch (err: any) {
-      setError(err.message);
+      window.setTimeout(() => router.push(`/auth/verify?email=${encodeURIComponent(normalizedEmail)}`), 650);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : copy.register.failed);
       setLoading(false);
     }
   }
 
   return (
-    <div
-      className="min-h-screen bg-bg flex items-center justify-center py-12 px-4"
-      dir={locale === 'ar' ? 'rtl' : 'ltr'}
-    >
-      <div className="w-full max-w-md mx-auto">
-        <Link href="/" className="inline-flex items-center gap-2 mb-8 group">
-          <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-brand-yellow via-brand-yellow-hover to-brand-yellow-active flex items-center justify-center shadow-[0_4px_12px_-2px_rgba(245,184,25,0.5)] transition-transform group-hover:scale-105 overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-0.5 bg-brand-red/40" />
-            <div className="absolute top-1/2 left-0 w-full h-0.5 bg-brand-red/30" />
-            <span className="font-black italic text-brand-black text-sm">B</span>
-          </div>
-          <span className="font-extrabold text-xl text-white">BlinkGo</span>
-        </Link>
-
-        <div className="rounded-3xl bg-surface-elevated border border-edge overflow-hidden">
-          <div className="h-1.5 bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active" />
-          <div className="p-6 sm:p-8">
-            <h1 className="text-2xl sm:text-3xl font-extrabold text-white mb-1">{t.title}</h1>
-            <p className="text-sm text-text-secondary mb-6">{t.subtitle}</p>
-
-            {error && (
-              <div className="mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-2 animate-fade-in">
-                <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-red-400">{error}</p>
-              </div>
-            )}
-
-            {success && (
-              <div className="mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-start gap-2 animate-fade-in">
-                <CheckCircle className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" />
-                <p className="text-sm text-emerald-400">{t.success}</p>
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-text-secondary uppercase tracking-wider mb-1.5">
-                  {t.name}
-                </label>
-                <div className="relative">
-                  <User className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    required
-                    style={{ color: '#FFFFFF', WebkitTextFillColor: '#FFFFFF' }}
-                    className="w-full ps-10 pe-3 py-3 rounded-xl bg-ink-700 border border-edge text-text placeholder:text-text-muted focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none transition-all"
-                    placeholder={t.namePh}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-text-secondary uppercase tracking-wider mb-1.5">
-                  {t.email}
-                </label>
-                <div className="relative">
-                  <Mail className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    autoComplete="email"
-                    style={{ color: '#FFFFFF', WebkitTextFillColor: '#FFFFFF' }}
-                    className="w-full ps-10 pe-3 py-3 rounded-xl bg-ink-700 border border-edge text-text placeholder:text-text-muted caret-brand-500 focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none transition-all"
-                    placeholder={t.emailPh}
-                    dir="ltr"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-text-secondary uppercase tracking-wider mb-1.5">
-                  {t.phone}
-                </label>
-                <div className="relative">
-                  <input
-                    type="tel"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    style={{ color: '#FFFFFF', WebkitTextFillColor: '#FFFFFF' }}
-                    className="w-full px-3 py-3 rounded-xl bg-ink-700 border border-edge text-text placeholder:text-text-muted caret-brand-500 focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none transition-all"
-                    placeholder={t.phonePh}
-                    dir="ltr"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-text-secondary uppercase tracking-wider mb-1.5">
-                  {t.password}
-                </label>
-                <div className="relative">
-                  <Lock className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
-                  <input
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                    style={{ color: '#FFFFFF', WebkitTextFillColor: '#FFFFFF' }}
-                    className="w-full ps-10 pe-3 py-3 rounded-xl bg-ink-700 border border-edge text-text placeholder:text-text-muted focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none transition-all"
-                    placeholder={t.passwordPh}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-text-secondary uppercase tracking-wider mb-1.5">
-                  {t.confirmPassword}
-                </label>
-                <div className="relative">
-                  <Lock className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
-                  <input
-                    type="password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    required
-                    autoComplete="new-password"
-                    style={{ color: '#FFFFFF', WebkitTextFillColor: '#FFFFFF' }}
-                    className="w-full ps-10 pe-3 py-3 rounded-xl bg-ink-700 border border-edge text-text placeholder:text-text-muted focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none transition-all"
-                    placeholder={t.confirmPasswordPh}
-                  />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="relative w-full h-12 rounded-3xl bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active text-white font-extrabold shadow-glow hover:shadow-glow-strong hover:-translate-y-0.5 active:translate-y-0 transition-all disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center justify-center gap-2"
-              >
-                {loading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span className="opacity-80">{t.loading}</span>
-                  </>
-                ) : (
-                  <>
-                    {t.submit}
-                    <ArrowRight className="w-4 h-4 rtl:rotate-180" strokeWidth={2.5} />
-                  </>
-                )}
-              </button>
-            </form>
-          </div>
+    <AuthShell eyebrow={copy.register.eyebrow} title={copy.register.title} subtitle={copy.register.subtitle} wide>
+      {error && <AuthAlert>{error}</AuthAlert>}
+      {success && <AuthAlert tone="success">{copy.register.success}</AuthAlert>}
+      <form onSubmit={handleSubmit} noValidate className="space-y-4">
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block sm:col-span-2"><FieldLabel>{copy.register.name}</FieldLabel><input className={authInputClass} name="name" autoComplete="name" required value={name} onChange={(event) => setName(event.target.value)} disabled={loading} /></label>
+          <label className="block"><FieldLabel>{copy.login.email}</FieldLabel><input className={authInputClass} name="email" type="email" inputMode="email" autoComplete="email" autoCapitalize="none" spellCheck={false} required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" disabled={loading} /></label>
+          <label className="block"><FieldLabel optional={copy.register.optional}>{copy.register.phone}</FieldLabel><input className={authInputClass} name="phone" type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(event) => setPhone(event.target.value)} placeholder="+49 …" disabled={loading} /></label>
+          <label className="block"><FieldLabel>{copy.login.password}</FieldLabel><PasswordInput name="password" value={password} onChange={setPassword} shown={showPassword} onToggle={() => setShowPassword((value) => !value)} disabled={loading} label={showPassword ? copy.common.hidePassword : copy.common.showPassword} /></label>
+          <label className="block"><FieldLabel>{copy.register.confirm}</FieldLabel><PasswordInput name="confirm-password" value={confirmPassword} onChange={setConfirmPassword} shown={showConfirmPassword} onToggle={() => setShowConfirmPassword((value) => !value)} disabled={loading} label={showConfirmPassword ? copy.common.hidePassword : copy.common.showPassword} /></label>
         </div>
-
-        <div className="mt-6 text-center text-sm text-text-secondary">
-          <p>
-            {t.haveAccount}{' '}
-            <Link href="/login" className="text-brand-red-500 hover:text-brand-red-400 font-extrabold">
-              {t.login}
-            </Link>
-          </p>
-          <p className="mt-3 text-xs text-text-muted">
-            <Link
-              href="/login"
-              className="inline-flex items-center gap-1.5 font-bold text-text-secondary hover:text-brand-red-500 transition-colors underline-offset-4 hover:underline"
-            >
-              {t.back}
-            </Link>
-          </p>
-          <nav aria-label="Rechtliche Hinweise" className="mt-4 flex flex-wrap justify-center gap-x-3 gap-y-1 text-[10px] text-text-muted">
-            <a href="/legal/impressum" className="hover:text-brand-red-500 underline-offset-2 hover:underline">Impressum</a>
-            <span aria-hidden>·</span>
-            <a href="/legal/datenschutz" className="hover:text-brand-red-500 underline-offset-2 hover:underline">Datenschutz</a>
-            <span aria-hidden>·</span>
-            <a href="/legal/agb" className="hover:text-brand-red-500 underline-offset-2 hover:underline">AGB</a>
-            <span aria-hidden>·</span>
-            <a href="/legal/widerruf" className="hover:text-brand-red-500 underline-offset-2 hover:underline">Widerruf</a>
-            <span aria-hidden>·</span>
-            <a href="/legal/cookies" className="hover:text-brand-red-500 underline-offset-2 hover:underline">Cookies</a>
-          </nav>
+        <div className={`rounded-2xl border p-4 ${legalError ? 'border-red-400/55 bg-red-500/10' : 'border-white/12 bg-white/[0.035]'}`}>
+          <div className="flex items-start gap-3">
+            <input id="register-legal-acceptance" type="checkbox" checked={acceptedTerms} onChange={(event) => { setAcceptedTerms(event.target.checked); if (event.target.checked) setLegalError(null); }} disabled={loading} aria-invalid={Boolean(legalError)} aria-describedby={legalError ? 'register-legal-error' : undefined} className="mt-0.5 size-6 shrink-0 rounded-md accent-[#E10600]" />
+            <label htmlFor="register-legal-acceptance" className="text-sm leading-6 text-white/72">
+              {legalCopy.prefix}{' '}
+              <Link href="/legal/agb" target="_blank" rel="noreferrer" className="font-bold text-[#FFC107] underline-offset-4 hover:underline">{legalCopy.terms}</Link>{' '}
+              {legalCopy.connector}{' '}
+              <Link href="/legal/datenschutz" target="_blank" rel="noreferrer" className="font-bold text-[#FFC107] underline-offset-4 hover:underline">{legalCopy.privacy}</Link>{' '}
+              {legalCopy.suffix}
+            </label>
+          </div>
+          {legalError && <p id="register-legal-error" role="alert" className="mt-2 text-xs font-bold text-red-300">{legalError}</p>}
         </div>
-      </div>
-    </div>
+        <button className={authPrimaryButtonClass} type="submit" disabled={loading || success}>{loading && <Loader2 className="h-4 w-4 animate-spin" />}{loading ? copy.common.loading : copy.register.submit}</button>
+      </form>
+      <p className="mt-6 text-center text-sm text-white/50">{copy.register.haveAccount}{' '}<Link href="/login" className="inline-flex min-h-11 items-center font-extrabold text-white hover:text-[#ff3b34] hover:underline">{copy.login.submit}</Link></p>
+    </AuthShell>
   );
 }
 
+function PasswordInput({ name, value, onChange, shown, onToggle, disabled, label }: { name: string; value: string; onChange: (value: string) => void; shown: boolean; onToggle: () => void; disabled: boolean; label: string }) {
+  return <span className="relative block"><input className={`${authInputClass} pe-14`} name={name} type={shown ? 'text' : 'password'} autoComplete="new-password" required minLength={8} maxLength={128} value={value} onChange={(event) => onChange(event.target.value)} placeholder="••••••••" disabled={disabled} /><button type="button" onClick={onToggle} className="absolute end-1.5 top-1/2 grid h-11 w-11 -translate-y-1/2 place-items-center rounded-xl text-white/45 hover:bg-white/[0.06] hover:text-white focus:outline-none focus:ring-2 focus:ring-[#E10600]" aria-label={label}>{shown ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}</button></span>;
+}
+
 export default function RegisterPage() {
-  return (
-    <Suspense
-      fallback={
-        <div className="min-h-screen bg-bg flex items-center justify-center">
-          <div className="w-8 h-8 border-2 border-brand-red-500 border-t-transparent rounded-full animate-spin" />
-        </div>
-      }
-    >
-      <RegisterFormInner />
-    </Suspense>
-  );
+  return <Suspense fallback={<div className="min-h-dvh bg-[#08090B]" />}><RegisterInner /></Suspense>;
 }

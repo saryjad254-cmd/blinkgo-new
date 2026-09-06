@@ -13,11 +13,12 @@ export const dynamic = 'force-dynamic';
  */
 export default async function HomePage() {
   // Fast path: if no session cookie, redirect immediately without DB lookup
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
   const cookieNames = cookieStore.getAll().map(c => c.name);
   const hasSession =
     cookieStore.has('blinkgo-session') ||
-    cookieStore.has('sb-rhdaffhlrglyknxtucux-auth-token');
+    cookieStore.has('sb-rhdaffhlrglyknxtucux-auth-token') ||
+    cookieNames.some((name) => /^sb-.+-auth-token$/.test(name));
 
   if (hasSession) {
     authTrace('logged_in_user', {

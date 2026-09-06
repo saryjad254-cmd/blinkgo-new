@@ -14,10 +14,11 @@
  *  - full cookie values
  *  - authorization headers
  *
- * To disable in production, set LOG_OAUTH_TRACE=false.
+ * Normal-flow tracing is opt-in with LOG_OAUTH_TRACE=true. Genuine failures
+ * remain visible even when verbose tracing is disabled.
  */
 
-const ENABLED = process.env.LOG_OAUTH_TRACE !== 'false'; // default ON for v77 diagnosis
+const VERBOSE_ENABLED = process.env.LOG_OAUTH_TRACE === 'true';
 
 const VERSION = 'v77';
 
@@ -42,6 +43,7 @@ export interface AuthTraceContext {
   cookieNames?: string[];
   profileFound?: boolean;
   role?: string | null;
+  roleSource?: string | null;
   isActive?: boolean | null;
   isVerified?: boolean | null;
   redirectTarget?: string;
@@ -51,7 +53,8 @@ export interface AuthTraceContext {
 }
 
 export function authTrace(event: string, ctx: AuthTraceContext): void {
-  if (!ENABLED) return;
+  const isFailure = /error|fail|exception/i.test(event);
+  if (!VERBOSE_ENABLED && !isFailure) return;
 
   const tag = `[BLINKGO_AUTH_TRACE:${VERSION}:${ctx.source}]`;
 
@@ -82,11 +85,16 @@ export function authTrace(event: string, ctx: AuthTraceContext): void {
   }
 
   // Remove undefined for cleaner output
-  const clean = Object.fromEntries(Object.entries(safe).filter(([_, v]) => v !== undefined));
+  const clean = Object.fromEntries(Object.entries(safe).filter((entry) => entry[1] !== undefined));
 
-  // Use console.error so it appears in Vercel Runtime Logs without being
-  // swallowed by console.log filters
-  console.error(tag, JSON.stringify(clean));
+  // Only genuine failures belong on the error channel. Redirects, missing
+  // sessions and normal authorization decisions are expected control flow;
+  // logging them as errors makes the Next.js development overlay look broken.
+  if (isFailure) {
+    console.error(tag, JSON.stringify(clean));
+  } else {
+    console.info(tag, JSON.stringify(clean));
+  }
 }
 
 /**

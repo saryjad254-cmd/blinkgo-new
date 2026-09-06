@@ -18,6 +18,10 @@
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
 const ORIGIN = BASE;
+const LOCAL_MUTATION = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(BASE);
+const path = require('path');
+const os = require('os');
+const cookieFile = (role) => path.join(os.tmpdir(), `blinkgo-rbac-cookies-${role}.txt`);
 
 let passed = 0;
 let failed = 0;
@@ -28,9 +32,9 @@ function record(name, ok, info) {
 
 const USERS = {
   customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  restaurant: { email: 'restaurant@blinkgo.de', password: 'DemoRestaurant!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  driver: { email: 'driver@blinkgo.com', password: 'BlinkGoDriver2026!' },
+  restaurant: { email: 'wesseling@blinkgo.de', password: 'BlinkGoWesseling2026!' },
+  admin: { email: 'admin@blinkgo.com', password: 'BlinkGoAdmin2026!' },
 };
 
 async function f(path, opts = {}, cookieFile) {
@@ -65,7 +69,11 @@ async function loginAs(role, cookieFile) {
   if (fs.existsSync(cookieFile)) fs.unlinkSync(cookieFile);
   const res = await fetch(`${BASE}/api/auth/login`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
+    headers: {
+      'Content-Type': 'application/json',
+      Origin: ORIGIN,
+      'x-forwarded-for': `10.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}.${Math.floor(Math.random() * 250)}`,
+    },
     body: JSON.stringify({ email: USERS[role].email, password: USERS[role].password, remember: true }),
   });
   const setCookie = res.headers.get('set-cookie') || '';
@@ -83,9 +91,14 @@ async function loginAs(role, cookieFile) {
 }
 
 async function main() {
+  if (LOCAL_MUTATION) {
+    const reset = await fetch(`${BASE}/api/dev/test/reset`, { method: 'POST' });
+    if (!reset.ok) throw new Error(`Local test reset failed (${reset.status})`);
+  }
+
   // Login all roles
   for (const role of Object.keys(USERS)) {
-    const r = await loginAs(role, `/tmp/cookies-${role}.txt`);
+    const r = await loginAs(role, cookieFile(role));
     record(`Login as ${role}`, r.ok, `status=${r.status}`);
   }
 
@@ -116,7 +129,7 @@ async function main() {
     { path: '/api/driver/online', method: 'POST' },
   ];
   for (const t of custTests) {
-    const r = await f(t.path, { method: t.method }, '/tmp/cookies-customer.txt');
+    const r = await f(t.path, { method: t.method }, cookieFile('customer'));
     record(`Customer ${t.method} ${t.path} → blocked`, !r.ok && (r.status === 401 || r.status === 403), `status=${r.status}`);
   }
 
@@ -127,7 +140,7 @@ async function main() {
     { path: '/api/admin/orders', method: 'GET' },
   ];
   for (const t of drvTests) {
-    const r = await f(t.path, { method: t.method }, '/tmp/cookies-driver.txt');
+    const r = await f(t.path, { method: t.method }, cookieFile('driver'));
     record(`Driver ${t.method} ${t.path} → blocked`, !r.ok && (r.status === 401 || r.status === 403), `status=${r.status}`);
   }
 
@@ -139,7 +152,7 @@ async function main() {
     { path: '/api/driver/active-order', method: 'GET' },
   ];
   for (const t of restTests) {
-    const r = await f(t.path, { method: t.method }, '/tmp/cookies-restaurant.txt');
+    const r = await f(t.path, { method: t.method }, cookieFile('restaurant'));
     record(`Restaurant ${t.method} ${t.path} → blocked`, !r.ok && (r.status === 401 || r.status === 403), `status=${r.status}`);
   }
 
@@ -147,20 +160,20 @@ async function main() {
   console.log('\n► Admin can access admin endpoints (and gets 200 JSON)');
   const adminTests = ['/api/admin/users', '/api/admin/orders'];
   for (const path of adminTests) {
-    const r = await f(path, { method: 'GET' }, '/tmp/cookies-admin.txt');
+    const r = await f(path, { method: 'GET' }, cookieFile('admin'));
     // 200 + JSON content type + body indicates success
     const success = r.status === 200 && r.isJson && r.json?.ok !== false;
     record(`Admin GET ${path} → 200 (json ok:true)`, success, `status=${r.status} isJson=${r.isJson} ok=${r.json?.ok}`);
   }
   // /api/admin/restaurants may have its own check, just verify admin is not 401
-  const r2 = await f('/api/admin/restaurants', { method: 'GET' }, '/tmp/cookies-admin.txt');
+  const r2 = await f('/api/admin/restaurants', { method: 'GET' }, cookieFile('admin'));
   record('Admin GET /api/admin/restaurants → not 401', r2.status !== 401, `status=${r2.status}`);
 
   // === Cross-user data isolation ===
   console.log('\n► Cross-user data isolation');
   // Customer cannot delete another user's account (no other-user route exists for it)
   // Just verify that admin can list users and that a customer cannot
-  const custUsers = await f('/api/admin/users', { method: 'GET' }, '/tmp/cookies-customer.txt');
+  const custUsers = await f('/api/admin/users', { method: 'GET' }, cookieFile('customer'));
   record('Customer cannot list users via /api/admin/users', !custUsers.ok, `status=${custUsers.status}`);
 
   // === Legal endpoints are public ===
@@ -172,10 +185,12 @@ async function main() {
 
   // === Account data export is authenticated ===
   console.log('\n► Account data export is owner-only');
-  const exportCust = await f('/api/account/export', { method: 'GET' }, '/tmp/cookies-customer.txt');
+  const exportCust = await f('/api/account/export', { method: 'GET' }, cookieFile('customer'));
   record('Customer can export own data', exportCust.ok && exportCust.json?.sections, `status=${exportCust.status}`);
-  const exportDrv = await f('/api/account/export', { method: 'GET' }, '/tmp/cookies-driver.txt');
+  record('Customer export excludes password fields', exportCust.ok && !/"password"\s*:/i.test(exportCust.text));
+  const exportDrv = await f('/api/account/export', { method: 'GET' }, cookieFile('driver'));
   record('Driver can export own data', exportDrv.ok && exportDrv.json?.sections, `status=${exportDrv.status}`);
+  record('Driver export excludes password fields', exportDrv.ok && !/"password"\s*:/i.test(exportDrv.text));
 
   console.log('\n═══════════════════════════════════════════');
   console.log(`  Results: ${passed} passed, ${failed} failed`);

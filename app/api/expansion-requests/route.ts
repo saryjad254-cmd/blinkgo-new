@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { checkDeliveryZone } from '@/lib/delivery-zone';
 import { safeErrorMessage } from '@/lib/api/safe-error';
+import { requireAdminRole } from '@/lib/rbac';
+import { rateLimit } from '@/lib/rate-limit';
+import { isValidEmail, sanitizeText } from '@/lib/validation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,16 +22,21 @@ export const dynamic = 'force-dynamic';
  * later.
  */
 export async function POST(req: NextRequest) {
+  const limited = rateLimit({ limit: 10, windowSec: 3600, name: 'expansion-request' }, req);
+  if (limited) return limited;
   try {
-    const body = await req.json().catch(() => ({}));
-    const address = String(body.address || '').trim();
-    const city = String(body.city || '').trim();
-    const postalCode = String(body.postal_code || '').trim();
+    const rawBody: unknown = await req.json().catch(() => null);
+    const body = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as Record<string, unknown>
+      : {};
+    const address = sanitizeText(String(body.address || ''), 300).trim();
+    const city = sanitizeText(String(body.city || ''), 100).trim();
+    const postalCode = sanitizeText(String(body.postal_code || ''), 12).trim();
     const lat = Number(body.lat);
     const lng = Number(body.lng);
     const email = body.email ? String(body.email).trim().toLowerCase() : null;
-    const name = body.name ? String(body.name).trim() : null;
-    const notes = body.notes ? String(body.notes).trim() : null;
+    const name = body.name ? sanitizeText(String(body.name), 100).trim() : null;
+    const notes = body.notes ? sanitizeText(String(body.notes), 1000).trim() : null;
 
     if (!address || !city) {
       return NextResponse.json(
@@ -36,9 +44,15 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    if (!isFinite(lat) || !isFinite(lng)) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       return NextResponse.json(
         { ok: false, error: { code: 'INVALID_COORDS', message: 'lat and lng are required' } },
+        { status: 400 },
+      );
+    }
+    if (email && !isValidEmail(email)) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'INVALID_EMAIL', message: 'email is invalid' } },
         { status: 400 },
       );
     }
@@ -73,14 +87,14 @@ export async function POST(req: NextRequest) {
         console.warn('[expansion-requests] insert error (table missing?):', error.message);
         return NextResponse.json({ ok: true, result: { status: 'queued' } });
       }
-    } catch (e: any) {
-      console.warn('[expansion-requests] insert threw:', e?.message);
+    } catch (error: unknown) {
+      console.warn('[expansion-requests] insert threw:', safeErrorMessage(error));
     }
 
     return NextResponse.json({ ok: true, result: { status: 'recorded', distance_km: zone.distanceKm } });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: { code: 'INTERNAL', message: safeErrorMessage(e) } },
+      { ok: false, error: { code: 'INTERNAL', message: safeErrorMessage(error) } },
       { status: 500 },
     );
   }
@@ -91,23 +105,8 @@ export async function GET(req: NextRequest) {
   // client-side guard and can be bypassed; server must enforce.
   // PII dump (name, email, lat/lng, address) of up to 500 users must
   // not be exposed to unauthenticated callers.
-  const { createServerClient } = await import('@/lib/supabase/server');
-  const sb = createServerClient();
-  const { data: { user } } = await sb.auth.getUser();
-  if (!user) {
-    return NextResponse.json(
-      { ok: false, error: { code: 'UNAUTHORIZED', message: 'Authentication required' } },
-      { status: 401 },
-    );
-  }
-  const { data: profile } = await sb.from('users').select('role').eq('id', user.id).maybeSingle();
-  const role = profile?.role ?? user.user_metadata?.role ?? 'customer';
-  if (!['admin', 'super_admin', 'manager'].includes(String(role))) {
-    return NextResponse.json(
-      { ok: false, error: { code: 'FORBIDDEN', message: 'Admin access required' } },
-      { status: 403 },
-    );
-  }
+  const auth = await requireAdminRole(req, 'manager');
+  if (auth instanceof NextResponse) return auth;
   try {
     const supabase = createServiceClient();
     const { data, error } = await supabase
@@ -125,9 +124,9 @@ export async function GET(req: NextRequest) {
       );
     }
     return NextResponse.json({ ok: true, requests: data || [] });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: { code: 'INTERNAL', message: safeErrorMessage(e) } },
+      { ok: false, error: { code: 'INTERNAL', message: safeErrorMessage(error) } },
       { status: 500 },
     );
   }

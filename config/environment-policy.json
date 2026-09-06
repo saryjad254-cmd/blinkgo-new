@@ -1,0 +1,24 @@
+{
+  "publicSafe": [
+    "NEXT_PUBLIC_APP_URL",
+    "NEXT_PUBLIC_COMMIT_SHA",
+    "NEXT_PUBLIC_ENABLE_DEMO_LOGIN",
+    "NEXT_PUBLIC_ENABLE_PWA",
+    "NEXT_PUBLIC_ENABLE_WEB_VITALS",
+    "NEXT_PUBLIC_ENFORCE_ADMIN_MFA",
+    "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY",
+    "NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID",
+    "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+    "NEXT_PUBLIC_SUPABASE_URL",
+    "NEXT_PUBLIC_VAPID_PUBLIC_KEY",
+    "NEXT_PUBLIC_VERSION"
+  ],
+  "serverOnlyRule": "Every environment variable without the NEXT_PUBLIC_ prefix is server-only, including feature flags and non-secret configuration.",
+  "notes": {
+    "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY": "Browser key by design; restrict it by HTTPS referrer and API in Google Cloud.",
+    "NEXT_PUBLIC_SUPABASE_ANON_KEY": "Publishable key by design; authorization is enforced by RLS.",
+    "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY": "Stripe publishable key by design; never substitute a secret key.",
+    "NEXT_PUBLIC_ENABLE_DEMO_LOGIN": "Public flag only; production code additionally requires NODE_ENV not to be production."
+  }
+}

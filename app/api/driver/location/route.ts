@@ -16,21 +16,22 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { createServerClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
 import { ok, withErrorHandling } from '@/lib/api/response';
+import type { ApiResponse } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
-import { AuthenticationError, ValidationError } from '@/lib/errors';
+import { AuthenticationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 import { rateLimit } from '@/lib/rate-limit';
+import { validateLocation } from '@/lib/driver/dispatch-policy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
-  return (await withSecurity(
+  return await withSecurity(
     secureRoute('driverLocation', ['driver', 'admin', 'super_admin', 'manager']),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (_ctx, r) => updateLocation(r as NextRequest) as any,
-  )(req)) as unknown as NextResponse;
+    async (_ctx, request) => await updateLocation(request) as NextResponse<ApiResponse<unknown>>,
+  )(req) as NextResponse;
 }
 
 async function updateLocation(req: NextRequest): Promise<NextResponse> {
@@ -39,8 +40,8 @@ async function updateLocation(req: NextRequest): Promise<NextResponse> {
 
     // Cookie-based session first
     try {
-      cookies();
-      const serverSupabase = createServerClient();
+      await cookies();
+      const serverSupabase = await createServerClient();
       const { data } = await serverSupabase.auth.getUser();
       if (data?.user?.id) userId = data.user.id;
     } catch {
@@ -92,13 +93,10 @@ async function updateLocation(req: NextRequest): Promise<NextResponse> {
     const { latitude, longitude, heading, speed, accuracy, active_order_id } = body;
     // is_online is intentionally NOT accepted - online state can only be changed via /api/driver/online
 
-    if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-      throw new ValidationError('Invalid coordinates');
-    }
-
-    // Reject obviously bad coordinates
-    if (Math.abs(latitude) > 90 || Math.abs(longitude) > 180) {
-      throw new ValidationError('Coordinates out of range');
+    // Server-authoritative location validation (rejects NaN/Inf/null/(0,0) and out-of-range).
+    const loc = validateLocation(latitude, longitude);
+    if (!loc.ok) {
+      return NextResponse.json({ ok: false, error: 'INVALID_LOCATION', reason: loc.reason }, { status: 400 });
     }
 
     const supabase = createServiceClient();
@@ -208,12 +206,12 @@ async function updateLocation(req: NextRequest): Promise<NextResponse> {
  * Returns the current driver's last known location.
  * Used by the driver dashboard on mount.
  */
-export async function GET(req: NextRequest): Promise<NextResponse> {
+export async function GET(): Promise<NextResponse> {
   return withErrorHandling(async () => {
     let userId: string | null = null;
     try {
-      cookies();
-      const serverSupabase = createServerClient();
+      await cookies();
+      const serverSupabase = await createServerClient();
       const { data } = await serverSupabase.auth.getUser();
       if (data?.user?.id) userId = data.user.id;
     } catch {

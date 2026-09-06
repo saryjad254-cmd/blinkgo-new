@@ -2,9 +2,24 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAdminRole } from '@/lib/rbac';
 import { createServiceClient } from '@/lib/supabase/service';
 import { isValidEmail, sanitizeText } from '@/lib/validation';
+import { InvitationRateLimitError, inviteAuthUser } from '@/lib/auth/admin-invitations';
+import { safeErrorMessage } from '@/lib/api/safe-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+type AdminRole = 'admin' | 'super_admin' | 'manager';
+type AdminUpdate = { role?: AdminRole; is_active?: boolean };
+
+function requestObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function isAdminRole(value: unknown): value is AdminRole {
+  return value === 'admin' || value === 'super_admin' || value === 'manager';
+}
 
 export async function GET(request: NextRequest) {
   const auth = await requireAdminRole(request, 'admin');
@@ -40,9 +55,9 @@ export async function GET(request: NextRequest) {
       admins: data ?? [],
       total: count ?? 0,
     });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: safeErrorMessage(error) },
       { status: 500 },
     );
   }
@@ -54,19 +69,19 @@ export async function POST(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const body = await request.json();
-    const { name, email, password, role } = body;
+    const body = requestObject(await request.json().catch(() => null));
+    const { name, email, role } = body;
 
-    if (!name || !email || !password) {
+    if (typeof name !== 'string' || typeof email !== 'string' || !name.trim() || !email.trim()) {
       return NextResponse.json(
-        { ok: false, error: 'name, email, password required' },
+        { ok: false, error: 'name and email required' },
         { status: 400 },
       );
     }
     if (!isValidEmail(email)) {
       return NextResponse.json({ ok: false, error: 'invalid email' }, { status: 400 });
     }
-    if (!['admin', 'super_admin', 'manager'].includes(role)) {
+    if (!isAdminRole(role)) {
       return NextResponse.json(
         { ok: false, error: 'role must be admin, super_admin, or manager' },
         { status: 400 },
@@ -76,14 +91,19 @@ export async function POST(request: NextRequest) {
     const svc = createServiceClient();
 
     // Create auth user
-    const { data: authData, error: authErr } = await svc.auth.admin.createUser({
-      email: email.toLowerCase().trim(),
-      password,
-      email_confirm: true,
-      user_metadata: { name: sanitizeText(name, 100), role },
-    });
-    if (authErr) {
-      return NextResponse.json({ ok: false, error: authErr.message }, { status: 400 });
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanName = sanitizeText(name, 100);
+    let authUser;
+    try {
+      authUser = await inviteAuthUser({ client: svc, email: cleanEmail, name: cleanName, role, requestOrigin: request.nextUrl.origin });
+    } catch (authErr) {
+      if (authErr instanceof InvitationRateLimitError) {
+        return NextResponse.json(
+          { ok: false, error: safeErrorMessage(authErr) },
+          { status: 429, headers: { 'Retry-After': String(authErr.retryAfterSeconds) } },
+        );
+      }
+      return NextResponse.json({ ok: false, error: safeErrorMessage(authErr) }, { status: 400 });
     }
 
     // Create public.users record
@@ -91,23 +111,26 @@ export async function POST(request: NextRequest) {
       .from('users')
       .upsert(
         {
-          id: authData.user.id,
-          email: email.toLowerCase().trim(),
-          name: sanitizeText(name, 100),
+          id: authUser.id,
+          email: cleanEmail,
+          name: cleanName,
           role,
           is_active: true,
-          is_verified: true,
+          is_verified: false,
         },
         { onConflict: 'id' },
       )
       .select()
       .single();
-    if (userErr) throw userErr;
+    if (userErr) {
+      await svc.auth.admin.deleteUser(authUser.id).catch(() => undefined);
+      throw userErr;
+    }
 
-    return NextResponse.json({ ok: true, admin: user });
-  } catch (e: any) {
+    return NextResponse.json({ ok: true, activation: 'invite_sent', admin: user }, { status: 201 });
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: safeErrorMessage(error) },
       { status: 500 },
     );
   }
@@ -118,9 +141,9 @@ export async function PATCH(request: NextRequest) {
   if (auth instanceof NextResponse) return auth;
 
   try {
-    const body = await request.json();
+    const body = requestObject(await request.json().catch(() => null));
     const { id, role, is_active } = body;
-    if (!id) {
+    if (typeof id !== 'string' || !id) {
       return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
     }
 
@@ -132,8 +155,8 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const update: any = {};
-    if (role && ['admin', 'super_admin', 'manager'].includes(role)) update.role = role;
+    const update: AdminUpdate = {};
+    if (isAdminRole(role)) update.role = role;
     if (typeof is_active === 'boolean') update.is_active = is_active;
 
     if (Object.keys(update).length === 0) {
@@ -150,9 +173,9 @@ export async function PATCH(request: NextRequest) {
     if (error) throw error;
 
     return NextResponse.json({ ok: true, admin: data });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: safeErrorMessage(error) },
       { status: 500 },
     );
   }
@@ -184,9 +207,9 @@ export async function DELETE(request: NextRequest) {
     if (error) throw error;
 
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: safeErrorMessage(error) },
       { status: 500 },
     );
   }

@@ -1,59 +1,71 @@
 /**
- * Performance Metrics Endpoint
- * ────────────────────────────
- * GET /api/metrics
- * Returns application performance metrics for monitoring.
+ * Production Metrics Endpoint
+ * ──────────────────────────
+ * Exposes Prometheus-compatible metrics for scraping.
+ * Also serves as a health/diagnostics endpoint.
+ *
+ * Endpoints:
+ *   - GET /api/metrics — Prometheus text format
+ *   - GET /api/metrics/json — JSON format
+ *   - GET /api/metrics/health — Pool health + recovery state
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getAllBreakerStats } from '@/lib/circuit-breaker';
-import { searchCache, restaurantCache, categoryCache, userCache, productCache } from '@/lib/cache';
-import { ok, withErrorHandling } from '@/lib/api/response';
-import { withSecurity } from '@/lib/api/security';
-import { secureRoute } from '@/lib/api/security-helpers';
-import { getLatencyStats } from '@/lib/perf/latency';
 
-export const runtime = 'nodejs';
+import { NextResponse } from 'next/server';
+import { refreshProcessMetrics, registry } from '@/lib/observability/metrics';
+import { generatePoolHealthReport } from '@/lib/infrastructure/connection-pool-monitor';
+import { verifyFinancialConsistency } from '@/lib/infrastructure/recovery-verification';
+// Import payment metrics to ensure they're registered with the global registry.
+// These imports execute module-level code that registers the metrics.
+import '@/lib/infrastructure/payment-metrics';
+import '@/lib/infrastructure/stripe-retry';
+import { requireMetricsToken } from '@/lib/observability/metrics-auth';
+
 export const dynamic = 'force-dynamic';
-export const revalidate = 0;
+export const runtime = 'nodejs';
 
-export async function GET(): Promise<NextResponse> {
-  return (await withSecurity(
-    secureRoute('metrics'),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async () => metrics() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
-}
+export async function GET(req: Request): Promise<NextResponse> {
+  const denied = requireMetricsToken(req);
+  if (denied) return denied;
+  refreshProcessMetrics();
+  const url = new URL(req.url);
+  const format = url.searchParams.get('format');
 
-async function metrics(): Promise<NextResponse> {
-  return withErrorHandling(async () => {
-    const mem = process.memoryUsage();
-    const cpu = process.cpuUsage();
-    const uptime = process.uptime();
-    const breakers = getAllBreakerStats();
-    return ok({
-      ts: new Date().toISOString(),
-      uptime_seconds: Math.round(uptime),
-      memory: {
-        rss_mb: Math.round(mem.rss / 1024 / 1024),
-        heap_used_mb: Math.round(mem.heapUsed / 1024 / 1024),
-        heap_total_mb: Math.round(mem.heapTotal / 1024 / 1024),
-        external_mb: Math.round(mem.external / 1024 / 1024),
-      },
-      cpu: {
-        user_ms: Math.round(cpu.user / 1000),
-        system_ms: Math.round(cpu.system / 1000),
-      },
-      caches: {
-        search: searchCache.stats(),
-        restaurants: restaurantCache.stats(),
-        categories: categoryCache.stats(),
-        users: userCache.stats(),
-        products: productCache.stats(),
-      },
-      breakers,
-      latency: getLatencyStats(),
-      node_env: process.env.NODE_ENV,
-      node_version: process.version,
+  if (format === 'json') {
+    return NextResponse.json({
+      metrics: registry.toJSON(),
+      poolHealth: generatePoolHealthReport(),
+      generatedAt: new Date().toISOString(),
     });
+  }
+
+  if (format === 'health') {
+    const poolHealth = generatePoolHealthReport();
+    let consistency;
+    try {
+      consistency = await verifyFinancialConsistency();
+    } catch (e: unknown) {
+      const err = e as { message?: string };
+      consistency = {
+        convergenceStatus: 'diverged' as const,
+        issues: [{ message: err.message ?? 'unknown' }],
+        generatedAt: new Date().toISOString(),
+      };
+    }
+    return NextResponse.json({
+      status: poolHealth.status === 'ok' ? 'healthy' : 'degraded',
+      pool: poolHealth,
+      consistency,
+      generatedAt: new Date().toISOString(),
+    });
+  }
+
+  // Default: Prometheus text format
+  const body = registry.toPrometheus();
+  return new NextResponse(body, {
+    status: 200,
+    headers: {
+      'Content-Type': 'text/plain; version=0.0.4',
+      'Cache-Control': 'no-store',
+    },
   });
 }

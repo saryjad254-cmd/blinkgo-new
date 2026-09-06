@@ -56,18 +56,7 @@ if (typeof setInterval !== 'undefined') {
       if (v.expires < now) cache.delete(k);
     }
   }, 5 * 60 * 1000);
-  if (typeof (cleanup as any).unref === 'function') (cleanup as any).unref();
-}
-
-function makeKey(url: string, method: string, body?: unknown): string {
-  if (body) {
-    try {
-      return `${method}:${url}:${JSON.stringify(body)}`;
-    } catch {
-      // circular refs
-    }
-  }
-  return `${method}:${url}`;
+  cleanup.unref?.();
 }
 
 /**

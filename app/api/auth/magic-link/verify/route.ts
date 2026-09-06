@@ -7,9 +7,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { createServiceClient } from '@/lib/supabase/service';
 import { withErrorHandling } from '@/lib/api/response';
-import { AuthService, AuthenticatedUser } from '@/lib/services/auth-service';
+import { AuthService } from '@/lib/services/auth-service';
 import { logger } from '@/lib/logging';
 import { getCanonicalBaseUrl, isSafeRedirectUrl } from '@/lib/auth/redirect-url';
+import { getRoleHomePath } from '@/lib/auth/role-routing';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,7 @@ function redirectWithError(error: string, reqOrigin?: string, lang?: string): Ne
   let appUrl: string;
   try {
     appUrl = getCanonicalBaseUrl(reqOrigin);
-  } catch (e) {
+  } catch {
     // Fallback to request origin if env is missing (dev only). In prod,
     // the operator will see the same error in Vercel logs.
     appUrl = reqOrigin || 'http://localhost:3000';
@@ -103,7 +104,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     let appUrl: string;
     try {
       appUrl = getCanonicalBaseUrl(reqOrigin);
-    } catch (e) {
+    } catch {
       appUrl = reqOrigin;
     }
 
@@ -130,7 +131,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     }
 
     // Set the session cookies
-    AuthService.setSessionCookies({
+    await AuthService.setSessionCookies({
       access_token: otpData.session.access_token,
       refresh_token: otpData.session.refresh_token,
       token_type: otpData.session.token_type,
@@ -148,13 +149,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
     // Redirect to role-specific dashboard. Preserve lang so the next page
     // renders in the right language.
-    const dashboard = user.role === 'driver'
-      ? '/driver/dashboard'
-      : user.role === 'restaurant_owner'
-        ? '/restaurant/dashboard'
-        : user.role === 'admin'
-          ? '/admin'
-          : '/search';
+    const dashboard = getRoleHomePath(user.role);
 
     // v80 (audit open-redirect): the `dashboard` is server-derived from
     // `user.role`, but defense-in-depth: run it through isSafeRedirectUrl

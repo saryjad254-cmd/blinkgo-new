@@ -16,12 +16,13 @@
  */
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
-const COOKIES = {};
+const COOKIE_JARS = Object.fromEntries(['customer', 'driver', 'restaurant', 'admin'].map((role) => [role, {}]));
+let activeRole = null;
 const ACCOUNTS = {
   customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  restaurant: { email: 'restaurant@blinkgo.de', password: 'DemoRestaurant!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  driver: { email: 'driver@blinkgo.com', password: 'BlinkGoDriver2026!' },
+  restaurant: { email: 'wesseling@blinkgo.de', password: 'BlinkGoWesseling2026!' },
+  admin: { email: 'admin@blinkgo.com', password: 'BlinkGoAdmin2026!' },
 };
 
 let passed = 0, failed = 0;
@@ -34,6 +35,7 @@ function record(name, ok, info = '') {
 }
 
 function setCookies(headers) {
+  const jar = COOKIE_JARS[activeRole] || {};
   const arr = typeof headers.getSetCookie === 'function' ? headers.getSetCookie() : (headers.get('set-cookie') ? [headers.get('set-cookie')] : []);
   for (const ck of arr) {
     const firstSemi = ck.indexOf(';');
@@ -42,36 +44,53 @@ function setCookies(headers) {
     if (eqIdx === -1) continue;
     const name = pair.substring(0, eqIdx).trim();
     const value = pair.substring(eqIdx + 1).trim();
-    if (name) COOKIES[name] = value;
+    if (!name) continue;
+    if (value) jar[name] = value;
+    else delete jar[name];
   }
 }
 
 function cookieHeader() {
-  return Object.entries(COOKIES).map(([k, v]) => `${k}=${v}`).join('; ');
+  return Object.entries(COOKIE_JARS[activeRole] || {}).map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
 async function f(path, init = {}, opts = {}) {
   // Use a unique x-forwarded-for so per-IP rate limits don't cascade
   const headers = {
+    'x-blinkgo-test-run': 'local-e2e',
     'Content-Type': 'application/json',
     'Origin': BASE,
     'x-forwarded-for': '10.42.3.1',
     ...(init.headers || {}),
   };
-  if (Object.keys(COOKIES).length > 0) headers['Cookie'] = cookieHeader();
+  if (cookieHeader()) headers['Cookie'] = cookieHeader();
   const res = await fetch(BASE + path, { ...init, headers });
   if (opts.captureCookies !== false) setCookies(res.headers);
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = { _raw: text?.slice(0, 200) }; }
+  if (json?.ok === true && Object.prototype.hasOwnProperty.call(json, 'data')) json = json.data;
   return { status: res.status, ok: res.ok, json };
 }
 
-function clearCookies() { Object.keys(COOKIES).forEach((k) => delete COOKIES[k]); }
-
 async function login(role) {
-  clearCookies();
-  await f('/api/auth/login', { method: 'POST', body: JSON.stringify(ACCOUNTS[role]) });
+  activeRole = role;
+  if (cookieHeader()) return;
+  const result = await f('/api/auth/login', { method: 'POST', body: JSON.stringify(ACCOUNTS[role]) });
+  if (!result.ok) throw new Error(`Login failed for ${role} (status=${result.status} body=${JSON.stringify(result.json)?.slice(0, 180)})`);
+}
+
+function checkoutLine(product, restaurant) {
+  const selectedModifiers = Object.fromEntries((product.modifiers || [])
+    .filter((modifier) => modifier.required && Number(modifier.min_select || 0) > 0)
+    .map((modifier) => [
+      modifier.id,
+      (modifier.options || []).slice(0, Number(modifier.min_select)).map((option) => option.id),
+    ]));
+  const unitPrice = Number(product.discount_price ?? product.price ?? 0);
+  const minimumOrder = Number(restaurant.minimum_order ?? restaurant.min_order_amount ?? 0);
+  const quantity = unitPrice > 0 ? Math.max(2, Math.ceil((minimumOrder + 0.01) / unitPrice)) : 2;
+  return { product_id: product.id, quantity, configuration: { selected_modifiers: selectedModifiers } };
 }
 
 async function run() {
@@ -123,7 +142,7 @@ async function run() {
   const myRestaurant = await f('/api/restaurant/dashboard');
   const restaurantId = myRestaurant.json?.stats?.restaurantId;
   if (!restaurantId) {
-    console.log('  ⚠ No restaurant found — skipping menu tests');
+    throw new Error('Restaurant workflow fixture is missing its restaurant');
   } else {
     const menu = await f(`/api/products/manage?restaurant_id=${restaurantId}`);
     record('Get menu', menu.ok);
@@ -150,7 +169,7 @@ async function run() {
       });
       record('Bulk price update (0%)', priceUp.ok);
     } else {
-      record('Bulk operations (skipped, no products)', true);
+      throw new Error(`Restaurant ${restaurantId} has no products for bulk-operation verification`);
     }
   }
 
@@ -163,23 +182,29 @@ async function run() {
   console.log('\n► Restaurant: order flow');
   await login('customer');
   const search = await f('/api/search?sort=recommended');
-  const restaurant = search.json?.restaurants?.[0];
+  const restaurant = search.json?.restaurants?.find((candidate) => candidate.id === restaurantId);
+  if (!restaurant) throw new Error(`Restaurant ${restaurantId} is not discoverable to customers`);
   const products = await f(`/api/products/bestsellers?restaurant_id=${restaurant.id}`);
-  const product = products.json?.products?.[0];
+  const product = (products.json?.bestsellers || products.json?.products || [])
+    .find((candidate) => candidate.is_available !== false && candidate.is_active !== false);
   if (!product) {
-    console.log('  ⚠ No product — skipping order flow');
+    throw new Error(`Restaurant ${restaurantId} has no purchasable product for order-flow verification`);
   } else {
     // Place order
     const order = await f('/api/orders', {
       method: 'POST',
       body: JSON.stringify({
         restaurant_id: restaurant.id,
-        items: [{ product_id: product.id, quantity: 2 }],
+        items: [checkoutLine(product, restaurant)],
         payment_method: 'cash',
-        delivery_address: { address: 'Test', lat: 50.7, lng: 7.1 },
+        delivery_address: {
+          address: 'Test Wesseling',
+          lat: Number(restaurant.latitude ?? 50.82),
+          lng: Number(restaurant.longitude ?? 6.98),
+        },
       }),
     });
-    record('Customer places order', order.ok);
+    record('Customer places order', order.ok, `status=${order.status} body=${JSON.stringify(order.json)?.slice(0, 180)}`);
     const orderId = order.json?.data?.order?.id || order.json?.order?.id;
 
     // Switch to restaurant
@@ -194,7 +219,7 @@ async function run() {
       method: 'PATCH',
       body: JSON.stringify({ order_id: orderId, status: 'confirmed' }),
     });
-    record('Confirm order', confirm.ok);
+    record('Confirm order', confirm.ok, `status=${confirm.status} body=${JSON.stringify(confirm.json)?.slice(0, 140)}`);
 
     // Mark preparing
     const prep = await f('/api/orders/status', {
@@ -210,12 +235,12 @@ async function run() {
     });
     record('Mark ready', ready.ok);
 
-    // Try to skip to delivered (should fail)
-    const skip = await f('/api/orders/status', {
+    // A direct ready -> delivered transition must be rejected.
+    const invalidDirectDelivery = await f('/api/orders/status', {
       method: 'PATCH',
       body: JSON.stringify({ order_id: orderId, status: 'delivered' }),
     });
-    record('Cannot skip to delivered', !skip.ok);
+    record('Cannot transition directly to delivered', !invalidDirectDelivery.ok);
 
     // Cancel a non-cancellable order (should fail or be permitted per state machine)
     const cancel = await f('/api/orders/status', {

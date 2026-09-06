@@ -8,8 +8,12 @@
  * Includes Nominatim fallback if the Google key is missing or quota exhausted.
  */
 
+// Production server calls require a dedicated server key. Reusing the browser
+// key defeats mutually exclusive IP/referrer restrictions and can turn a
+// public-key leak into server-API quota abuse. Development may reuse the
+// browser key to keep local acceptance setup lightweight.
 const GOOGLE_KEY = process.env.GOOGLE_MAPS_API_KEY
-  || process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY
+  || (process.env.NODE_ENV !== 'production' ? process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY : '')
   || '';
 
 const NOMINATIM_URL = 'https://nominatim.openstreetmap.org';
@@ -17,7 +21,50 @@ const GOOGLE_GEOCODE_URL = 'https://maps.googleapis.com/maps/api/geocode/json';
 const GOOGLE_DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
 const GOOGLE_DISTANCE_MATRIX_URL = 'https://maps.googleapis.com/maps/api/distancematrix/json';
 
-const cache = new Map<string, { value: any; expires: number }>();
+interface GoogleAddressComponent { long_name: string; types?: string[] }
+interface GoogleGeocodeResult {
+  formatted_address: string;
+  place_id?: string;
+  geometry: { location: { lat: number; lng: number } };
+  address_components?: GoogleAddressComponent[];
+}
+interface GoogleGeocodeResponse { status: string; results?: GoogleGeocodeResult[] }
+interface GoogleDirectionsStep {
+  html_instructions?: string;
+  distance: { value: number };
+  duration: { value: number };
+}
+interface GoogleDirectionsResponse {
+  status: string;
+  routes?: Array<{
+    overview_polyline: { points: string };
+    legs: Array<{
+      distance: { value: number };
+      duration: { value: number };
+      duration_in_traffic?: { value: number };
+      steps?: GoogleDirectionsStep[];
+    }>;
+  }>;
+}
+interface GoogleDistanceMatrixResponse {
+  status: string;
+  rows?: Array<{ elements?: Array<{ distance?: { value: number }; duration?: { value: number }; duration_in_traffic?: { value: number } }> }>;
+}
+interface GooglePlacePrediction {
+  description: string;
+  place_id: string;
+  structured_formatting?: { main_text?: string; secondary_text?: string };
+}
+interface GoogleAutocompleteResponse { status: string; predictions?: GooglePlacePrediction[] }
+interface NominatimPlace {
+  lat: string;
+  lon: string;
+  display_name: string;
+  place_id?: string | number;
+  address?: Record<string, unknown>;
+}
+
+const cache = new Map<string, { value: unknown; expires: number }>();
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 function cacheGet<T>(key: string): T | null {
@@ -30,7 +77,7 @@ function cacheGet<T>(key: string): T | null {
   return hit.value as T;
 }
 
-function cacheSet(key: string, value: any, ttl = CACHE_TTL_MS) {
+function cacheSet<T>(key: string, value: T, ttl = CACHE_TTL_MS) {
   cache.set(key, { value, expires: Date.now() + ttl });
 }
 
@@ -99,7 +146,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<Geocoded
       const url = `${GOOGLE_GEOCODE_URL}?latlng=${lat},${lng}&key=${GOOGLE_KEY}&language=de&region=de`;
       const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
       if (res.ok) {
-        const data = (await res.json()) as any;
+        const data = (await res.json()) as GoogleGeocodeResponse;
         if (data.status === 'OK' && data.results?.length) {
           const top = data.results[0];
           result = {
@@ -107,7 +154,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<Geocoded
             lng,
             formattedAddress: top.formatted_address,
             placeId: top.place_id,
-            components: (top.address_components as any[]).map((c) => ({
+            components: (top.address_components ?? []).map((c) => ({
               type: c.types?.[0] ?? '',
               value: c.long_name,
             })),
@@ -115,7 +162,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<Geocoded
           };
         }
       }
-    } catch (e) {
+    } catch {
       // fall through to nominatim
     }
   }
@@ -128,7 +175,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<Geocoded
         signal: AbortSignal.timeout(5000),
       });
       if (res.ok) {
-        const data = (await res.json()) as any;
+        const data = (await res.json()) as NominatimPlace;
         if (data && data.lat && data.lon) {
           result = {
             lat: Number(data.lat),
@@ -141,7 +188,7 @@ export async function reverseGeocode(lat: number, lng: number): Promise<Geocoded
           };
         }
       }
-    } catch (e) {
+    } catch {
       // give up
     }
   }
@@ -181,7 +228,7 @@ export async function getDirections(
     if (!res.ok) {
       return haversineRoute(origin, destination);
     }
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as GoogleDirectionsResponse;
     if (data.status !== 'OK' || !data.routes?.length) {
       return haversineRoute(origin, destination);
     }
@@ -191,7 +238,7 @@ export async function getDirections(
       distanceMeters: leg.distance.value,
       durationSeconds: leg.duration_in_traffic?.value ?? leg.duration.value,
       polyline: route.overview_polyline.points,
-      steps: (leg.steps as any[]).map((s) => ({
+      steps: (leg.steps ?? []).map((s) => ({
         instruction: s.html_instructions?.replace(/<[^>]+>/g, '') ?? '',
         distanceMeters: s.distance.value,
         durationSeconds: s.duration.value,
@@ -226,10 +273,10 @@ export async function getDistanceMatrix(
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as GoogleDistanceMatrixResponse;
     if (data.status !== 'OK') return null;
-    const matrix = (data.rows as any[]).map((row, i) =>
-      (row.elements as any[]).map((el) => ({
+    const matrix = (data.rows ?? []).map((row) =>
+      (row.elements ?? []).map((el) => ({
         distanceMeters: el.distance?.value ?? 0,
         durationSeconds: el.duration_in_traffic?.value ?? el.duration?.value ?? 0,
       }))
@@ -265,9 +312,9 @@ export async function autocomplete(input: string, options: { sessionToken?: stri
       const url = `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(trimmed)}&types=address&components=country:de&language=de&key=${GOOGLE_KEY}${options.sessionToken ? `&sessiontoken=${options.sessionToken}` : ''}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(4000) });
       if (res.ok) {
-        const data = (await res.json()) as any;
+        const data = (await res.json()) as GoogleAutocompleteResponse;
         if (data.status === 'OK' || data.status === 'ZERO_RESULTS') {
-          const out: PlacePrediction[] = (data.predictions ?? []).map((p: any) => {
+          const out: PlacePrediction[] = (data.predictions ?? []).map((p) => {
             const main = p.structured_formatting?.main_text ?? p.description;
             const secondary = p.structured_formatting?.secondary_text ?? '';
             return {
@@ -294,8 +341,8 @@ export async function autocomplete(input: string, options: { sessionToken?: stri
       signal: AbortSignal.timeout(4000),
     });
     if (res.ok) {
-      const data = (await res.json()) as any;
-      const out: PlacePrediction[] = (data ?? []).map((p: any) => ({
+      const data = (await res.json()) as NominatimPlace[];
+      const out: PlacePrediction[] = data.map((p) => ({
         description: p.display_name,
         placeId: String(p.place_id ?? `${p.lat},${p.lon}`),
         mainText: p.display_name.split(',')[0]?.trim() ?? p.display_name,
@@ -320,7 +367,7 @@ async function geocodeGoogle(address: string): Promise<GeocodedLocation | null> 
     const url = `${GOOGLE_GEOCODE_URL}?address=${encodeURIComponent(address)}&key=${GOOGLE_KEY}&language=de&region=de&components=country:DE`;
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as GoogleGeocodeResponse;
     if (data.status !== 'OK' || !data.results?.length) return null;
     const top = data.results[0];
     return {
@@ -328,7 +375,7 @@ async function geocodeGoogle(address: string): Promise<GeocodedLocation | null> 
       lng: top.geometry.location.lng,
       formattedAddress: top.formatted_address,
       placeId: top.place_id,
-      components: (top.address_components as any[]).map((c) => ({
+      components: (top.address_components ?? []).map((c) => ({
         type: c.types?.[0] ?? '',
         value: c.long_name,
       })),
@@ -347,7 +394,7 @@ async function geocodeNominatim(address: string): Promise<GeocodedLocation | nul
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return null;
-    const data = (await res.json()) as any;
+    const data = (await res.json()) as NominatimPlace[];
     if (!data?.length) return null;
     const top = data[0];
     return {

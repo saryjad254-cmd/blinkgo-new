@@ -29,6 +29,9 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useSearchParams, useRouter, usePathname } from 'next/navigation';
+import { SearchMap } from '@/components/maps/SearchMap';
+import { trackSearchEvent } from '@/lib/analytics/search';
+import { useOnlineStatus, useCachedFetch } from '@/lib/hooks/useOnlineStatus';
 import SearchIcon from 'lucide-react/dist/esm/icons/search';
 import Filter from 'lucide-react/dist/esm/icons/filter';
 import X from 'lucide-react/dist/esm/icons/x';
@@ -56,25 +59,39 @@ import Heart from 'lucide-react/dist/esm/icons/heart';
 import Package from 'lucide-react/dist/esm/icons/package';
 import { VoiceSearch } from '@/components/customer/VoiceSearch';
 import { FavoriteButton } from '@/components/customer/FavoriteButton';
-import { useT, useI18n } from '@/lib/i18n/I18nProvider';
+import { useI18n, useTranslations } from '@/lib/i18n/I18nProvider';
 import { formatEUR } from '@/lib/format';
 import { haversineDistance, formatDistance } from '@/lib/delivery-zone';
 import { cn } from '@/lib/cn';
+import type { LucideIcon } from 'lucide-react';
 
 interface Restaurant {
   id: string;
   name: string;
-  cuisine: string[];
+  cuisines: string[];
+  cuisine?: string[];
+  cuisines_label?: string;
   rating: number;
-  review_count: number;
+  total_reviews: number;
+  delivery_time_min: number;
   delivery_fee: number;
-  estimated_delivery_time: number;
+  minimum_order?: number;
   address: string;
-  cover_url: string;
+  cover_image_url?: string;
+  cover_url?: string;
+  logo_url?: string;
+  description?: string;
   type?: string;
   latitude?: number;
   longitude?: number;
   is_promoted?: boolean;
+  is_active?: boolean;
+  is_paused?: boolean;
+  busy_mode?: boolean;
+  busy_mode_until?: string;
+  is_hidden?: boolean;
+  estimated_delivery_time?: string | number;
+  _highlight?: { name: string };
 }
 
 interface Product {
@@ -86,10 +103,13 @@ interface Product {
   image_urls: string[];
   badges: string[];
   restaurant_id: string;
-  restaurants: Restaurant;
+  restaurants?: Restaurant | null | false;
   sold_count: number;
   is_featured: boolean;
   category: string;
+  rating?: number;
+  is_active?: boolean;
+  _highlight?: { name: string };
 }
 
 interface RecentOrder {
@@ -99,6 +119,21 @@ interface RecentOrder {
   created_at: string;
   restaurant_id: string;
   restaurants: Restaurant;
+}
+
+interface SearchSuggestion {
+  query: string;
+  restaurants: number;
+  products: number;
+}
+
+interface SearchResponse {
+  restaurants?: Restaurant[];
+  products?: Product[];
+  didYouMean?: SearchSuggestion[];
+  total?: number;
+  hasMore?: boolean;
+  nextOffset?: number;
 }
 
 type ViewMode = 'grid' | 'list' | 'map';
@@ -119,41 +154,60 @@ export default function SearchPage() {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
-  const t = useT();
+  const paramsString = params?.toString() ?? '';
   const { locale } = useI18n();
-  const ct = (key: string, fallback?: string) =>
-    (t as any).customer?.[key] ?? fallback ?? key;
+  const translate = useTranslations();
+  const ct = useCallback(
+    (key: string, fallback?: string) => translate(`customer.${key}`, fallback ?? key),
+    [translate],
+  );
 
   // ===== URL state sync (deep-linkable filters) =====
-  const urlQ = params?.get('q') || '';
-  const urlSort = params?.get('sort') || 'recommended';
+  const urlQ = params?.get('q') || params?.get('category') || '';
+  const rawUrlSort = params?.get('sort') || 'recommended';
+  const urlSort = rawUrlSort === 'popular' ? 'bestseller'
+    : rawUrlSort === 'rating' ? 'rating_desc'
+    : rawUrlSort === 'price_low' ? 'price_asc'
+    : rawUrlSort === 'price_high' ? 'price_desc'
+    : rawUrlSort;
   const urlType = params?.get('type');
   const urlCuisine = params?.get('cuisine');
+  const urlMinRating = Math.min(5, Math.max(0, Number(params?.get('min_rating') || 0)));
+  const urlMaxPrice = Math.min(999, Math.max(0, Number(params?.get('max_price') || 999)));
+  const urlBadge = params?.get('badge');
+  const urlInStock = params?.get('in_stock') === '1';
   const urlFreeDelivery = params?.get('free_delivery') === '1';
   const urlOpenNow = params?.get('open_now') === '1';
   const urlMaxDeliveryTime = params?.get('max_delivery_time')
     ? parseInt(params.get('max_delivery_time')!)
     : 0;
   const urlPromoted = params?.get('promoted') === '1';
+  const rawUrlView = params?.get('view');
+  const urlView: ViewMode = rawUrlView === 'list' || rawUrlView === 'map' ? rawUrlView : 'grid';
 
   // ===== Component state =====
   const [q, setQ] = useState(urlQ);
   const [sort, setSort] = useState(urlSort);
   const [type, setType] = useState<string | null>(urlType);
   const [cuisine, setCuisine] = useState<string | null>(urlCuisine);
-  const [minRating, setMinRating] = useState(0);
-  const [maxPrice, setMaxPrice] = useState(999);
-  const [badge, setBadge] = useState<string | null>(null);
-  const [inStock, setInStock] = useState(false);
+  const [minRating, setMinRating] = useState(urlMinRating);
+  const [maxPrice, setMaxPrice] = useState(urlMaxPrice);
+  const [badge, setBadge] = useState<string | null>(urlBadge);
+  const [inStock, setInStock] = useState(urlInStock);
   const [freeDelivery, setFreeDelivery] = useState(urlFreeDelivery);
   const [openNow, setOpenNow] = useState(urlOpenNow);
   const [maxDeliveryTime, setMaxDeliveryTime] = useState(urlMaxDeliveryTime);
   const [promoted, setPromoted] = useState(urlPromoted);
-  const [showFilters, setShowFilters] = useState(false);
-  const [view, setView] = useState<ViewMode>('grid');
+  const [showFilters, setShowFilters] = useState(params?.get('filter') === '1');
+  const [view, setView] = useState<ViewMode>(urlView);
 
   const [restaurants, setRestaurants] = useState<Restaurant[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
+  const [didYouMean, setDidYouMean] = useState<SearchSuggestion[]>([]);
+  const [highlightedMarkerId, setHighlightedMarkerId] = useState<string | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState(0);
   const [bestsellers, setBestsellers] = useState<Product[]>([]);
   const [recent, setRecent] = useState<Product[]>([]);
   const [recommendations, setRecommendations] = useState<Product[]>([]);
@@ -163,33 +217,86 @@ export default function SearchPage() {
   const [tab, setTab] = useState<'restaurants' | 'products'>('restaurants');
   const [userLocation, setUserLocation] = useState<{ lat: number; lng: number } | null>(null);
 
+  // Browser back/forward must restore the complete search UI, not only change
+  // the address bar. Shared links are already covered by the lazy initial state.
+  useEffect(() => {
+    const restoreFromHistory = () => {
+      const next = new URLSearchParams(window.location.search);
+      const nextRawSort = next.get('sort') || 'recommended';
+      const nextSort = nextRawSort === 'popular' ? 'bestseller'
+        : nextRawSort === 'rating' ? 'rating_desc'
+        : nextRawSort === 'price_low' ? 'price_asc'
+        : nextRawSort === 'price_high' ? 'price_desc'
+        : nextRawSort;
+      const nextRawView = next.get('view');
+      setQ(next.get('q') || next.get('category') || '');
+      setSort(nextSort);
+      setType(next.get('type'));
+      setCuisine(next.get('cuisine'));
+      setMinRating(Math.min(5, Math.max(0, Number(next.get('min_rating') || 0))));
+      setMaxPrice(Math.min(999, Math.max(0, Number(next.get('max_price') || 999))));
+      setBadge(next.get('badge'));
+      setInStock(next.get('in_stock') === '1');
+      setFreeDelivery(next.get('free_delivery') === '1');
+      setOpenNow(next.get('open_now') === '1');
+      setMaxDeliveryTime(next.get('max_delivery_time') ? Math.max(0, parseInt(next.get('max_delivery_time')!, 10) || 0) : 0);
+      setPromoted(next.get('promoted') === '1');
+      setShowFilters(next.get('filter') === '1');
+      setView(nextRawView === 'list' || nextRawView === 'map' ? nextRawView : 'grid');
+    };
+    window.addEventListener('popstate', restoreFromHistory);
+    return () => window.removeEventListener('popstate', restoreFromHistory);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
+      try {
+        const storedHistory = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) || '[]');
+        if (Array.isArray(storedHistory)) setSearchHistory(storedHistory.slice(0, SEARCH_HISTORY_MAX));
+        const storedLocation = JSON.parse(localStorage.getItem('blinkgo-last-location') || 'null');
+        if (storedLocation && typeof storedLocation.lat === 'number' && typeof storedLocation.lng === 'number') setUserLocation(storedLocation);
+      } catch {
+        // Corrupted local preferences must not block search rendering.
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+  const { isOnline } = useOnlineStatus();
+  const { getCached, setCached } = useCachedFetch<{
+    restaurants: Restaurant[];
+    products: Product[];
+    didYouMean?: SearchSuggestion[];
+  }>(`search:${q}:${sort}:${type}:${cuisine}`);
+  const [usedCached, setUsedCached] = useState(false);
+
   // ===== Debounced URL sync =====
   const debounceRef = useRef<NodeJS.Timeout | null>(null);
   const abortRef = useRef<AbortController | null>(null);
-
-  // Get user location from localStorage (set during cart/order flow)
-  useEffect(() => {
-    try {
-      const loc = JSON.parse(localStorage.getItem('blinkgo-last-location') || 'null');
-      if (loc && typeof loc.lat === 'number' && typeof loc.lng === 'number') {
-        setUserLocation(loc);
-      }
-    } catch {}
-  }, []);
 
   // Sync state -> URL (debounced)
   const updateUrl = useCallback(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      const next = new URLSearchParams(params?.toString());
+      const next = new URLSearchParams(paramsString);
       if (q) next.set('q', q);
       else next.delete('q');
+      next.delete('category');
       if (sort && sort !== 'recommended') next.set('sort', sort);
       else next.delete('sort');
       if (type) next.set('type', type);
       else next.delete('type');
       if (cuisine) next.set('cuisine', cuisine);
       else next.delete('cuisine');
+      if (minRating > 0) next.set('min_rating', String(minRating));
+      else next.delete('min_rating');
+      if (maxPrice < 999) next.set('max_price', String(maxPrice));
+      else next.delete('max_price');
+      if (badge) next.set('badge', badge);
+      else next.delete('badge');
+      if (inStock) next.set('in_stock', '1');
+      else next.delete('in_stock');
       if (freeDelivery) next.set('free_delivery', '1');
       else next.delete('free_delivery');
       if (openNow) next.set('open_now', '1');
@@ -201,7 +308,26 @@ export default function SearchPage() {
       const qs = next.toString();
       router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
     }, DEBOUNCE_MS);
-  }, [params, pathname, q, sort, type, cuisine, freeDelivery, openNow, maxDeliveryTime, promoted, router]);
+  }, [paramsString, pathname, q, sort, type, cuisine, minRating, maxPrice, badge, inStock, freeDelivery, openNow, maxDeliveryTime, promoted, router]);
+
+  const selectView = useCallback((nextView: ViewMode) => {
+    setView(nextView);
+    const next = new URLSearchParams(paramsString);
+    if (nextView === 'grid') next.delete('view');
+    else next.set('view', nextView);
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [paramsString, pathname, router]);
+
+  const toggleFilters = useCallback(() => {
+    const nextOpen = !showFilters;
+    setShowFilters(nextOpen);
+    const next = new URLSearchParams(paramsString);
+    if (nextOpen) next.set('filter', '1');
+    else next.delete('filter');
+    const qs = next.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [paramsString, pathname, router, showFilters]);
 
   // Initial load: bestsellers + recent + recommendations + orders
   useEffect(() => {
@@ -210,34 +336,34 @@ export default function SearchPage() {
       fetch('/api/products/bestsellers?limit=12').then((r) => r.json()).catch(() => ({})),
       fetch('/api/products/recent?limit=10').then((r) => r.json()).catch(() => ({})),
       fetch('/api/orders/recent?limit=5').then((r) => r.json()).catch(() => ({})),
-    ]).then(([bestsellersRes, recentRes, ordersRes]) => {
+      fetch('/api/recommendations?type=products&limit=8').then((r) => r.json()).catch(() => ({})),
+    ]).then(([bestsellersRes, recentRes, ordersRes, recommendationsRes]) => {
       if (cancelled) return;
       if (bestsellersRes.status === 'fulfilled') {
         setBestsellers(bestsellersRes.value?.bestsellers || []);
       }
       if (recentRes.status === 'fulfilled') {
-        setRecent(recentRes.value?.recent || []);
-        setRecommendations(recentRes.value?.recommendations || []);
+        setRecent(recentRes.value?.recent || recentRes.value?.products || []);
       }
       if (ordersRes.status === 'fulfilled') {
         setRecentOrders(ordersRes.value?.orders || []);
       }
+      if (recommendationsRes.status === 'fulfilled') {
+        setRecommendations(recommendationsRes.value?.data?.personalized || recommendationsRes.value?.personalized || []);
+      }
     });
-    try {
-      const h = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) || '[]');
-      if (Array.isArray(h)) setSearchHistory(h.slice(0, SEARCH_HISTORY_MAX));
-    } catch {}
     return () => { cancelled = true; };
   }, []);
 
   // Search with AbortController
   const performSearch = useCallback(
-    async (query: string, currentSort: string) => {
+    async (query: string, currentSort: string, currentOffset = 0, append = false) => {
       if (abortRef.current) abortRef.current.abort();
       const controller = new AbortController();
       abortRef.current = controller;
 
-      setLoading(true);
+      if (!append) setLoading(true);
+      else setLoadingMore(true);
       try {
         const p = new URLSearchParams();
         if (query) p.set('q', query);
@@ -252,15 +378,69 @@ export default function SearchPage() {
         if (openNow) p.set('open_now', '1');
         if (maxDeliveryTime > 0) p.set('max_delivery_time', String(maxDeliveryTime));
         if (promoted) p.set('promoted', '1');
+        if (currentOffset > 0) p.set('offset', String(currentOffset));
 
         const res = await fetch(`/api/search?${p.toString()}`, {
           signal: controller.signal,
         });
-        const data = await res.json();
-        setRestaurants(data.restaurants || []);
-        setProducts(data.products || []);
+        if (!res.ok) {
+          throw new Error(`Search request failed (${res.status})`);
+        }
+        const contentType = res.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+          throw new Error('Search service returned an invalid response');
+        }
+        const data = await res.json() as SearchResponse;
+        setUsedCached(false);
+        const newRestaurants = Array.isArray(data.restaurants) ? data.restaurants : [];
+        const newProducts = Array.isArray(data.products) ? data.products : [];
+        // Cache successful response for offline fallback
+        if (!append && newRestaurants.length + newProducts.length > 0) {
+          try {
+            setCached({ restaurants: newRestaurants, products: newProducts, didYouMean: data.didYouMean || [] });
+          } catch {}
+        }
 
-        if (query) {
+        if (append) {
+          setRestaurants((prev) => {
+            const known = new Set(prev.map((item) => item.id));
+            return [...prev, ...newRestaurants.filter((item) => !known.has(item.id))];
+          });
+          setProducts((prev) => {
+            const known = new Set(prev.map((item) => item.id));
+            return [...prev, ...newProducts.filter((item) => !known.has(item.id))];
+          });
+        } else {
+          setRestaurants(newRestaurants);
+          setProducts(newProducts);
+        }
+        setDidYouMean(data.didYouMean || []);
+
+        // Pagination state
+        const total = data.total ?? (newRestaurants.length + newProducts.length);
+        setHasMore(Boolean(data.hasMore));
+        setNextOffset(typeof data.nextOffset === 'number' ? data.nextOffset : currentOffset);
+
+        // Track search analytics (only for fresh queries, not appends)
+        if (!append && query) {
+          try {
+            trackSearchEvent('search_submitted', {
+              query,
+              resultCount: total,
+              filterCuisine: cuisine,
+              filterSort: currentSort,
+            });
+            if (total === 0) {
+              trackSearchEvent('search_zero_result', {
+                query,
+                filterCuisine: cuisine,
+                filterSort: currentSort,
+              });
+            }
+          } catch {}
+        }
+
+        if (query && !append) {
           try {
             const h = JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY) || '[]');
             const newH = [query, ...(Array.isArray(h) ? h.filter((x: string) => x !== query) : [])].slice(0, SEARCH_HISTORY_MAX);
@@ -268,24 +448,43 @@ export default function SearchPage() {
             setSearchHistory(newH);
           } catch {}
         }
-      } catch (e: any) {
-        if (e?.name !== 'AbortError') {
-          console.error('Search failed:', e);
-          setRestaurants([]);
-          setProducts([]);
+      } catch (error: unknown) {
+        if (!(error instanceof DOMException && error.name === 'AbortError')) {
+          console.error('Search failed:', error);
+          if (!append) {
+            // Offline fallback: try cached results
+            const cached = getCached();
+            if (cached && cached.restaurants) {
+              setRestaurants(cached.restaurants);
+              setProducts(cached.products);
+              setDidYouMean(cached.didYouMean || []);
+              setUsedCached(true);
+            } else {
+              setRestaurants([]);
+              setProducts([]);
+              setDidYouMean([]);
+              setUsedCached(false);
+            }
+          }
         }
       } finally {
-        if (!controller.signal.aborted) setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setLoadingMore(false);
+        }
       }
     },
-    [type, cuisine, minRating, maxPrice, badge, inStock, freeDelivery, openNow, maxDeliveryTime, promoted]
+    [type, cuisine, minRating, maxPrice, badge, inStock, freeDelivery, openNow, maxDeliveryTime, promoted, setCached, getCached]
   );
 
   // Debounced re-search on input/filter change
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => {
-      performSearch(q, sort);
+      // Reset pagination when query/filters change
+      setNextOffset(0);
+      setHasMore(false);
+      performSearch(q, sort, 0, false);
       updateUrl();
     }, DEBOUNCE_MS);
     return () => {
@@ -293,6 +492,41 @@ export default function SearchPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, sort, type, cuisine, minRating, maxPrice, badge, inStock, freeDelivery, openNow, maxDeliveryTime, promoted]);
+
+  // Infinite scroll: load more when sentinel is visible
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  const loadingMoreRef = useRef(false);
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    if (!hasMore) return;
+    if (loadingMore) return;
+    if (loading) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting && !loadingMoreRef.current) {
+          loadingMoreRef.current = true;
+          performSearch(q, sort, nextOffset, true).finally(() => {
+            loadingMoreRef.current = false;
+          });
+        }
+      },
+      { rootMargin: '300px 0px' }
+    );
+    observer.observe(sentinelRef.current);
+    return () => observer.disconnect();
+  }, [hasMore, loadingMore, loading, nextOffset, q, sort, performSearch]);
+
+  // Track result clicks (for analytics)
+  const trackResultClick = useCallback((resultId: string, resultType: 'restaurant' | 'product', queryText: string) => {
+    try {
+      trackSearchEvent('search_to_restaurant', {
+        query: queryText,
+        resultId,
+        resultType,
+      });
+    } catch {}
+  }, []);
 
   // Sort options (built from i18n)
   const sortOptions = [
@@ -313,11 +547,12 @@ export default function SearchPage() {
 
   const totalResults = restaurants.length + products.length;
   const activeFilters = [
-    { key: 'type', value: type, label: type === 'restaurant' ? ct('tabRestaurants', 'Restaurants') : type === 'market' ? (locale === 'ar' ? 'سوق' : 'Markt') : type === 'pharmacy' ? (locale === 'ar' ? 'صيدلية' : 'Apotheke') : type, onRemove: () => setType(null) },
+    { key: 'type', value: type, label: type === 'restaurant' ? ct('tabRestaurants', 'Restaurants') : type === 'product' ? ct('tabProducts', 'Produkte') : type, onRemove: () => setType(null) },
     { key: 'cuisine', value: cuisine, label: cuisine, onRemove: () => setCuisine(null) },
     { key: 'rating', value: minRating > 0 ? 'rating' : null, label: `${minRating}★+`, onRemove: () => setMinRating(0) },
     { key: 'price', value: maxPrice < 999 ? 'price' : null, label: `<${maxPrice}€`, onRemove: () => setMaxPrice(999) },
     { key: 'badge', value: badge, label: badge ? (BADGE_LABELS[badge]?.[locale] || badge) : null, onRemove: () => setBadge(null) },
+    { key: 'inStock', value: inStock ? 'stock' : null, label: ct('filterStock', 'Nur verfügbare Produkte'), onRemove: () => setInStock(false) },
     { key: 'freeDelivery', value: freeDelivery ? 'free' : null, label: ct('freeDelivery', 'Gratis Lieferung'), onRemove: () => setFreeDelivery(false) },
     { key: 'openNow', value: openNow ? 'open' : null, label: ct('openNow', 'Jetzt geöffnet'), onRemove: () => setOpenNow(false) },
     { key: 'maxDeliveryTime', value: maxDeliveryTime > 0 ? 'time' : null, label: `<${maxDeliveryTime}min`, onRemove: () => setMaxDeliveryTime(0) },
@@ -344,11 +579,11 @@ export default function SearchPage() {
         <div className="max-w-5xl mx-auto px-4 py-3 space-y-3">
           <div className="flex items-center gap-2">
             <Link
-              href="/restaurants"
-              className="p-2 -m-2 text-text-secondary hover:text-white transition-colors"
-              aria-label={ct('a11yCloseFilters', 'Close')}
+              href="/home"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-surface-elevated text-text-secondary transition-colors hover:bg-surface-light hover:text-white focus:outline-none focus:ring-2 focus:ring-brand"
+              aria-label={locale === 'ar' ? 'رجوع' : locale === 'de' ? 'Zurück' : 'Back'}
             >
-              <ArrowLeft className="w-5 h-5" strokeWidth={2} aria-hidden="true" />
+              <ArrowLeft className={`w-5 h-5 ${locale === 'ar' ? 'rotate-180' : ''}`} strokeWidth={2} aria-hidden="true" />
             </Link>
             <div className="relative flex-1">
               <SearchIcon
@@ -378,7 +613,7 @@ export default function SearchPage() {
             </div>
             <VoiceSearch />
             <button
-              onClick={() => setShowFilters(!showFilters)}
+              onClick={toggleFilters}
               className={cn(
                 'relative w-11 h-11 rounded-xl border transition-all duration-200 ease-silk flex items-center justify-center touch-manipulation',
                 showFilters || activeFilters.length > 0
@@ -398,7 +633,7 @@ export default function SearchPage() {
           </div>
 
           {/* Quick filter chips */}
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide" role="toolbar" aria-label="Quick filters">
+          <div className="-mx-4 flex snap-x snap-proximity items-center gap-2 overflow-x-auto px-4 pb-1 scroll-px-4 scrollbar-hide" role="toolbar" aria-label={ct('quickFilter', 'Quick filters')}>
             <QuickChip
               active={freeDelivery}
               onClick={() => setFreeDelivery(!freeDelivery)}
@@ -423,18 +658,18 @@ export default function SearchPage() {
               icon={Award}
               label={ct('promoted', 'Empfohlen')}
             />
-            {restaurants.length > 0 && (
-              <div className="ms-auto flex items-center gap-1 p-0.5 rounded-lg bg-bg-elevated border border-edge">
-                <ViewButton active={view === 'grid'} onClick={() => setView('grid')} icon={Grid3x3} label={ct('a11yGridView', 'Grid')} />
-                <ViewButton active={view === 'list'} onClick={() => setView('list')} icon={List} label={ct('a11yListView', 'List')} />
-                <ViewButton active={view === 'map'} onClick={() => setView('map')} icon={MapIcon} label={ct('a11yMapView', 'Map')} />
+            {q && restaurants.length > 0 && (
+              <div className="ms-auto flex shrink-0 items-center gap-1 rounded-lg border border-edge bg-bg-elevated p-0.5">
+                <ViewButton active={view === 'grid'} onClick={() => selectView('grid')} icon={Grid3x3} label={ct('a11yGridView', 'Grid')} />
+                <ViewButton active={view === 'list'} onClick={() => selectView('list')} icon={List} label={ct('a11yListView', 'List')} />
+                <ViewButton active={view === 'map'} onClick={() => selectView('map')} icon={MapIcon} label={ct('a11yMapView', 'Map')} />
               </div>
             )}
           </div>
 
           {/* Sort tabs */}
           <div
-            className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide"
+            className="-mx-4 flex snap-x snap-proximity items-center gap-2 overflow-x-auto px-4 pb-1 scroll-px-4 scrollbar-hide"
             role="tablist"
             aria-label="Sort"
           >
@@ -448,13 +683,13 @@ export default function SearchPage() {
                   role="tab"
                   aria-selected={active}
                   className={cn(
-                    'flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all duration-200 ease-silk touch-manipulation',
+                    'flex min-h-11 shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-xs font-bold transition-all duration-200 ease-silk touch-manipulation',
                     active
                       ? 'bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active text-white shadow-speed-glow'
                       : 'bg-surface-elevated text-text-secondary hover:bg-surface-light hover:text-white border border-edge'
                   )}
                 >
-                  <Icon className="w-3.5 h-3.5" strokeWidth={2} aria-hidden="true" />
+                  <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
                   {s.label}
                 </button>
               );
@@ -495,15 +730,13 @@ export default function SearchPage() {
               allLabel={ct('filterAll', 'Alle')}
               options={[
                 { value: 'restaurant' },
-                { value: 'market' },
-                { value: 'pharmacy' },
+                { value: 'product' },
               ]}
               value={type}
               onChange={setType}
               getLabel={(v) =>
                 v === 'restaurant' ? ct('tabRestaurants', 'Restaurants')
-                : v === 'market' ? (locale === 'ar' ? 'المتاجر' : locale === 'en' ? 'Markets' : 'Märkte')
-                : v === 'pharmacy' ? (locale === 'ar' ? 'الصيدليات' : locale === 'en' ? 'Pharmacies' : 'Apotheken')
+                : v === 'product' ? ct('tabProducts', 'Produkte')
                 : v
               }
             />
@@ -527,8 +760,9 @@ export default function SearchPage() {
                   <button
                     key={r}
                     onClick={() => setMinRating(r)}
+                    aria-pressed={minRating === r}
                     className={cn(
-                      'flex items-center gap-1 px-3 py-1.5 rounded-pill text-xs font-semibold transition-all',
+                      'flex min-h-11 items-center gap-1 px-3 py-2 rounded-pill text-xs font-semibold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand',
                       minRating === r
                         ? 'bg-speed-gradient text-white'
                         : 'bg-surface-elevated text-text-secondary'
@@ -623,7 +857,7 @@ export default function SearchPage() {
 
         {/* Order Again section (when no query) */}
         {!q && recentOrders.length > 0 && (
-          <Section title={ct('orderAgain', 'Nochmal bestellen')} icon={Heart} t={t}>
+          <Section title={ct('orderAgain', 'Nochmal bestellen')} icon={Heart}>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {recentOrders.map((o) => (
                 <RecentOrderCard
@@ -681,7 +915,16 @@ export default function SearchPage() {
               <p className="text-sm text-text-muted" aria-live="polite" role="status">
                 {loading
                   ? ct('searching', 'Suche läuft…')
-                  : ct('resultsFor', '{count} Ergebnisse für "{query}"').replace('{count}', String(totalResults)).replace('{query}', q)}
+                  : (
+                    <>
+                      {ct('resultsFor', '{count} Ergebnisse für "{query}"').replace('{count}', String(totalResults)).replace('{query}', q)}
+                      {usedCached && !isOnline && (
+                        <span className="ms-2 inline-flex items-center gap-1 text-xs font-bold text-warning">
+                          ⚠ {ct('cachedResults', 'Zuletzt gesehene Ergebnisse')}
+                        </span>
+                      )}
+                    </>
+                  )}
               </p>
             </div>
 
@@ -721,29 +964,102 @@ export default function SearchPage() {
               <ResultsSkeleton view={view} />
             ) : tab === 'restaurants' ? (
               restaurants.length === 0 ? (
-                <EmptyResults query={q} type="restaurant" onClearFilters={clearAllFilters} ct={ct} />
+                <EmptyResults
+                  query={q}
+                  type="restaurant"
+                  onClearFilters={clearAllFilters}
+                  ct={ct}
+                  didYouMean={didYouMean}
+                  onSuggestionClick={(s) => setQ(s)}
+                />
               ) : view === 'map' ? (
-                <MapViewPlaceholder restaurants={restaurants} userLocation={userLocation} ct={ct} />
+                <SearchMap
+                  markers={restaurants
+                    .filter((r) => r.latitude != null && r.longitude != null)
+                    .map((r) => ({
+                      id: r.id,
+                      lat: r.latitude!,
+                      lng: r.longitude!,
+                      name: r.name,
+                      rating: r.rating,
+                      delivery_time_min: r.delivery_time_min,
+                      delivery_fee: r.delivery_fee,
+                    }))}
+                  highlightedId={highlightedMarkerId}
+                  onMarkerClick={(id) => {
+                    setHighlightedMarkerId(id);
+                    trackResultClick(id, 'restaurant', q);
+                  }}
+                  userLocation={userLocation}
+                  height="500px"
+                />
               ) : view === 'list' ? (
                 <div className="space-y-2" role="feed" aria-busy={loading}>
-                  {restaurants.map((r) => (
-                    <RestaurantListItem key={r.id} restaurant={r} locale={locale} userLocation={userLocation} ct={ct} />
+                  {restaurants.map((r, index) => (
+                    <RestaurantListItem
+                      key={r.id}
+                      restaurant={r}
+                      locale={locale}
+                      userLocation={userLocation}
+                      ct={ct}
+                      onClick={() => {
+                        setHighlightedMarkerId(r.id);
+                        trackResultClick(r.id, 'restaurant', q);
+                      }}
+                      isHighlighted={highlightedMarkerId === r.id}
+                      eager={index < 2}
+                    />
                   ))}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" role="feed" aria-busy={loading}>
-                  {restaurants.map((r) => (
-                    <RestaurantResultCard key={r.id} restaurant={r} locale={locale} userLocation={userLocation} ct={ct} />
+                  {restaurants.map((r, index) => (
+                    <RestaurantResultCard
+                      key={r.id}
+                      restaurant={r}
+                      locale={locale}
+                      userLocation={userLocation}
+                      ct={ct}
+                      onClick={() => {
+                        setHighlightedMarkerId(r.id);
+                        trackResultClick(r.id, 'restaurant', q);
+                      }}
+                      isHighlighted={highlightedMarkerId === r.id}
+                      eager={index < 2}
+                    />
                   ))}
                 </div>
               )
             ) : products.length === 0 ? (
-              <EmptyResults query={q} type="product" onClearFilters={clearAllFilters} ct={ct} />
+              <EmptyResults
+                query={q}
+                type="product"
+                onClearFilters={clearAllFilters}
+                ct={ct}
+                didYouMean={didYouMean}
+                onSuggestionClick={(s) => setQ(s)}
+              />
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" role="feed" aria-busy={loading}>
-                {products.map((p) => (
-                  <ProductResultCard key={p.id} product={p} locale={locale} ct={ct} />
+                {products.map((p, index) => (
+                  <ProductResultCard key={p.id} product={p} locale={locale} ct={ct} eager={index < 2} />
                 ))}
+              </div>
+            )}
+
+            {/* Infinite scroll sentinel */}
+            {hasMore && !loading && q && (
+              <div
+                ref={sentinelRef}
+                className="flex items-center justify-center py-8"
+                aria-label={ct('a11yLoadMore', 'Loading more results')}
+              >
+                {loadingMore && (
+                  <div className="flex items-center gap-2 text-sm text-text-muted">
+                    <div className="w-4 h-4 border-2 border-brand-red border-t-transparent rounded-full animate-spin" />
+                    {ct('loadingMore', 'Mehr laden…')}
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -756,18 +1072,17 @@ export default function SearchPage() {
               <Section
                 title={ct('topNearYou', 'Top Restaurants in Ihrer Nähe')}
                 icon={Sparkles}
-                t={t}
               >
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {restaurants.slice(0, 6).map((r) => (
-                    <RestaurantResultCard key={r.id} restaurant={r} locale={locale} userLocation={userLocation} ct={ct} />
+                  {restaurants.slice(0, 6).map((r, index) => (
+                    <RestaurantResultCard key={r.id} restaurant={r} locale={locale} userLocation={userLocation} ct={ct} eager={index < 2} />
                   ))}
                 </div>
               </Section>
             )}
 
             {recent.length > 0 && (
-              <Section title={ct('recentlyViewed', 'Zuletzt angesehen')} icon={History} t={t}>
+              <Section title={ct('recentlyViewed', 'Zuletzt angesehen')} icon={History}>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                   {recent.slice(0, 5).map((p) => (
                     <ProductResultCard key={p.id} product={p} compact locale={locale} ct={ct} />
@@ -777,7 +1092,7 @@ export default function SearchPage() {
             )}
 
             {bestsellers.length > 0 && (
-              <Section title={ct('bestsellers', 'Bestseller')} icon={Award} t={t}>
+              <Section title={ct('bestsellers', 'Bestseller')} icon={Award}>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                   {bestsellers.slice(0, 8).map((p) => (
                     <ProductResultCard key={p.id} product={p} compact locale={locale} ct={ct} />
@@ -787,7 +1102,7 @@ export default function SearchPage() {
             )}
 
             {recommendations.length > 0 && (
-              <Section title={ct('recommendedForYou', 'Für dich empfohlen')} icon={Sparkles} t={t}>
+              <Section title={ct('recommendedForYou', 'Für dich empfohlen')} icon={Sparkles}>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
                   {recommendations.slice(0, 8).map((p) => (
                     <ProductResultCard key={p.id} product={p} compact locale={locale} ct={ct} />
@@ -826,7 +1141,7 @@ export default function SearchPage() {
 
 // ===== Memoized child components =====
 
-function Section({ title, icon: Icon, children, t }: { title: string; icon: any; children: React.ReactNode; t: any }) {
+function Section({ title, icon: Icon, children }: { title: string; icon: LucideIcon; children: React.ReactNode }) {
   return (
     <section>
       <div className="flex items-center gap-2.5 mb-3.5">
@@ -837,6 +1152,23 @@ function Section({ title, icon: Icon, children, t }: { title: string; icon: any;
       </div>
       {children}
     </section>
+  );
+}
+
+function SearchImageFallback({ name, kind = 'restaurant' }: { name: string; kind?: 'restaurant' | 'product' }) {
+  const Icon = kind === 'restaurant' ? StoreIcon : ShoppingBag;
+  const initial = name.trim().charAt(0).toUpperCase() || 'B';
+  return (
+    <div className="relative flex h-full w-full items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_72%_20%,rgba(255,193,7,.18),transparent_36%),linear-gradient(135deg,#1b0908_0%,#090a0d_58%,#111216_100%)]" aria-hidden="true">
+      <span className="absolute -end-3 -top-8 text-[110px] font-black italic leading-none text-[#E10600]/10">{initial}</span>
+      <span className="absolute start-0 top-[28%] h-px w-[42%] bg-gradient-to-r from-[#E10600] to-transparent shadow-[0_10px_0_rgba(255,193,7,.42),0_20px_0_rgba(225,6,0,.30)]" />
+      <div className="relative z-10 flex max-w-[82%] flex-col items-center gap-2 text-center">
+        <span className="grid size-11 place-items-center rounded-2xl border border-[#FFC107]/25 bg-black/45 text-[#FFC107] shadow-[0_12px_32px_rgba(225,6,0,.18)]">
+          <Icon className="size-5" strokeWidth={1.8} />
+        </span>
+        <span className="line-clamp-1 text-xs font-black text-white/78">{name}</span>
+      </div>
+    </div>
   );
 }
 
@@ -851,25 +1183,25 @@ function ResultsSkeleton({ view }: { view: ViewMode }) {
   );
 }
 
-function QuickChip({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: any; label: string }) {
+function QuickChip({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: LucideIcon; label: string }) {
   return (
     <button
       onClick={onClick}
       aria-pressed={active}
       className={cn(
-        'flex items-center gap-1.5 px-3 py-2 rounded-full text-xs font-bold whitespace-nowrap transition-all duration-200 ease-silk touch-manipulation',
+        'flex min-h-11 shrink-0 snap-start items-center gap-1.5 whitespace-nowrap rounded-full px-4 py-2 text-xs font-bold transition-all duration-200 ease-silk touch-manipulation',
         active
           ? 'bg-success/15 text-success border border-success/30'
           : 'bg-surface-elevated text-text-secondary hover:bg-surface-light hover:text-white border border-edge'
       )}
     >
-      <Icon className="w-3.5 h-3.5" strokeWidth={2} aria-hidden="true" />
+      <Icon className="h-3.5 w-3.5 shrink-0" strokeWidth={2} aria-hidden="true" />
       {label}
     </button>
   );
 }
 
-function ViewButton({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: any; label: string }) {
+function ViewButton({ active, onClick, icon: Icon, label }: { active: boolean; onClick: () => void; icon: LucideIcon; label: string }) {
   return (
     <button
       onClick={onClick}
@@ -927,7 +1259,7 @@ function FilterChips<T extends string>({
   );
 }
 
-function EmptyResults({ query, type, onClearFilters, ct }: { query: string; type: 'restaurant' | 'product'; onClearFilters: () => void; ct: (k: string, fb?: string) => string }) {
+function EmptyResults({ query, type, onClearFilters, ct, didYouMean, onSuggestionClick }: { query: string; type: 'restaurant' | 'product'; onClearFilters: () => void; ct: (k: string, fb?: string) => string; didYouMean?: { query: string; restaurants: number; products: number }[]; onSuggestionClick?: (s: string) => void }) {
   return (
     <div className="card-glass p-10 text-center" role="status">
       <div className="relative w-16 h-16 mx-auto mb-4">
@@ -938,11 +1270,33 @@ function EmptyResults({ query, type, onClearFilters, ct }: { query: string; type
       </div>
       <h3 className="font-extrabold text-text mb-1">{ct('noResultsTitle', 'Keine Ergebnisse')}</h3>
       <p className="text-sm text-text-secondary">
-        {ct(type === 'restaurant' ? 'noResultsDescSearch' : 'noResultsDescSearch', 'Wir konnten nichts finden')} "{query}"
+        {ct(type === 'restaurant' ? 'noResultsDescSearch' : 'noResultsDescSearch', 'Wir konnten nichts finden')}{' "'}{query}{'" '}
       </p>
       <p className="text-xs text-text-muted mt-2">
         {ct('tryDifferentSearch', 'Versuche eine andere Suche oder passe die Filter an')}
       </p>
+      {didYouMean && didYouMean.length > 0 && (
+        <div className="mt-4">
+          <p className="text-xs font-semibold text-text-muted mb-2">
+            {ct('didYouMean', 'Meinten Sie vielleicht:')}
+          </p>
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {didYouMean.map((s) => (
+              <button
+                key={s.query}
+                onClick={() => onSuggestionClick?.(s.query)}
+                className="px-3 py-1.5 rounded-full text-xs font-semibold bg-brand/10 text-brand border border-brand/30 hover:bg-brand/20 transition-colors"
+                aria-label={`${ct('searchFor', 'Suchen nach')} ${s.query}`}
+              >
+                {s.query}
+                <span className="ms-1.5 text-[10px] text-text-muted font-normal">
+                  ({s.restaurants + s.products})
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <button
         onClick={onClearFilters}
         className="mt-4 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active text-white text-sm font-bold hover:shadow-glow-strong transition-all"
@@ -954,42 +1308,16 @@ function EmptyResults({ query, type, onClearFilters, ct }: { query: string; type
   );
 }
 
-function MapViewPlaceholder({ restaurants, userLocation, ct }: { restaurants: Restaurant[]; userLocation: { lat: number; lng: number } | null; ct: (k: string, fb?: string) => string }) {
-  // In production, integrate with Leaflet/Google Maps
-  // For now, show a clean placeholder
-  return (
-    <div className="card-glass p-8 text-center" role="region" aria-label="Map view">
-      <div className="w-16 h-16 rounded-2xl bg-brand-red-500/15 border border-brand-red-500/30 flex items-center justify-center text-brand mx-auto mb-3">
-        <MapIcon className="w-7 h-7" strokeWidth={1.75} aria-hidden="true" />
-      </div>
-      <h3 className="font-bold text-text mb-1">{restaurants.length} {ct('tabRestaurants', 'Restaurants')}</h3>
-      <p className="text-xs text-text-muted mb-4">
-        {userLocation ? `${userLocation.lat.toFixed(2)}, ${userLocation.lng.toFixed(2)}` : '—'}
-      </p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-start">
-        {restaurants.slice(0, 10).map((r, i) => (
-          <div key={r.id} className="flex items-center gap-2 p-2 rounded-lg bg-bg-elevated border border-edge">
-            <div className="w-6 h-6 rounded-md bg-brand-red-500/15 text-brand flex items-center justify-center text-xs font-bold flex-shrink-0">
-              {i + 1}
-            </div>
-            <span className="text-xs text-text truncate flex-1">{r.name}</span>
-            {r.rating && (
-              <span className="text-xs text-warning font-bold tabular-nums">★ {r.rating.toFixed(1)}</span>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 const RestaurantResultCard = memo(function RestaurantResultCard({
-  restaurant, locale, userLocation, ct,
+  restaurant, locale, userLocation, ct, onClick, isHighlighted, eager = false,
 }: {
   restaurant: Restaurant;
   locale: string;
   userLocation: { lat: number; lng: number } | null;
   ct: (k: string, fb?: string) => string;
+  onClick?: () => void;
+  isHighlighted?: boolean;
+  eager?: boolean;
 }) {
   const distance = useMemo(() => {
     if (!userLocation || !restaurant.latitude || !restaurant.longitude) return null;
@@ -1000,27 +1328,43 @@ const RestaurantResultCard = memo(function RestaurantResultCard({
   }, [userLocation, restaurant.latitude, restaurant.longitude]);
 
   return (
-    <Link
-      href={`/restaurants/${restaurant.id}`}
-      className="group block rounded-2xl overflow-hidden card-glass hover:-translate-y-1 transition-all duration-200 ease-silk focus:outline-none focus:ring-2 focus:ring-brand-red-500/30"
-      aria-label={ct('a11yRestaurantCard', 'View restaurant').replace('{name}', restaurant.name)}
-    >
+    <article className={cn(
+      'group relative overflow-hidden rounded-2xl card-glass transition-all duration-200 ease-silk hover:-translate-y-1',
+      isHighlighted && 'ring-2 ring-brand-red-500/60 shadow-glow-strong'
+    )}>
+      <Link
+        href={`/restaurants/${restaurant.id}`}
+        onClick={onClick}
+        className="block focus:outline-none focus:ring-2 focus:ring-inset focus:ring-brand-red-500/30"
+        aria-label={ct('a11yRestaurantCard', 'View restaurant').replace('{name}', restaurant.name)}
+      >
       <div className="relative h-32 bg-gradient-to-br from-surface to-bg overflow-hidden">
-        {restaurant.cover_url ? (
+        {restaurant.cover_image_url ? (
+          <Image
+            src={restaurant.cover_image_url}
+            alt={restaurant.name}
+            fill
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
+            className="object-cover group-hover:scale-110 transition-transform duration-700 ease-silk"
+            loading={eager ? 'eager' : 'lazy'}
+            fetchPriority={eager ? 'high' : 'auto'}
+            unoptimized
+          />
+        ) : restaurant.cover_url ? (
           <Image
             src={restaurant.cover_url}
             alt={restaurant.name}
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             className="object-cover group-hover:scale-110 transition-transform duration-700 ease-silk"
-            loading="lazy"
+            loading={eager ? 'eager' : 'lazy'}
+            fetchPriority={eager ? 'high' : 'auto'}
             unoptimized
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-3xl" aria-hidden="true">🍽️</div>
+          <SearchImageFallback name={restaurant.name} />
         )}
         <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/60 to-transparent pointer-events-none" />
-        <FavoriteButton restaurantId={restaurant.id} />
         {restaurant.is_promoted && (
           <span className="absolute top-2.5 start-2.5 flex items-center gap-1 text-[10px] bg-warning/90 backdrop-blur-sm text-black px-2 py-0.5 rounded-full font-extrabold">
             <Award className="w-2.5 h-2.5" aria-hidden="true" />
@@ -1028,7 +1372,7 @@ const RestaurantResultCard = memo(function RestaurantResultCard({
           </span>
         )}
         {restaurant.type && restaurant.type !== 'restaurant' && (
-          <span className="absolute top-2.5 end-2.5 text-[10px] bg-info/90 backdrop-blur-sm text-white px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
+          <span className="absolute top-14 end-2.5 text-[10px] bg-info/90 backdrop-blur-sm text-white px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">
             {restaurant.type === 'market'
               ? (locale === 'ar' ? 'سوق' : locale === 'en' ? 'Market' : 'Markt')
               : restaurant.type === 'pharmacy'
@@ -1038,7 +1382,9 @@ const RestaurantResultCard = memo(function RestaurantResultCard({
         )}
       </div>
       <div className="p-3.5">
-        <h3 className="font-extrabold text-text text-sm truncate mb-1.5">{restaurant.name}</h3>
+        <h3 className="font-extrabold text-text text-sm truncate mb-1.5">
+          {restaurant.name}
+        </h3>
         <div className="flex items-center gap-1.5 text-xs text-text-secondary tabular-nums flex-wrap">
           <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-warning/10 text-warning font-bold">
             <Star className="w-3 h-3 fill-current" strokeWidth={0} aria-hidden="true" />
@@ -1046,7 +1392,7 @@ const RestaurantResultCard = memo(function RestaurantResultCard({
           </span>
           <span className="inline-flex items-center gap-0.5">
             <Clock className="w-3 h-3" aria-hidden="true" />
-            {restaurant.estimated_delivery_time || 30} {locale === 'ar' ? 'د' : 'min'}
+            {restaurant.delivery_time_min || 30} {locale === 'ar' ? 'د' : 'min'}
           </span>
           <span className="inline-flex items-center gap-0.5">
             <Truck className="w-3 h-3" aria-hidden="true" />
@@ -1060,17 +1406,25 @@ const RestaurantResultCard = memo(function RestaurantResultCard({
           )}
         </div>
       </div>
-    </Link>
+      </Link>
+      <FavoriteButton
+        restaurantId={restaurant.id}
+        className="absolute end-2.5 top-2.5 z-20 shadow-lg"
+      />
+    </article>
   );
 });
 
 const RestaurantListItem = memo(function RestaurantListItem({
-  restaurant, locale, userLocation, ct,
+  restaurant, locale, userLocation, ct, onClick, isHighlighted, eager = false,
 }: {
   restaurant: Restaurant;
   locale: string;
   userLocation: { lat: number; lng: number } | null;
   ct: (k: string, fb?: string) => string;
+  onClick?: () => void;
+  isHighlighted?: boolean;
+  eager?: boolean;
 }) {
   const distance = useMemo(() => {
     if (!userLocation || !restaurant.latitude || !restaurant.longitude) return null;
@@ -1083,28 +1437,46 @@ const RestaurantListItem = memo(function RestaurantListItem({
   return (
     <Link
       href={`/restaurants/${restaurant.id}`}
-      className="group flex items-center gap-3 p-3 rounded-2xl card-glass hover:bg-bg-subtle transition-all focus:outline-none focus:ring-2 focus:ring-brand-red-500/30"
+      onClick={onClick}
+      className={cn(
+        'group flex items-center gap-3 p-3 rounded-2xl card-glass hover:bg-bg-subtle transition-all focus:outline-none focus:ring-2 focus:ring-brand-red-500/30',
+        isHighlighted && 'ring-2 ring-brand-red-500/60 shadow-glow-strong'
+      )}
       aria-label={ct('a11yRestaurantCard', 'View restaurant').replace('{name}', restaurant.name)}
     >
       <div className="relative w-20 h-20 rounded-xl overflow-hidden flex-shrink-0 bg-gradient-to-br from-surface to-bg">
-        {restaurant.cover_url ? (
+        {restaurant.cover_image_url ? (
+          <Image
+            src={restaurant.cover_image_url}
+            alt={restaurant.name}
+            fill
+            sizes="80px"
+            className="object-cover"
+            loading={eager ? 'eager' : 'lazy'}
+            fetchPriority={eager ? 'high' : 'auto'}
+            unoptimized
+          />
+        ) : restaurant.cover_url ? (
           <Image
             src={restaurant.cover_url}
             alt={restaurant.name}
             fill
             sizes="80px"
             className="object-cover"
-            loading="lazy"
+            loading={eager ? 'eager' : 'lazy'}
+            fetchPriority={eager ? 'high' : 'auto'}
             unoptimized
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-2xl" aria-hidden="true">🍽️</div>
+          <SearchImageFallback name={restaurant.name} />
         )}
       </div>
       <div className="flex-1 min-w-0">
-        <h3 className="font-extrabold text-text text-sm truncate">{restaurant.name}</h3>
+        <h3 className="font-extrabold text-text text-sm truncate">
+          {restaurant.name}
+        </h3>
         <p className="text-xs text-text-muted truncate mt-0.5">
-          {restaurant.cuisine?.slice(0, 2).join(' · ') || '—'}
+          {restaurant.cuisines?.slice(0, 2).join(' · ') || restaurant.cuisine?.slice(0, 2).join(' · ') || '—'}
         </p>
         <div className="flex items-center gap-2 text-xs text-text-secondary tabular-nums mt-1">
           <span className="inline-flex items-center gap-0.5 text-warning font-bold">
@@ -1127,12 +1499,13 @@ const RestaurantListItem = memo(function RestaurantListItem({
 });
 
 const ProductResultCard = memo(function ProductResultCard({
-  product, compact, locale, ct,
+  product, compact, locale, ct, eager = false,
 }: {
   product: Product;
   compact?: boolean;
   locale: string;
   ct: (k: string, fb?: string) => string;
+  eager?: boolean;
 }) {
   const hasDiscount = product.discount_price != null && product.discount_price < product.price;
   const finalPrice = hasDiscount ? product.discount_price! : product.price;
@@ -1152,11 +1525,12 @@ const ProductResultCard = memo(function ProductResultCard({
             fill
             sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 25vw"
             className="object-cover group-hover:scale-110 transition-transform duration-700 ease-silk"
-            loading="lazy"
+            loading={eager ? 'eager' : 'lazy'}
+            fetchPriority={eager ? 'high' : 'auto'}
             unoptimized
           />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-2xl" aria-hidden="true">🍽️</div>
+          <SearchImageFallback name={product.name} kind="product" />
         )}
         {firstBadge && BADGE_LABELS[firstBadge] && (
           <span className="absolute top-2 end-2 inline-flex items-center bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active text-white text-[10px] px-2 py-0.5 rounded-full font-extrabold uppercase tracking-wider shadow-speed-glow">
@@ -1165,7 +1539,9 @@ const ProductResultCard = memo(function ProductResultCard({
         )}
       </div>
       <div className="p-2.5">
-        <h3 className="font-bold text-text text-xs truncate">{product.name}</h3>
+        <h3 className="font-bold text-text text-xs truncate">
+          {product.name}
+        </h3>
         {!compact && product.description && (
           <p className="text-[10px] text-text-muted line-clamp-2 mt-0.5 leading-snug">{product.description}</p>
         )}
@@ -1207,7 +1583,7 @@ const RecentOrderCard = memo(function RecentOrderCard({
         {r.cover_url ? (
           <Image src={r.cover_url} alt={r.name} fill sizes="(max-width: 640px) 100vw, 33vw" className="object-cover group-hover:scale-110 transition-transform duration-700" loading="lazy" unoptimized />
         ) : (
-          <div className="w-full h-full flex items-center justify-center text-2xl" aria-hidden="true">🍽️</div>
+          <SearchImageFallback name={r.name} />
         )}
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-transparent" />
         <div className="absolute bottom-2 start-2 inline-flex items-center gap-1 bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active text-white text-[10px] px-2 py-0.5 rounded-full font-extrabold shadow-speed-glow">

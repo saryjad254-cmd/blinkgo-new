@@ -8,6 +8,7 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
+import { safeErrorMessage } from '@/lib/api/safe-error';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,17 +44,20 @@ async function recentOrders(
         restaurants:restaurant_id(id, name, cover_url, type, delivery_fee, estimated_delivery_time)
       `)
       .eq('customer_id', ctx.auth.user.id)
-      .in('status', ['delivered', 'completed'])
+      .eq('status', 'delivered')
       .order('created_at', { ascending: false })
       .limit(limit);
 
     if (error) {
-      return ok({ orders: [] });
+      // A database contract error must not look like a legitimate empty
+      // history. That hid delivered orders when the removed `completed` enum
+      // value was still sent to Postgres.
+      throw new Error(safeErrorMessage(error));
     }
 
     // Dedupe by restaurant (keep most recent order per restaurant)
     const seen = new Set<string>();
-    const unique: any[] = [];
+    const unique: NonNullable<typeof orders> = [];
     for (const o of orders || []) {
       if (!o.restaurant_id || seen.has(o.restaurant_id)) continue;
       seen.add(o.restaurant_id);

@@ -4,16 +4,15 @@
  * Built-in jobs that ship with the platform.
  */
 
-import { getJobScheduler, Job } from './scheduler';
+import { getJobScheduler } from './scheduler';
 import { getPushRouter } from '../notifications/router';
-import { getPaymentRouter } from '../payments/router';
 import { createServiceClient } from '@/lib/supabase/service';
 
 export function registerDefaultJobs(): void {
   const scheduler = getJobScheduler();
 
   // Cleanup: stale data, expired records
-  scheduler.register('cleanup_stale_data', async (job: Job) => {
+  scheduler.register('cleanup_stale_data', async () => {
     const db = createServiceClient();
     const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     // Clean expired OTPs
@@ -22,7 +21,7 @@ export function registerDefaultJobs(): void {
   });
 
   // Daily analytics aggregation
-  scheduler.register('aggregate_daily_analytics', async (job: Job) => {
+  scheduler.register('aggregate_daily_analytics', async () => {
     const db = createServiceClient();
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -33,33 +32,38 @@ export function registerDefaultJobs(): void {
   });
 
   // Backup verification
-  scheduler.register('verify_backups', async (job: Job) => {
+  scheduler.register('verify_backups', async () => {
     // In production: ping Supabase backup API and verify timestamp
     return { verified: true, timestamp: new Date().toISOString() };
   });
 
   // Push notification retry queue
-  scheduler.register('process_push_retries', async (job: Job) => {
+  scheduler.register('process_push_retries', async () => {
     const router = getPushRouter();
     const result = await router.processRetryQueue();
     return result;
   });
 
   // Cache cleanup
-  scheduler.register('cleanup_cache', async (job: Job) => {
+  scheduler.register('cleanup_cache', async () => {
     // Cleanup old cache entries
     return { cleaned: 0 };
   });
 
   // Webhook dead letter cleanup
-  scheduler.register('cleanup_dead_letters', async (job: Job) => {
+  scheduler.register('cleanup_dead_letters', async () => {
     const { getWebhookDispatcher } = await import('../webhooks/dispatcher');
-    const dl = getWebhookDispatcher().getDeadLetter(1000);
+    const dl = await getWebhookDispatcher().listDeliveries(1000, 'dead_letter');
     return { dead_letter_count: dl.length };
   });
 
+  scheduler.register('process_webhook_retries', async () => {
+    const { getWebhookDispatcher } = await import('../webhooks/dispatcher');
+    return getWebhookDispatcher().processRetries(100);
+  });
+
   // Heartbeat / health pinger
-  scheduler.register('health_ping', async (job: Job) => {
+  scheduler.register('health_ping', async () => {
     return { alive: true, ts: new Date().toISOString() };
   });
 }
@@ -74,6 +78,7 @@ export async function scheduleDefaultJobs(): Promise<void> {
     { name: 'aggregate_daily_analytics', schedule: '0 1 * * *', description: 'Daily analytics aggregation', enabled: true },
     { name: 'verify_backups', schedule: '0 6 * * *', description: 'Verify Supabase backups', enabled: true },
     { name: 'process_push_retries', schedule: '*/5 * * * *', description: 'Process push notification retry queue', enabled: true },
+    { name: 'process_webhook_retries', schedule: '*/1 * * * *', description: 'Process durable webhook retry queue', enabled: true },
     { name: 'cleanup_cache', schedule: '0 4 * * *', description: 'Cache cleanup', enabled: true },
     { name: 'cleanup_dead_letters', schedule: '0 5 * * *', description: 'Webhook DLQ cleanup', enabled: true },
     { name: 'health_ping', schedule: '*/1 * * * *', description: 'Health heartbeat', enabled: true },

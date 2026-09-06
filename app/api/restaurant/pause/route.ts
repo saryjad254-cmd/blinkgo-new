@@ -1,102 +1,67 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
+import { resolveOwnedRestaurant } from '@/lib/services/restaurant-context';
 
 export const dynamic = 'force-dynamic';
 
-/**
- * POST /api/restaurant/pause
- * Body: { paused: boolean }
- * Pause / resume accepting new orders. While paused, customers cannot order from this restaurant.
- */
+type RestaurantIntakeState = { id: string; is_active?: boolean | null; is_paused?: boolean | null };
+
+async function ownedRestaurant(userId: string): Promise<{ data: RestaurantIntakeState | null; error: unknown }> {
+  const { service, restaurantId } = await resolveOwnedRestaurant(userId);
+  if (!restaurantId) return { data: null, error: null };
+  const result = await service
+    .from('restaurants')
+    .select('id, is_active, is_paused')
+    .eq('id', restaurantId)
+    .maybeSingle();
+  return { data: result.data as RestaurantIntakeState | null, error: result.error };
+}
+
 export async function POST(request: NextRequest) {
   const user = await requireApiRole('restaurant');
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 403 });
-  }
+  if (!user) return NextResponse.json({ ok: false, error: { message: 'Unauthorized' } }, { status: 403 });
+
   try {
-    const body = await request.json();
-    const paused: boolean = !!body.paused;
+    const body: unknown = await request.json();
+    if (!body || typeof body !== 'object' || typeof (body as { paused?: unknown }).paused !== 'boolean') {
+      return NextResponse.json({ ok: false, error: { message: 'paused must be a boolean' } }, { status: 400 });
+    }
+    const paused = (body as { paused: boolean }).paused;
+    const current = await ownedRestaurant(user.id);
+    if (current.error) throw current.error;
+    if (!current.data) return NextResponse.json({ ok: false, error: { message: 'Restaurant not found' } }, { status: 404 });
+    if (!paused && current.data.is_active === false) {
+      return NextResponse.json({ ok: false, error: { message: 'Restaurant is disabled by platform operations' } }, { status: 409 });
+    }
 
-    const svc = createServiceClient();
-    let { data: restaurant } = await svc
+    const updates = paused
+      ? { is_paused: true, busy_mode: false, busy_mode_until: null, updated_at: new Date().toISOString() }
+      : { is_paused: false, updated_at: new Date().toISOString() };
+    const { data, error } = await createServiceClient()
       .from('restaurants')
-      .select('id, owner_id, is_paused')
-      .eq('owner_id', user.id)
-      .maybeSingle();
-    if (!restaurant) {
-      // Fallback: column may not exist yet
-      const fallback = await svc
-        .from('restaurants')
-        .select('id, owner_id')
-        .eq('owner_id', user.id)
-        .maybeSingle();
-      if (!fallback.data) {
-        return NextResponse.json({ ok: false, error: 'NO_RESTAURANT' }, { status: 404 });
-      }
-      restaurant = { ...fallback.data, is_paused: false } as any;
-    }
-
-    if (!restaurant) {
-      return NextResponse.json({ ok: false, error: 'NO_RESTAURANT' }, { status: 404 });
-    }
-
-    let data, error;
-    try {
-      const result = await svc
-        .from('restaurants')
-        .update({ is_paused: paused, updated_at: new Date().toISOString() })
-        .eq('id', restaurant.id)
-        .select('is_paused')
-        .single();
-      data = result.data;
-      error = result.error;
-    } catch (e: any) {
-      error = { message: e?.message };
-    }
-
-    if (error) {
-      return NextResponse.json({
-        ok: true,
-        paused,
-        storage: 'pending_migration',
-      });
-    }
-
-    return NextResponse.json({
-      ok: true,
-      paused: data?.is_paused ?? paused,
-    });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? 'Error' }, { status: 500 });
+      .update(updates)
+      .eq('id', current.data.id)
+      .select('is_paused')
+      .single();
+    if (error) throw error;
+    return NextResponse.json({ ok: true, paused: data?.is_paused ?? paused });
+  } catch (error) {
+    console.error('[restaurant/pause] update failed', error instanceof Error ? error.message : error);
+    return NextResponse.json({ ok: false, error: { message: 'Could not update order intake' } }, { status: 500 });
   }
 }
 
 export async function GET() {
   const user = await requireApiRole('restaurant');
-  if (!user) {
-    return NextResponse.json({ ok: false, error: 'UNAUTHORIZED' }, { status: 403 });
-  }
+  if (!user) return NextResponse.json({ ok: false, error: { message: 'Unauthorized' } }, { status: 403 });
   try {
-    const svc = createServiceClient();
-    let { data: restaurant } = await svc
-      .from('restaurants')
-      .select('id, is_paused')
-      .eq('owner_id', user.id)
-      .maybeSingle();
-    if (!restaurant) {
-      const fallback = await svc
-        .from('restaurants')
-        .select('id')
-        .eq('owner_id', user.id)
-        .maybeSingle();
-      if (!fallback.data) {
-        return NextResponse.json({ ok: false, error: 'NO_RESTAURANT' }, { status: 404 });
-      }
-      restaurant = { ...fallback.data, is_paused: false } as any;
-    }
-    return NextResponse.json({ ok: true, paused: !!(restaurant as any).is_paused });
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message ?? 'Error' }, { status: 500 });
+    const result = await ownedRestaurant(user.id);
+    if (result.error) throw result.error;
+    if (!result.data) return NextResponse.json({ ok: false, error: { message: 'Restaurant not found' } }, { status: 404 });
+    return NextResponse.json({ ok: true, paused: Boolean(result.data.is_paused), isActive: result.data.is_active !== false });
+  } catch (error) {
+    console.error('[restaurant/pause] read failed', error instanceof Error ? error.message : error);
+    return NextResponse.json({ ok: false, error: { message: 'Could not read order intake' } }, { status: 500 });
   }
 }

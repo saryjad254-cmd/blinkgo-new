@@ -1,19 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
-import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
-import X from 'lucide-react/dist/esm/icons/x';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import { Button } from '@/components/ui/Button';
 import { BottomSheet } from '@/components/ui/BottomSheet';
 import { useToast } from '@/components/ui/Toast';
-import { useT, tr } from '@/lib/i18n/I18nProvider';
 import { cn } from '@/lib/cn';
 import { createBrowserClient } from '@/lib/supabase/client';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 const REFUND_REASONS = [
   { key: 'food_quality',  icon: '🍽️', de: 'Qualität des Essens', ar: 'جودة الطعام', en: 'Food quality' },
@@ -90,7 +88,6 @@ interface RefundRequestButtonProps {
 export function RefundRequestButton({
   orderId,
   orderStatus,
-  orderTotal,
   orderCreatedAt,
   hasExistingRefund = false,
   locale = 'de',
@@ -104,7 +101,6 @@ export function RefundRequestButton({
   const [reason, setReason] = useState<string>('');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
-  const [eligible, setEligible] = useState(!hasExistingRefund);
   const [errorReason, setErrorReason] = useState<string | null>(null);
 
   const handleOpen = () => {
@@ -122,7 +118,6 @@ export function RefundRequestButton({
       setErrorReason(copy.errorWindow);
       return;
     }
-    setEligible(true);
     setErrorReason(null);
     setOpen(true);
   };
@@ -142,15 +137,16 @@ export function RefundRequestButton({
       });
       const json = await res.json();
       if (!res.ok || !json.ok) {
-        if (json.error?.includes('already')) throw new Error(copy.errorAlready);
-        if (json.error?.includes('window')) throw new Error(copy.errorWindow);
-        if (json.error?.includes('Refunds')) throw new Error(copy.errorStatus);
-        throw new Error(json.error?.message || 'Failed');
+        const message = extractErrorMessage(json, 'Failed');
+        if (message.toLowerCase().includes('already')) throw new Error(copy.errorAlready);
+        if (message.toLowerCase().includes('window')) throw new Error(copy.errorWindow);
+        if (message.toLowerCase().includes('refund')) throw new Error(copy.errorStatus);
+        throw new Error(message);
       }
       setStep('success');
       toast({ type: 'success', message: copy.success });
-    } catch (e: any) {
-      toast({ type: 'error', message: e.message });
+    } catch (error: unknown) {
+      toast({ type: 'error', message: extractErrorMessage(error, 'Failed') });
     } finally {
       setLoading(false);
     }
@@ -202,7 +198,7 @@ export function RefundRequestButton({
               {copy.reason}
             </p>
             {REFUND_REASONS.map((r) => {
-              const label = (r as any)[locale] || r.en;
+              const label = r[locale] || r.en;
               const selected = reason === r.key;
               return (
                 <button
@@ -236,7 +232,7 @@ export function RefundRequestButton({
                 {REFUND_REASONS.find((r) => r.key === reason)?.icon}
               </span>
               <span className="text-sm font-bold text-text">
-                {(REFUND_REASONS.find((r) => r.key === reason) as any)?.[locale] || reason}
+                {REFUND_REASONS.find((r) => r.key === reason)?.[locale] || reason}
               </span>
             </div>
 

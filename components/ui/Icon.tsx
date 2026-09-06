@@ -2,13 +2,13 @@
 
 import { forwardRef, type ReactNode } from 'react';
 import { cn } from '@/lib/cn';
-import { LucideIcon, RawLucideIcon } from './LucideIcon';
+import { LucideIcon, RawLucideIcon, type LucideIconType } from './LucideIcon';
 
 type IconSize = 'xs' | 'sm' | 'md' | 'lg' | 'xl' | '2xl';
 
 interface IconProps {
   /** Lucide icon component */
-  icon: any;
+  icon: LucideIconType;
   size?: IconSize;
   /** Stroke width (2.0 default for world-class feel) */
   strokeWidth?: number;
@@ -16,15 +16,6 @@ interface IconProps {
   color?: string;
   ariaLabel?: string;
 }
-
-const sizeClasses: Record<IconSize, string> = {
-  xs:   'w-3 h-3',
-  sm:   'w-4 h-4',
-  md:   'w-5 h-5',
-  lg:   'w-6 h-6',
-  xl:   'w-7 h-7',
-  '2xl':'w-9 h-9',
-};
 
 /**
  * Premium Icon — wrapper around Lucide icons enforcing consistent sizing
@@ -48,7 +39,7 @@ export const Icon = forwardRef<HTMLSpanElement, IconProps>(function Icon(
         size={size}
         strokeWidth={strokeWidth}
         ariaLabel={ariaLabel}
-        className={color ? '' : ''}
+        color={color}
       />
     </span>
   );
@@ -56,7 +47,7 @@ export const Icon = forwardRef<HTMLSpanElement, IconProps>(function Icon(
 
 /** Convenience: render an icon directly without the wrapper */
 interface RawIconProps {
-  icon: any;
+  icon: LucideIconType;
   size?: IconSize;
   strokeWidth?: number;
   className?: string;
@@ -86,7 +77,7 @@ export function RawIcon({
  * IconBadge — circular icon container for stats and feature highlights.
  */
 interface IconBadgeProps {
-  icon: any;
+  icon: LucideIconType;
   size?: 'sm' | 'md' | 'lg' | 'xl';
   variant?: 'brand' | 'accent' | 'success' | 'warning' | 'info' | 'neutral';
   className?: string;
@@ -126,7 +117,7 @@ export function IconBadge({ icon, size = 'md', variant = 'brand', className = ''
  * FeatureCard — premium icon + title + description card.
  */
 interface FeatureCardProps {
-  icon: any;
+  icon: LucideIconType;
   title: string;
   description?: string;
   variant?: 'brand' | 'accent' | 'success' | 'warning' | 'info' | 'neutral';

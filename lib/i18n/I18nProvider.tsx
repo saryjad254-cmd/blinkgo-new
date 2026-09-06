@@ -10,8 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 import de, { type Translations } from './locales/de';
-import ar, { type Translations as ArTranslations } from './locales/ar';
-import en, { type Translations as EnTranslations } from './locales/en';
+import ar from './locales/ar';
+import en from './locales/en';
 
 export type Locale = 'de' | 'ar' | 'en';
 
@@ -73,7 +73,6 @@ export function I18nProvider({
   //   "Failed to execute 'removeChild' on 'Node': The node to be removed is not a child of this node."
   // We sync from cookie/storage in a useEffect AFTER hydration.
   const [locale, setLocaleState] = useState<Locale>(initialLocale ?? 'de');
-  const [hydrated, setHydrated] = useState(false);
 
   // Sync document dir/lang on locale change (the user-visible attribute: dir, lang).
   useEffect(() => {
@@ -84,8 +83,10 @@ export function I18nProvider({
   // Order: URL > cookie > localStorage > navigator.language.
   // This runs once on the client, after the first render is committed.
   useEffect(() => {
-    setHydrated(true);
     if (typeof window === 'undefined') return;
+    let cancelled = false;
+    queueMicrotask(() => {
+    if (cancelled) return;
 
     // 1) URL ?lang= (highest priority — emails + OAuth land here)
     const urlLang = new URLSearchParams(window.location.search).get('lang');
@@ -106,13 +107,17 @@ export function I18nProvider({
     if (next !== initialLocale) {
       setLocaleState(next as Locale);
     }
-    if (fromUrl && fromUrl !== cookieLocale) {
-      // Persist URL-sourced locale so a page refresh sticks
-      try {
-        document.cookie = `${COOKIE_KEY}=${fromUrl};path=/;max-age=${60 * 60 * 24 * 365};SameSite=Lax`;
-        localStorage.setItem(STORAGE_KEY, fromUrl);
-      } catch {}
-    }
+    // Keep the client preference and the server-readable cookie in sync.
+    // Without this, a locale found only in localStorage makes client
+    // components switch language while server components stay German.
+    try {
+      if (cookieLocale !== next) {
+        document.cookie = `${COOKIE_KEY}=${next};path=/;max-age=${60 * 60 * 24 * 365};SameSite=Lax`;
+      }
+      if (storageLocale !== next) localStorage.setItem(STORAGE_KEY, next);
+    } catch {}
+    });
+    return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -165,7 +170,7 @@ export function useT(): Translations {
  */
 export function useTranslations(): (path: string, fallback?: string) => string {
   const { locale, t } = useI18n();
-  return (path: string, fallback?: string) => {
+  return useCallback((path: string, fallback?: string) => {
     const cur = lookupPath(t, path);
     if (cur !== undefined) return cur;
     if (locale !== 'en') {
@@ -173,15 +178,15 @@ export function useTranslations(): (path: string, fallback?: string) => string {
       if (en !== undefined) return en;
     }
     return fallback ?? path;
-  };
+  }, [locale, t]);
 }
 
-function lookupPath(obj: any, path: string): string | undefined {
+function lookupPath(obj: unknown, path: string): string | undefined {
   const parts = path.split('.');
-  let cur: any = obj;
+  let cur: unknown = obj;
   for (const p of parts) {
-    if (cur == null) return undefined;
-    cur = cur[p];
+    if (typeof cur !== 'object' || cur === null || !(p in cur)) return undefined;
+    cur = (cur as Record<string, unknown>)[p];
   }
   return typeof cur === 'string' ? cur : undefined;
 }
@@ -190,13 +195,7 @@ function lookupPath(obj: any, path: string): string | undefined {
  * Helper to translate a key path like "nav.home"
  */
 export function tr(t: Translations, path: string): string {
-  const parts = path.split('.');
-  let cur: any = t;
-  for (const p of parts) {
-    if (cur == null) return path;
-    cur = cur[p];
-  }
-  return typeof cur === 'string' ? cur : path;
+  return lookupPath(t, path) ?? path;
 }
 
 function applyDocumentLocale(l: Locale) {
@@ -215,12 +214,6 @@ export const localeOptions: { code: Locale; name: string; flag: string }[] = [
  * safeT — access translation with optional fallback (avoids TS errors when
  * a key isn't present in a translation file).
  */
-export function safeT(t: any, path: string, fallback: string): string {
-  const parts = path.split('.');
-  let cur: any = t;
-  for (const p of parts) {
-    if (cur == null) return fallback;
-    cur = cur[p];
-  }
-  return typeof cur === 'string' ? cur : fallback;
+export function safeT(t: unknown, path: string, fallback: string): string {
+  return lookupPath(t, path) ?? fallback;
 }

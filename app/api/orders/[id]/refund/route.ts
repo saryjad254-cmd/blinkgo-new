@@ -35,10 +35,17 @@ const REFUND_REASONS = [
   'other',
 ] as const;
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+const REFUND_REASON_MAP: Record<(typeof REFUND_REASONS)[number], string> = {
+  food_quality: 'quality_issue',
+  wrong_order: 'incorrect_item',
+  missing_items: 'missing_item',
+  late_delivery: 'delivery_failure',
+  damaged: 'delivery_failure',
+  other: 'other',
+};
+
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   return (await withSecurity(
     secureRoute('strict', ['customer', 'admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,7 +65,7 @@ async function requestRefund(
     // 2) Parse reason
     const body = await req.json().catch(() => ({}));
     const reasonKey = String(body.reason ?? '');
-    if (!REFUND_REASONS.includes(reasonKey as any)) {
+    if (!(REFUND_REASONS as readonly string[]).includes(reasonKey)) {
       throw new ValidationError('Invalid refund reason');
     }
     const notes = typeof body.notes === 'string' ? body.notes.slice(0, 500) : null;
@@ -67,7 +74,7 @@ async function requestRefund(
     const supabase = createServiceClient();
     const { data: order, error: orderErr } = await supabase
       .from('orders')
-      .select('id, customer_id, status, total, created_at')
+      .select('id, customer_id, status, total, currency, payment_method, payment_intent_id, stripe_payment_intent_id, created_at')
       .eq('id', orderId)
       .single();
 
@@ -85,101 +92,122 @@ async function requestRefund(
       throw new ValidationError(`Refund window has expired (${REFUND_WINDOW_DAYS} days)`);
     }
 
-    // 5) v84: the refund REQUEST now lives in the `payments` table
-    //    (status='refund_requested'). The v84 migration 56-schema-reconcile
-    //    defines a `request_refund` RPC that does an atomic INSERT and
-    //    is idempotent on retries. We try the RPC first; if it is
-    //    missing in production (e.g. migration 56 not yet applied) we
-    //    fall back to a direct INSERT with an existence check.
+    // 5) A customer request is recorded as a pending refund operation, never
+    //    as a second payment. Card orders use payment_refunds; cash orders
+    //    become support cases because there is no Stripe PaymentIntent.
     const svc = createServiceClient();
     const reasonText = `${reasonKey}${notes ? `: ${notes}` : ''}`;
     let refundRow: { refund_id: string; order_id: string; amount: number; reason: string; status: string; already_exists: boolean } | null = null;
+    const amount = Number(order.total);
+    const paymentIntentId = order.payment_intent_id ?? order.stripe_payment_intent_id;
 
-    const { data: rpcResult, error: rpcErr } = await svc.rpc('request_refund', {
-      p_order_id: orderId,
-      p_user_id: ctx.auth.user.id,
-      p_amount: order.total,
-      p_reason: reasonText,
-    });
-
-    if (!rpcErr && rpcResult) {
-      refundRow = Array.isArray(rpcResult) ? rpcResult[0] : rpcResult;
-    } else {
-      // v84 fallback: direct INSERT into payments with the partial
-      // unique index as the DB-level guard. Matches the logic of the
-      // v84 request_refund RPC without depending on it.
-      logger.warn('request_refund RPC failed, using direct INSERT fallback', { orderId, error: rpcErr?.message });
+    if (paymentIntentId) {
+      const idempotencyKey = `customer-refund-request:${orderId}`;
       const { data: existing } = await svc
-        .from('payments')
-        .select('id, order_id, amount_cents, currency, status, metadata, created_at')
-        .eq('order_id', orderId)
-        .eq('status', 'refund_requested')
+        .from('payment_refunds')
+        .select('id, order_id, requested_amount_cents, status, reason')
+        .eq('idempotency_key', idempotencyKey)
         .maybeSingle();
+
       if (existing) {
         refundRow = {
           refund_id: existing.id,
           order_id: existing.order_id,
-          amount: (existing.amount_cents ?? 0) / 100,
-          reason: (existing.metadata as any)?.refund_reason ?? reasonText,
+          amount: Number(existing.requested_amount_cents ?? 0) / 100,
+          reason: existing.reason ?? reasonText,
           status: existing.status,
           already_exists: true,
         };
       } else {
-        const newId = crypto.randomUUID();
-        const { data: inserted, error: insErr } = await svc
-          .from('payments')
+        const { data: inserted, error: insertError } = await svc
+          .from('payment_refunds')
           .insert({
-            id: newId,
+            payment_intent_id: paymentIntentId,
             order_id: orderId,
             customer_id: ctx.auth.user.id,
-            amount_cents: Math.round(Number(order.total) * 100),
-            currency: 'EUR',
-            payment_method: 'refund_request',
-            payment_provider: 'internal',
-            provider_payment_id: newId,
-            stripe_payment_intent_id: null,
-            status: 'refund_requested',
-            metadata: { refund_reason: reasonText, requested_by: ctx.auth.user.id },
+            requested_by: ctx.auth.user.id,
+            requested_amount_cents: Math.round(amount * 100),
+            refunded_amount_cents: 0,
+            currency: String(order.currency ?? 'EUR').toUpperCase(),
+            reason: REFUND_REASON_MAP[reasonKey as (typeof REFUND_REASONS)[number]],
+            internal_note: notes,
+            status: 'requested',
+            idempotency_key: idempotencyKey,
+            metadata: { source: 'customer_request', customer_reason: reasonKey },
           })
-          .select()
+          .select('id, order_id, requested_amount_cents, status, reason')
           .single();
-        if (insErr) {
-          // Most likely a race: another request beat us to the partial
-          // unique index. Re-read.
-          if (insErr.code === '23505' || /duplicate/i.test(insErr.message ?? '')) {
-            const { data: re } = await svc
-              .from('payments')
-              .select('id, order_id, amount_cents, currency, status, metadata, created_at')
-              .eq('order_id', orderId)
-              .eq('status', 'refund_requested')
+
+        if (insertError || !inserted) {
+          if (insertError?.code === '23505') {
+            const { data: raced } = await svc
+              .from('payment_refunds')
+              .select('id, order_id, requested_amount_cents, status, reason')
+              .eq('idempotency_key', idempotencyKey)
               .maybeSingle();
-            if (re) {
+            if (raced) {
               refundRow = {
-                refund_id: re.id,
-                order_id: re.order_id,
-                amount: (re.amount_cents ?? 0) / 100,
-                reason: (re.metadata as any)?.refund_reason ?? reasonText,
-                status: re.status,
+                refund_id: raced.id,
+                order_id: raced.order_id,
+                amount: Number(raced.requested_amount_cents ?? 0) / 100,
+                reason: raced.reason ?? reasonText,
+                status: raced.status,
                 already_exists: true,
               };
-            } else {
-              logger.error('Refund INSERT failed even after race recovery', { orderId, error: insErr });
-              throw new Error('Failed to create refund request');
             }
-          } else {
-            logger.error('Refund INSERT failed', { orderId, error: insErr });
+          }
+          if (!refundRow) {
+            logger.error('Refund request INSERT failed', { orderId, error: insertError });
             throw new Error('Failed to create refund request');
           }
         } else {
           refundRow = {
             refund_id: inserted.id,
             order_id: inserted.order_id,
-            amount: (inserted.amount_cents ?? 0) / 100,
-            reason: reasonText,
+            amount: Number(inserted.requested_amount_cents ?? 0) / 100,
+            reason: inserted.reason ?? reasonText,
             status: inserted.status,
             already_exists: false,
           };
         }
+      }
+    } else {
+      const { data: existingTicket } = await svc
+        .from('support_tickets')
+        .select('id, order_id, status')
+        .eq('user_id', ctx.auth.user.id)
+        .eq('order_id', orderId)
+        .eq('category', 'refund_request')
+        .in('status', ['open', 'in_progress', 'waiting_customer'])
+        .maybeSingle();
+
+      if (existingTicket) {
+        refundRow = { refund_id: existingTicket.id, order_id: orderId, amount, reason: reasonText, status: existingTicket.status, already_exists: true };
+      } else {
+        const nowMs = Date.now();
+        const { data: ticket, error: ticketError } = await svc
+          .from('support_tickets')
+          .insert({
+            user_id: ctx.auth.user.id,
+            user_role: 'customer',
+            category: 'refund_request',
+            subject: `Refund request for order ${orderId.slice(0, 8)}`,
+            message: reasonText,
+            order_id: orderId,
+            status: 'open',
+            priority: 'normal',
+            reference_code: `RF-${crypto.randomUUID().slice(0, 8).toUpperCase()}`,
+            issue_type: 'refund_request',
+            next_action: 'waiting_support',
+            sla_due_at: new Date(nowMs + 24 * 60 * 60 * 1000).toISOString(),
+          })
+          .select('id, order_id, status')
+          .single();
+        if (ticketError || !ticket) {
+          logger.error('Cash refund support ticket INSERT failed', { orderId, error: ticketError });
+          throw new Error('Failed to create refund request');
+        }
+        refundRow = { refund_id: ticket.id, order_id: orderId, amount, reason: reasonText, status: ticket.status, already_exists: false };
       }
     }
 
@@ -201,11 +229,11 @@ async function requestRefund(
       try {
         const { data: admins } = await svc.from('users').select('id').in('role', ['admin', 'super_admin']);
         if (admins && admins.length > 0) {
-          const notifications = admins.map((a: any) => ({
-            user_id: a.id,
+          const notifications = admins.map((admin) => ({
+            user_id: admin.id,
             type: 'refund_request',
             title: 'Neue Rückerstattungsanfrage',
-            body: `Bestellung #${order.id.slice(0, 8)} · €${order.total.toFixed(2)}`,
+            body: `Bestellung #${order.id.slice(0, 8)} · €${Number(order.total).toFixed(2)}`,
             data: { refund_id: refund.id, order_id: order.id },
           }));
           await svc.from('notifications').insert(notifications);
@@ -220,10 +248,8 @@ async function requestRefund(
   });
 }
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   return (await withSecurity(
     secureRoute('lenient', ['customer', 'admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -239,33 +265,31 @@ async function listRefunds(
     // Ownership check
     await assertCanReadOrder(ctx.auth.user, orderId);
 
-    // v84: refund REQUEST workflow now lives in the `payments` table
-    // (status='refund_requested'). The legacy `refunds` table from
-    // migration-22 was never deployed to production. The migration
-    // 56-schema-reconcile defines a `request_refund` RPC that
-    // inserts into payments atomically.
+    // Phase 7G-D: refunds now live in payment_refunds. Customer can see
+    // their own refunds; internal_note is NEVER exposed.
     const supabase = createServiceClient();
     const { data: refundRows, error } = await supabase
-      .from('payments')
-      .select('id, order_id, amount_cents, currency, status, metadata, created_at')
+      .from('payment_refunds')
+      .select('id, order_id, requested_amount_cents, refunded_amount_cents, currency, status, reason, created_at, completed_at')
       .eq('order_id', orderId)
-      .in('status', ['refund_requested', 'refund_processing', 'refund_succeeded', 'refund_failed'])
       .order('created_at', { ascending: false });
 
     if (error) {
-      logger.warn('listRefunds: payments query failed (table missing?)', { orderId, error: error.message });
+      logger.warn('listRefunds: payment_refunds query failed', { orderId, error: error.message });
       return ok({ refunds: [] });
     }
 
-    // Project to the legacy refunds shape so the client UI doesn't break
-    const refunds = (refundRows ?? []).map((r: any) => ({
-      id: r.id,
-      order_id: r.order_id,
-      amount: (r.amount_cents ?? 0) / 100,
-      currency: r.currency ?? 'EUR',
-      status: r.status,
-      reason: r.metadata?.refund_reason ?? null,
-      created_at: r.created_at,
+    // Project to the customer-safe shape (no internal_note, no metadata)
+    const refunds = (refundRows ?? []).map((refund) => ({
+      id: refund.id,
+      order_id: refund.order_id,
+      amount: (refund.requested_amount_cents ?? 0) / 100,
+      refunded_amount: (refund.refunded_amount_cents ?? 0) / 100,
+      currency: refund.currency ?? 'EUR',
+      status: refund.status,
+      reason: refund.reason ?? null,
+      created_at: refund.created_at,
+      completed_at: refund.completed_at ?? null,
     }));
     return ok({ refunds });
   });

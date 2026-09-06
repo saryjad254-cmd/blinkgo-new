@@ -65,7 +65,7 @@ export class AnalyticsService {
         svc.from('users').select('id', { count: 'exact', head: true }).eq('role', 'driver'),
         svc.from('restaurants').select('id', { count: 'exact', head: true }).eq('is_active', true),
         svc.from('orders').select('id', { count: 'exact', head: true })
-          .in('status', ['pending', 'confirmed', 'preparing', 'ready', 'picked_up']),
+          .in('status', ['pending', 'confirmed', 'preparing', 'ready', 'assigned', 'picked_up']),
         svc.from('orders').select('id', { count: 'exact', head: true }).eq('status', 'cancelled'),
         svc.from('orders').select('id', { count: 'exact', head: true }).eq('status', 'delivered'),
         svc.from('orders').select('id', { count: 'exact', head: true }),

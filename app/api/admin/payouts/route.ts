@@ -7,7 +7,6 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
@@ -15,7 +14,8 @@ import { requireApiRole } from '@/lib/auth-helper';
 import { audit } from '@/lib/services/audit-log';
 import { AuthorizationError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
-import { DRIVER_DELIVERY_SHARE } from '@/lib/config/fees';
+import { computeEarnings } from '@/lib/services/driver-earnings';
+import { postDriverPayoutFinancialJournal } from '@/lib/finance/ledger';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,7 +25,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => listPayouts() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function listPayouts(): Promise<NextResponse> {
@@ -68,13 +68,20 @@ async function upsertPayout(req: NextRequest): Promise<NextResponse> {
     const svc = createServiceClient();
 
     if (payoutId) {
-      const updates: any = {};
+      const allowedStatuses = new Set(['pending', 'processing', 'paid', 'failed', 'cancelled']);
+      if (body.status && !allowedStatuses.has(String(body.status))) {
+        throw new ValidationError('Invalid payout status');
+      }
+      if (body.status === 'paid' && !String(body.payment_reference ?? '').trim()) {
+        throw new ValidationError('payment_reference is required when marking a payout paid');
+      }
+      const updates: Record<string, unknown> = {};
       if (body.status) updates.status = body.status;
-      if (body.paid_at) updates.paid_at = body.paid_at;
+      if (body.status === 'paid') updates.paid_at = body.paid_at ?? new Date().toISOString();
+      else if (body.paid_at) updates.paid_at = body.paid_at;
       if (body.payment_reference) updates.payment_reference = body.payment_reference;
       if (body.payment_method) updates.payment_method = body.payment_method;
       if (body.notes !== undefined) updates.notes = body.notes;
-      if (body.adjustments !== undefined) updates.adjustments = body.adjustments;
 
       const { data, error } = await svc
         .from('driver_payouts')
@@ -95,7 +102,13 @@ async function upsertPayout(req: NextRequest): Promise<NextResponse> {
         resourceId: payoutId,
         metadata: { updates: Object.keys(updates) },
       });
-      return ok({ payout: data });
+      const ledger = data.status === 'paid'
+        ? await postDriverPayoutFinancialJournal({
+            id: data.id, driver_id: data.driver_id, net_payout: data.total_payout,
+            payment_reference: data.payment_reference, paid_at: data.paid_at,
+          })
+        : { posted: false, reason: 'not_paid' as const };
+      return ok({ payout: data, ledger });
     }
 
     const driverId = String(body.driver_id ?? '');
@@ -106,7 +119,7 @@ async function upsertPayout(req: NextRequest): Promise<NextResponse> {
 
     const { data: orders, error: ordersErr } = await svc
       .from('orders')
-      .select('id, delivery_fee, tip, total, status, delivered_at')
+      .select('id, delivery_fee, tip, total, status, delivered_at, restaurant_latitude, restaurant_longitude, customer_latitude, customer_longitude')
       .eq('driver_id', driverId)
       .gte('delivered_at', periodStart.toISOString())
       .lte('delivered_at', periodEnd.toISOString())
@@ -118,7 +131,7 @@ async function upsertPayout(req: NextRequest): Promise<NextResponse> {
     }
 
     const deliveryCount = orders?.length ?? 0;
-    const basePayout = (orders ?? []).reduce((sum, o) => sum + Number(o.delivery_fee ?? 0) * DRIVER_DELIVERY_SHARE, 0);
+    const basePayout = (orders ?? []).reduce((sum, order) => sum + computeEarnings({ ...order, tip: 0 }).base, 0);
     const tipsTotal = (orders ?? []).reduce((sum, o) => sum + Number(o.tip ?? 0), 0);
     const grossPayout = basePayout + tipsTotal;
     const netPayout = grossPayout;
@@ -129,13 +142,10 @@ async function upsertPayout(req: NextRequest): Promise<NextResponse> {
         driver_id: driverId,
         period_start: periodStart.toISOString().split('T')[0],
         period_end: periodEnd.toISOString().split('T')[0],
-        base_payout: basePayout,
-        tips_total: tipsTotal,
-        bonuses_total: 0,
-        gross_payout: grossPayout,
-        net_payout: netPayout,
-        order_count: deliveryCount,
-        delivery_count: deliveryCount,
+        total_base: basePayout,
+        total_tips: tipsTotal,
+        total_payout: netPayout,
+        total_orders: deliveryCount,
         status: 'pending',
       })
       .select()

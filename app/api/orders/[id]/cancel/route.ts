@@ -85,7 +85,7 @@ async function cancelOrder(
     // sees the order as released).
     const { data: orderRowForRefund } = await supabase
       .from('orders')
-      .select('id, status, payment_method, payment_status, stripe_payment_intent_id, points_redeemed, total')
+      .select('id, status, payment_method, payment_status, stripe_payment_intent_id, total, last_refund_status')
       .eq('id', orderId)
       .single();
 
@@ -99,13 +99,16 @@ async function cancelOrder(
     const initialStatus = needsStripeRefund ? 'cancel_refund_pending' : 'cancelled';
 
     // Cancel atomically (only if still in allowed state)
+    // v87-7H-A fix: do NOT write to non-existent columns (cancellation_reason,
+    // stripe_refund_id, stripe_refunded_amount, points_redeemed). Real DB has
+    // amount_refunded_cents, last_refund_at, last_refund_status. Cancellation
+    // reason is preserved in the notification body and the audit log.
     const { data: updated, error: updErr } = await supabase
       .from('orders')
       .update({
         status: initialStatus,
         cancelled_at: now,
         updated_at: now,
-        cancellation_reason: reason,
       })
       .eq('id', orderId)
       .in('status', ALLOWED_FROM_STATES)
@@ -166,18 +169,12 @@ async function cancelOrder(
     }
 
     // Refund loyalty points if redeemed
-    if (updated.points_redeemed && updated.points_redeemed > 0) {
-      try {
-        await supabase.rpc('award_loyalty_points', {
-          p_user_id: orderRow?.customer_id,
-          p_points: updated.points_redeemed,
-          p_reason: 'Refund: order cancelled',
-          p_order_id: orderId,
-        });
-      } catch (e) {
-        logger.warn('Loyalty refund failed (non-fatal)', { orderId }, e);
-      }
-    }
+    // v87-7H-A fix: points_redeemed column does not exist in real DB. Loyalty
+    // points are awarded on completion; on cancel we no-op (no reverse-lookup
+    // available). This is a known limitation; the customer loses the points
+    // for this order. Future migration should add a `points_awarded` column
+    // or a separate order_points table.
+    // Skipping loyalty refund — column missing in real schema.
 
     // Refund Stripe for card payments
     // v83 fix (SENIOR-QA-V83-2): with the new 'cancel_refund_pending'
@@ -215,13 +212,17 @@ async function cancelOrder(
           // cancel flow). The webhook will also fire and try to update the
           // status; that's idempotent because of the payment_status check
           // in the webhook handler.
+          // v87-7H-A fix: use real DB columns (amount_refunded_cents,
+          // last_refund_at, last_refund_status). Removed: stripe_refund_id,
+          // stripe_refunded_amount.
           const { data: finalOrder, error: finalErr } = await supabase
             .from('orders')
             .update({
               status: 'cancelled',
               payment_status: 'refunded',
-              stripe_refund_id: refund.id,
-              stripe_refunded_amount: (refund.amount ?? 0) / 100,
+              amount_refunded_cents: refund.amount,
+              last_refund_at: new Date().toISOString(),
+              last_refund_status: 'succeeded',
               refunded_at: new Date().toISOString(),
               updated_at: new Date().toISOString(),
             })
@@ -244,9 +245,9 @@ async function cancelOrder(
           logger.error('Stripe refund skipped — client not configured', { orderId, paymentIntent: updated.stripe_payment_intent_id });
           // Leave the order in cancel_refund_pending for ops to reconcile.
         }
-      } catch (e: any) {
-        stripe_refund_error = e?.message ?? String(e);
-        logger.error('Stripe refund failed — order left in cancel_refund_pending for ops reconciliation', { orderId, paymentIntent: updated.stripe_payment_intent_id, err: e });
+      } catch (error: unknown) {
+        stripe_refund_error = error instanceof Error ? error.message : String(error);
+        logger.error('Stripe refund failed — order left in cancel_refund_pending for ops reconciliation', { orderId, paymentIntent: updated.stripe_payment_intent_id, err: error });
         // The order is in cancel_refund_pending. We DO NOT roll back to
         // pending because the customer has been told the cancel succeeded
         // and the kitchen / driver have already been notified. An admin
@@ -256,7 +257,7 @@ async function cancelOrder(
 
     return ok({
       order: { ...updated, status: finalStatus, payment_status: finalPaymentStatus ?? updated.payment_status },
-      refunded_points: updated.points_redeemed ?? 0,
+      refunded_points: 0, // v87-7H-A: points_redeemed column missing in real DB
       stripe_refund,
       stripe_refund_error,
       final_status: finalStatus,
@@ -264,10 +265,8 @@ async function cancelOrder(
   });
 }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   // v81: withSecurity wrapper enforces auth + role + rate limit.
   // The handler closure receives the route id from params.
   return (await withSecurity(

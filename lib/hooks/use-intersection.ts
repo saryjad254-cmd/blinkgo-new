@@ -28,8 +28,9 @@ export function useIntersectionObserver<T extends Element = HTMLDivElement>(
     if (!el) return;
 
     if (typeof IntersectionObserver === 'undefined') {
-      setIsIntersecting(true);
-      return;
+      let cancelled = false;
+      queueMicrotask(() => { if (!cancelled) setIsIntersecting(true); });
+      return () => { cancelled = true; };
     }
 
     const observer = new IntersectionObserver(

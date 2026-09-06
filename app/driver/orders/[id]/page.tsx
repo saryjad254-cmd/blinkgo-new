@@ -6,26 +6,21 @@ import MessageSquare from 'lucide-react/dist/esm/icons/message-square';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import Truck from 'lucide-react/dist/esm/icons/truck';
 import ChefHat from 'lucide-react/dist/esm/icons/chef-hat';
-import Clock from 'lucide-react/dist/esm/icons/clock';
 import Package from 'lucide-react/dist/esm/icons/package';
 import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import ExternalLink from 'lucide-react/dist/esm/icons/external-link';
-import Copy from 'lucide-react/dist/esm/icons/copy';
-import Star from 'lucide-react/dist/esm/icons/star';
 import Receipt from 'lucide-react/dist/esm/icons/receipt';
 import ArrowUpRight from 'lucide-react/dist/esm/icons/arrow-up-right';
 import Home from 'lucide-react/dist/esm/icons/home';
 import { requireRole } from '@/lib/rbac';
-import { createServerClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { PageHeader } from '@/components/shared/PageHeader';
 import { OrderActions } from '@/components/driver/OrderActions';
 import { formatEUR } from '@/lib/format';
 import { getServerTranslations } from '@/lib/i18n/server-translations';
 import Link from 'next/link';
 import { ActiveDeliveryMap } from '@/components/driver/ActiveDeliveryMap';
 import { computeEarnings } from '@/lib/services/driver-earnings';
+import { formatDeliveryPreferences, hasDeliveryPreferences, sanitizeDeliveryPreferences } from '@/lib/delivery-preferences';
+import type { LucideIcon } from 'lucide-react';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,7 +38,16 @@ interface DeliveryAddress {
   instructions?: string;
 }
 
-function parseDeliveryAddress(raw: any) {
+interface DriverOrderItem {
+  id: string;
+  product_name?: string | null;
+  name?: string | null;
+  quantity?: number | null;
+  subtotal?: number | string | null;
+  total?: number | string | null;
+}
+
+function parseDeliveryAddress(raw: unknown) {
   const empty = {
     text: '—', street: null as string | null, city: null as string | null, postal: null as string | null,
     country: null as string | null, lat: null as number | null, lng: null as number | null,
@@ -87,19 +91,27 @@ async function getOrder(id: string, driverId: string) {
     .from('orders')
     .select(`*, restaurants(name, address, phone, latitude, longitude)`)
     .eq('id', id)
-    // v80 audit fix: replaced template-literal .or() with two explicit .or() calls.
-    // Although driverId comes from the authenticated user (server-trusted), the
-    // template-literal form is a code smell and was flagged by the security audit.
-    .or('driver_id.is.null')
-    .or(`driver_id.eq.${driverId}`)
     .single();
 
   if (error || !order) return null;
 
-  const { data: items } = await serviceClient
-    .from('order_items')
-    .select('*')
-    .eq('order_id', id);
+  // The service client bypasses RLS, so enforce strict ownership after loading
+  // the row. Unassigned offers expose only a coarse area in the offer list;
+  // exact address, phone and delivery instructions become visible after the
+  // order is assigned to this driver.
+  if (order.driver_id !== driverId) return null;
+
+  const [{ data: items }, { data: preferenceRow }] = await Promise.all([
+    serviceClient
+      .from('order_items')
+      .select('*')
+      .eq('order_id', id),
+    serviceClient
+      .from('order_delivery_preferences')
+      .select('preferences')
+      .eq('order_id', id)
+      .maybeSingle(),
+  ]);
 
   let customerName = '';
   let customerPhone: string | null = null;
@@ -135,24 +147,35 @@ async function getOrder(id: string, driverId: string) {
     } catch {}
   }
 
+  const { data: arrivalEvents } = await serviceClient
+    .from('order_tracking_events')
+    .select('event_type, created_at')
+    .eq('order_id', id)
+    .in('event_type', ['driver_arrived_pickup', 'driver_arrived_dropoff'])
+    .order('created_at', { ascending: false });
+
   return {
     order,
     items: items ?? [],
     customerName,
     customerPhone,
     deliveryAddress: parseDeliveryAddress(order.delivery_address),
+    deliveryPreferences: sanitizeDeliveryPreferences(preferenceRow?.preferences),
     driverLat,
     driverLng,
+    arrivedPickupAt: arrivalEvents?.find((event) => event.event_type === 'driver_arrived_pickup')?.created_at ?? null,
+    arrivedDropoffAt: arrivalEvents?.find((event) => event.event_type === 'driver_arrived_dropoff')?.created_at ?? null,
   };
 }
 
-export default async function DriverOrderPage({ params }: { params: { id: string } }) {
+export default async function DriverOrderPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const { id: driverId } = await requireRole('driver');
   const { locale } = await getServerTranslations();
   const data = await getOrder(params.id, driverId);
   if (!data) notFound();
 
-  const { order, items, customerName, customerPhone, deliveryAddress, driverLat, driverLng } = data;
+  const { order, items, customerName, customerPhone, deliveryAddress, deliveryPreferences, driverLat, driverLng, arrivedPickupAt, arrivedDropoffAt } = data;
 
   // Coordinates
   const restLat = order.restaurant_latitude ?? order.restaurants?.latitude;
@@ -177,9 +200,12 @@ export default async function DriverOrderPage({ params }: { params: { id: string
   const isDelivered = order.status === 'delivered';
 
   // Earnings (server-side, single source of truth)
-  const earnings = computeEarnings({ delivery_fee: order.delivery_fee, tip: order.tip });
+  const earnings = computeEarnings(order);
 
   const isRtl = locale === 'ar';
+  const privateDeliveryInstructions = hasDeliveryPreferences(deliveryPreferences)
+    ? formatDeliveryPreferences(deliveryPreferences, locale)
+    : deliveryAddress.instructions;
 
   return (
     <div className="min-h-screen bg-bg pb-32" dir={isRtl ? 'rtl' : 'ltr'}>
@@ -187,9 +213,9 @@ export default async function DriverOrderPage({ params }: { params: { id: string
       <div className="sticky top-0 z-sticky bg-bg-elevated/95 backdrop-blur-xl border-b border-edge">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center gap-3">
           <Link
-            href="/driver/dashboard"
+            href="/driver/orders"
             className="w-12 h-12 rounded-full bg-ink-700 text-text-secondary flex items-center justify-center touch-manipulation active:scale-95"
-            aria-label="Back"
+            aria-label={locale === 'ar' ? 'رجوع' : locale === 'en' ? 'Back' : 'Zurück'}
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
               <path d="M19 12H5M12 19l-7-7 7-7" />
@@ -301,7 +327,7 @@ export default async function DriverOrderPage({ params }: { params: { id: string
             name={customerName}
             address={deliveryAddress.text}
             phone={customerPhone}
-            instructions={deliveryAddress.instructions}
+            instructions={privateDeliveryInstructions}
             floor={deliveryAddress.floor}
             door={deliveryAddress.door}
             locale={locale}
@@ -328,7 +354,14 @@ export default async function DriverOrderPage({ params }: { params: { id: string
       {order.driver_id && (
         <div className="fixed bottom-0 inset-x-0 z-modal bg-bg-elevated/95 backdrop-blur-2xl border-t border-edge shadow-2xl pb-[env(safe-area-inset-bottom)]">
           <div className="max-w-2xl mx-auto p-3 sm:p-4">
-            <OrderActions orderId={order.id} currentStatus={order.status} />
+            <OrderActions
+              orderId={order.id}
+              currentStatus={order.status}
+              contactPhone={restaurantPhase ? order.restaurants?.phone : customerPhone}
+              arrivedPickupAt={arrivedPickupAt}
+              arrivedDropoffAt={arrivedDropoffAt}
+              deliveryHandoff={deliveryPreferences.handoff}
+            />
           </div>
         </div>
       )}
@@ -394,7 +427,7 @@ function DistanceCard({
   color,
   locale,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   destination: string;
   distance: number;
@@ -612,7 +645,7 @@ function ItemsCard({
   locale,
 }: {
   orderNumber: string;
-  items: any[];
+  items: DriverOrderItem[];
   subtotal: number;
   deliveryFee: number;
   total: number;
@@ -639,7 +672,7 @@ function ItemsCard({
         </svg>
       </summary>
       <div className="px-4 pb-4 divide-y divide-edge">
-        {items.map((item: any) => (
+        {items.map((item) => (
           <div key={item.id} className="py-2 flex items-center justify-between gap-3">
             <div className="flex-1 min-w-0">
               <p className="text-sm text-white truncate">{item.product_name || item.name || 'Item'}</p>

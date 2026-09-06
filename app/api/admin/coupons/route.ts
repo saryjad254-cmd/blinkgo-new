@@ -14,16 +14,17 @@ import { audit } from '@/lib/services/audit-log';
 import { getApiUserWithRole } from '@/lib/auth-helper';
 import { CouponService } from '@/lib/services/coupon-service';
 import { logger } from '@/lib/logging';
+import { ValidationError } from '@/lib/foundation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => listCoupons() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function listCoupons(): Promise<NextResponse> {
@@ -33,8 +34,12 @@ async function listCoupons(): Promise<NextResponse> {
     const svc = createServiceClient();
     const { data, error } = await svc.from('coupons').select('*').order('created_at', { ascending: false });
     if (error) {
+      const backend = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+      if (backend.includes('localhost') || backend.includes('127.0.0.1')) {
+        return ok({ coupons: [] });
+      }
       logger.error('Admin coupons list failed', {}, error);
-      return ok({ coupons: [] });
+      throw new Error('FETCH_FAILED');
     }
     return ok({ coupons: data ?? [] });
   });
@@ -53,6 +58,7 @@ async function createCoupon(req: NextRequest): Promise<NextResponse> {
     const guard = await requireAdmin();
     if (!guard.ok) return guard.error!;
     const body = await req.json().catch(() => ({}));
+    if (!body.code || typeof body.code !== 'string') throw new ValidationError('Coupon code is required');
     const coupon = await CouponService.create(body);
     const me = await getApiUserWithRole();
     if (me) {
@@ -83,9 +89,13 @@ async function deleteCoupon(req: NextRequest): Promise<NextResponse> {
     if (!guard.ok) return guard.error!;
     const url = new URL(req.url);
     const id = url.searchParams.get('id');
-    if (!id) return ok({ deleted: false });
+    if (!id) throw new ValidationError('Coupon id is required');
     const svc = createServiceClient();
-    await svc.from('coupons').delete().eq('id', id);
+    const { error } = await svc.from('coupons').delete().eq('id', id);
+    if (error) {
+      logger.error('Admin coupon delete failed', { couponId: id }, error);
+      throw new Error('DELETE_FAILED');
+    }
     const me = await getApiUserWithRole();
     if (me) {
       await audit('ADMIN_CONFIG_CHANGED', {

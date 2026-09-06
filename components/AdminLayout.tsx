@@ -12,9 +12,7 @@ import LogOut from 'lucide-react/dist/esm/icons/log-out';
 import ClipboardList from 'lucide-react/dist/esm/icons/clipboard-list';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import Clock from 'lucide-react/dist/esm/icons/clock';
-import Languages from 'lucide-react/dist/esm/icons/languages';
 import { Logo } from '@/components/ui/Logo';
-import { ThemeToggle } from '@/components/theme/ThemeToggle';
 import type { CurrentUser } from '@/lib/rbac';
 import { cn } from '@/lib/cn';
 
@@ -67,7 +65,7 @@ const NAV_ITEMS = [
   { href: '/admin/driver-hours', icon: Clock, key: 'hours' },
   { href: '/admin/analytics', icon: BarChart3, key: 'analytics' },
   { href: '/admin/reset', icon: RefreshCw, key: 'reset' },
-];
+] as const;
 
 export function AdminLayout({
   user,
@@ -81,7 +79,9 @@ export function AdminLayout({
   const [locale, setLocale] = useState<'de' | 'ar' | 'en'>('de');
 
   useEffect(() => {
-    setLocale(detectLocale());
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setLocale(detectLocale()); });
+    return () => { cancelled = true; };
   }, []);
 
   const t = T[locale];
@@ -101,7 +101,8 @@ export function AdminLayout({
     } catch {
       // ignore
     }
-    window.location.href = '/login';
+    router.replace('/login');
+    router.refresh();
   }
 
   return (
@@ -109,13 +110,9 @@ export function AdminLayout({
       {/* SIDEBAR */}
       <aside className="hidden lg:flex w-64 flex-shrink-0 bg-bg-card backdrop-blur-xl border-e border-edge-light flex-col">
         <div className="p-6 border-b border-edge-light">
-          <Link href="/admin/dashboard" className="flex items-center gap-3 group">
-            <div className="relative w-10 h-10 rounded-xl bg-gradient-to-br from-brand-yellow via-brand-yellow-hover to-brand-yellow-active flex items-center justify-center shadow-[0_4px_12px_-2px_rgba(245,184,25,0.5)] group-hover:scale-105 transition-transform overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-0.5 bg-brand-red/40" />
-              <div className="absolute top-1/2 left-0 w-full h-0.5 bg-brand-red/30" />
-              <span className="font-black italic text-brand-black text-sm">B</span>
-            </div>
-            <span className="font-extrabold text-white">{t.brand}</span>
+          <Link href="/admin/dashboard" aria-label={t.brand} className="group flex min-h-11 items-center gap-3 rounded-xl">
+            <Logo variant="horizontal" size="sm" priority className="transition-transform group-hover:scale-[1.02]" />
+            <span className="sr-only">{t.brand}</span>
           </Link>
         </div>
         <nav className="flex-1 overflow-y-auto p-3 space-y-1">
@@ -139,7 +136,7 @@ export function AdminLayout({
                   strokeWidth={active ? 2.5 : 2}
                   aria-hidden
                 />
-                <span>{(t.nav as any)[item.key]}</span>
+                <span>{t.nav[item.key]}</span>
               </Link>
             );
           })}
@@ -167,12 +164,9 @@ export function AdminLayout({
       {/* MOBILE TOP HEADER */}
       <header className="lg:hidden sticky top-0 z-30 bg-bg/95 backdrop-blur-xl border-b border-edge-light w-full">
         <div className="px-4 py-3 flex items-center justify-between">
-          <Link href="/admin/dashboard" className="flex items-center gap-2">
-            <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-brand-yellow via-brand-yellow-hover to-brand-yellow-active flex items-center justify-center overflow-hidden">
-              <div className="absolute top-0 left-0 w-full h-0.5 bg-brand-red/40" />
-              <span className="font-black italic text-brand-black text-sm">B</span>
-            </div>
-            <span className="font-extrabold text-white">{t.brand}</span>
+          <Link href="/admin/dashboard" aria-label={t.brand} className="flex min-h-11 items-center rounded-xl">
+            <Logo variant="horizontal" size="sm" priority />
+            <span className="sr-only">{t.brand}</span>
           </Link>
           <button
             onClick={handleLogout}
@@ -200,7 +194,7 @@ export function AdminLayout({
                 )}
               >
                 <Icon className="w-3.5 h-3.5" />
-                {(t.nav as any)[item.key]}
+                {t.nav[item.key]}
               </Link>
             );
           })}

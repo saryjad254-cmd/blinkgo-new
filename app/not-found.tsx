@@ -1,7 +1,6 @@
 import Link from 'next/link';
 import Home from 'lucide-react/dist/esm/icons/home';
 import Search from 'lucide-react/dist/esm/icons/search';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import { BlinkButton } from '@/components/brand';
 
 export default function NotFound() {

@@ -1,28 +1,21 @@
 'use client';
 
-import { useState, useMemo, useEffect, memo, useCallback } from 'react';
+import { useState, useMemo } from 'react';
 import CalendarIcon from 'lucide-react/dist/esm/icons/calendar';
 import ChevronLeft from 'lucide-react/dist/esm/icons/chevron-left';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import Filter from 'lucide-react/dist/esm/icons/filter';
-import Clock from 'lucide-react/dist/esm/icons/clock';
 import CalendarDays from 'lucide-react/dist/esm/icons/calendar-days';
 import ListOrdered from 'lucide-react/dist/esm/icons/list-ordered';
-import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
-import Check from 'lucide-react/dist/esm/icons/check';
-import X from 'lucide-react/dist/esm/icons/x';
 import CalendarRange from 'lucide-react/dist/esm/icons/calendar-range';
 import { cn } from '@/lib/cn';
-import { useT } from '@/lib/i18n/I18nProvider';
+import { useLiveNow } from '@/lib/hooks/use-live-now';
 import {
   type OrderForCalendar,
   type CalendarGrouping,
   type CalendarSection,
   groupOrders,
-  todayKey,
   addDays,
   addMonths,
-  dateKey,
   startOfWeek,
   filterByDay,
   filterByRange,
@@ -76,19 +69,13 @@ export function OrderCalendar<T extends OrderForCalendar>({
   locale = 'de',
   emptyState,
 }: OrderCalendarProps<T>) {
-  const t = useT();
   const [grouping, setGrouping] = useState<CalendarGrouping>(defaultGrouping);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>(defaultStatusFilter);
+  const [selectedDateMs, setSelectedDateMs] = useState<number | null>(null);
   // SSR-safe: server renders with `now = null` (no time-dependent bucketing).
   // The client sets `now` after mount, then re-runs the grouping.
-  const [now, setNow] = useState<Date | null>(null);
-
-  // Update "now" once a minute so day boundaries are accurate
-  useEffect(() => {
-    setNow(new Date());
-    const id = setInterval(() => setNow(new Date()), 60_000);
-    return () => clearInterval(id);
-  }, []);
+  const nowMs = useLiveNow(60_000);
+  const now = useMemo(() => nowMs > 0 ? new Date(nowMs) : null, [nowMs]);
 
   // Filter by status first
   const filteredOrders = useMemo(() => {
@@ -109,13 +96,29 @@ export function OrderCalendar<T extends OrderForCalendar>({
     return orders;
   }, [orders, statusFilter]);
 
+  const selectedDate = useMemo(
+    () => selectedDateMs !== null ? new Date(selectedDateMs) : now,
+    [now, selectedDateMs],
+  );
+
+  const visibleOrders = useMemo(() => {
+    if (!showDateNav || !selectedDate) return filteredOrders;
+    if (grouping === 'day') return filterByDay(filteredOrders, selectedDate);
+    if (grouping === 'week') {
+      const from = startOfWeek(selectedDate, 1);
+      return filterByRange(filteredOrders, from, addDays(from, 7));
+    }
+    const from = new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1);
+    return filterByRange(filteredOrders, from, addMonths(from, 1));
+  }, [filteredOrders, grouping, selectedDate, showDateNav]);
+
   // Group filtered orders by day/week/month.
   // `now` is null on the server / first client render — fall back to an empty
   // list to avoid running `new Date()` during render (which would mismatch
   // hydration if SSR clock and client clock cross a day boundary).
   const sections = useMemo(
-    () => (now ? groupOrders(filteredOrders, grouping, locale, 1, now) : []),
-    [filteredOrders, grouping, locale, now],
+    () => (now ? groupOrders(visibleOrders, grouping, locale, 1, now) : []),
+    [visibleOrders, grouping, locale, now],
   );
 
   // 3-locale labels
@@ -141,8 +144,8 @@ export function OrderCalendar<T extends OrderForCalendar>({
   };
 
   // ── Section header / data
-  const totalAll = filteredOrders.length;
-  const sumAll = filteredOrders.reduce(
+  const totalAll = visibleOrders.length;
+  const sumAll = visibleOrders.reduce(
     (s, o) => s + (typeof o.total === 'number' ? o.total : 0),
     0,
   );
@@ -216,6 +219,16 @@ export function OrderCalendar<T extends OrderForCalendar>({
         </div>
       )}
 
+      {showDateNav && selectedDate && (
+        <CalendarPeriodNavigation
+          date={selectedDate}
+          grouping={grouping}
+          locale={locale}
+          onChange={(date) => setSelectedDateMs(date.getTime())}
+          onToday={() => setSelectedDateMs(null)}
+        />
+      )}
+
       {/* Summary line */}
       {showSummary && totalAll > 0 && (
         <div className="flex items-center justify-between px-2 text-xs text-text-muted">
@@ -234,7 +247,7 @@ export function OrderCalendar<T extends OrderForCalendar>({
 
       {/* Sections */}
       {sections.length === 0 ? (
-        <div className="rounded-2xl bg-surface-elevated border border-edge p-12 text-center">
+        emptyState ?? <div className="rounded-2xl bg-surface-elevated border border-edge p-12 text-center">
           <div className="w-14 h-14 rounded-2xl bg-surface mx-auto mb-3 flex items-center justify-center text-text-muted">
             <CalendarIcon className="w-7 h-7" />
           </div>
@@ -257,13 +270,13 @@ export function OrderCalendar<T extends OrderForCalendar>({
   );
 }
 
-interface SectionProps<T> {
+interface SectionProps<T extends OrderForCalendar> {
   section: CalendarSection;
   renderOrder: (o: T) => React.ReactNode;
   locale: 'de' | 'ar' | 'en';
 }
 
-function CalendarSectionView<T>({ section, renderOrder, locale }: SectionProps<T>) {
+function CalendarSectionView<T extends OrderForCalendar>({ section, renderOrder, locale }: SectionProps<T>) {
   // Hint-based styling
   const isToday = section.hint === 'today';
   const isThisWeek = section.hint === 'thisWeek';
@@ -315,10 +328,74 @@ function CalendarSectionView<T>({ section, renderOrder, locale }: SectionProps<T
 
       <div className="space-y-2">
         {section.orders.map((order) => (
-          <div key={(order as any).id}>{renderOrder(order as T)}</div>
+          <div key={order.id}>{renderOrder(order as T)}</div>
         ))}
       </div>
     </section>
+  );
+}
+
+interface CalendarPeriodNavigationProps {
+  date: Date;
+  grouping: CalendarGrouping;
+  locale: 'de' | 'ar' | 'en';
+  onChange: (date: Date) => void;
+  onToday: () => void;
+}
+
+function CalendarPeriodNavigation({
+  date,
+  grouping,
+  locale,
+  onChange,
+  onToday,
+}: CalendarPeriodNavigationProps) {
+  if (grouping === 'day') {
+    return <MiniDatePicker date={date} onChange={onChange} locale={locale} />;
+  }
+
+  const browserLocale = locale === 'ar' ? 'ar' : locale === 'en' ? 'en-GB' : 'de-DE';
+  const todayLabel = locale === 'ar' ? 'اليوم' : locale === 'en' ? 'Today' : 'Heute';
+  const periodStart = grouping === 'week'
+    ? startOfWeek(date, 1)
+    : new Date(date.getFullYear(), date.getMonth(), 1);
+  const periodEnd = grouping === 'week'
+    ? addDays(periodStart, 6)
+    : new Date(date.getFullYear(), date.getMonth() + 1, 0);
+  const periodLabel = grouping === 'week'
+    ? `${periodStart.toLocaleDateString(browserLocale, { day: '2-digit', month: 'short' })} – ${periodEnd.toLocaleDateString(browserLocale, { day: '2-digit', month: 'short' })}`
+    : periodStart.toLocaleDateString(browserLocale, { month: 'long', year: 'numeric' });
+  const changePeriod = (direction: -1 | 1) => {
+    onChange(grouping === 'week' ? addDays(date, direction * 7) : addMonths(date, direction));
+  };
+
+  return (
+    <div className="rounded-2xl bg-surface-elevated border border-edge p-3 flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => changePeriod(-1)}
+        aria-label={locale === 'de' ? 'Vorheriger Zeitraum' : locale === 'ar' ? 'الفترة السابقة' : 'Previous period'}
+        className="w-11 h-11 rounded-xl bg-surface border border-edge text-text-secondary hover:text-white hover:border-brand-red-500/60 active:scale-95 transition-all flex items-center justify-center"
+      >
+        <ChevronLeft className="w-4 h-4 rtl:rotate-180" aria-hidden />
+      </button>
+      <button
+        type="button"
+        onClick={onToday}
+        className="min-h-11 flex-1 rounded-xl px-3 text-center hover:bg-surface focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-red-500"
+      >
+        <span className="block text-[10px] font-extrabold text-text-muted uppercase tracking-wider">{todayLabel}</span>
+        <span className="block text-sm font-extrabold text-white">{periodLabel}</span>
+      </button>
+      <button
+        type="button"
+        onClick={() => changePeriod(1)}
+        aria-label={locale === 'de' ? 'Nächster Zeitraum' : locale === 'ar' ? 'الفترة التالية' : 'Next period'}
+        className="w-11 h-11 rounded-xl bg-surface border border-edge text-text-secondary hover:text-white hover:border-brand-red-500/60 active:scale-95 transition-all flex items-center justify-center"
+      >
+        <ChevronRight className="w-4 h-4 rtl:rotate-180" aria-hidden />
+      </button>
+    </div>
   );
 }
 
@@ -330,14 +407,12 @@ interface MiniDatePickerProps {
   date: Date;
   onChange: (d: Date) => void;
   locale: 'de' | 'ar' | 'en';
-  weekStartsOn?: number;
 }
 
 export function MiniDatePicker({
   date,
   onChange,
   locale,
-  weekStartsOn = 1,
 }: MiniDatePickerProps) {
   const loc = locale === 'ar' ? 'ar' : locale === 'en' ? 'en-GB' : 'de-DE';
   const today = new Date();
@@ -392,7 +467,6 @@ interface DateRangeFilterProps {
 }
 
 export function DateRangeFilter({ from, to, onChange, locale }: DateRangeFilterProps) {
-  const t = useT();
   const today = useMemo(() => {
     const d = new Date();
     d.setHours(0, 0, 0, 0);

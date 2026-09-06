@@ -1,10 +1,19 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
 import { useI18n } from '@/lib/i18n/I18nProvider';
+import { loadLeaflet } from '@/lib/maps/load-leaflet';
+import {
+  GOOGLE_MAPS_MAP_ID,
+  createGoogleMarker,
+  createGoogleMarkerVisual,
+  loadGoogleMaps,
+  removeGoogleMarker,
+  type GoogleMarkerInstance,
+} from '@/lib/maps/google-maps';
 
 interface Props {
   driverLat: number | null;
@@ -37,15 +46,19 @@ export function DriverOrderMap({
 }: Props) {
   const { locale } = useI18n();
   const mapRef = useRef<HTMLDivElement>(null);
+  const cleanupMapRef = useRef<() => void>(() => undefined);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mapReady, setMapReady] = useState(false);
 
   // Determine bounds
-  const points: Array<{ lat: number; lng: number; type: 'driver' | 'restaurant' | 'customer' }> = [];
-  if (driverLat != null && driverLng != null) points.push({ lat: driverLat, lng: driverLng, type: 'driver' });
-  if (restaurantLat != null && restaurantLng != null) points.push({ lat: restaurantLat, lng: restaurantLng, type: 'restaurant' });
-  if (customerLat != null && customerLng != null) points.push({ lat: customerLat, lng: customerLng, type: 'customer' });
+  const points = useMemo(() => {
+    const next: Array<{ lat: number; lng: number; type: 'driver' | 'restaurant' | 'customer' }> = [];
+    if (driverLat != null && driverLng != null) next.push({ lat: driverLat, lng: driverLng, type: 'driver' });
+    if (restaurantLat != null && restaurantLng != null) next.push({ lat: restaurantLat, lng: restaurantLng, type: 'restaurant' });
+    if (customerLat != null && customerLng != null) next.push({ lat: customerLat, lng: customerLng, type: 'customer' });
+    return next;
+  }, [driverLat, driverLng, restaurantLat, restaurantLng, customerLat, customerLng]);
 
   useEffect(() => {
     if (points.length === 0 || !mapRef.current) {
@@ -54,6 +67,7 @@ export function DriverOrderMap({
     }
 
     let cancelled = false;
+    cleanupMapRef.current();
     setLoading(true);
     setError(null);
 
@@ -63,38 +77,44 @@ export function DriverOrderMap({
       try {
         // Try Google Maps
         if (apiKey && apiKey.startsWith('AIza')) {
-          const google = await loadGoogleMaps(apiKey);
+          const googleApi = await loadGoogleMaps();
+          const maps = googleApi.maps;
           if (cancelled || !mapRef.current) return;
-          const map = new google.maps.Map(mapRef.current, {
+          const container = mapRef.current;
+          const map = new maps.Map(container, {
             zoom: 13,
             center: points[0],
             disableDefaultUI: true,
             zoomControl: true,
-            styles: mapStyles,
+            styles: GOOGLE_MAPS_MAP_ID ? undefined : mapStyles,
+            mapId: GOOGLE_MAPS_MAP_ID || undefined,
           });
 
           // Add markers
+          const googleMarkers: GoogleMarkerInstance[] = [];
           points.forEach((p) => {
-            const marker = new google.maps.Marker({
+            const title = p.type === 'restaurant' ? (restaurantName || p.type) : p.type === 'customer' ? (customerName || p.type) : p.type;
+            googleMarkers.push(createGoogleMarker({
               position: { lat: p.lat, lng: p.lng },
               map,
-              icon: getMarkerIcon(p.type),
-              title: p.type,
+              legacyIcon: getMarkerIcon(p.type),
+              content: getAdvancedMarkerVisual(p.type),
+              title,
               zIndex: p.type === 'driver' ? 1000 : 500,
-            });
+            }));
           });
 
           // Draw route line from driver to primary destination
-          if (driverLat && driverLng) {
+          if (driverLat != null && driverLng != null) {
             const dest = driverIsPrimary
-              ? (restaurantLat && restaurantLng ? { lat: restaurantLat, lng: restaurantLng } : (customerLat && customerLng ? { lat: customerLat, lng: customerLng } : null))
-              : (customerLat && customerLng ? { lat: customerLat, lng: customerLng } : null);
+              ? (restaurantLat != null && restaurantLng != null ? { lat: restaurantLat, lng: restaurantLng } : (customerLat != null && customerLng != null ? { lat: customerLat, lng: customerLng } : null))
+              : (customerLat != null && customerLng != null ? { lat: customerLat, lng: customerLng } : null);
             
             if (dest) {
-              new google.maps.Polyline({
+              new maps.Polyline({
                 path: [{ lat: driverLat, lng: driverLng }, dest],
                 geodesic: true,
-                strokeColor: driverIsPrimary ? '#DC2626' : '#10b981',
+                strokeColor: driverIsPrimary ? '#E10600' : '#10b981',
                 strokeOpacity: 0.8,
                 strokeWeight: 4,
                 map,
@@ -104,55 +124,47 @@ export function DriverOrderMap({
 
           // Fit bounds
           if (points.length > 1) {
-            const bounds = new google.maps.LatLngBounds();
+            const bounds = new maps.LatLngBounds();
             points.forEach((p) => bounds.extend({ lat: p.lat, lng: p.lng }));
             map.fitBounds(bounds, 60);
           }
 
+          cleanupMapRef.current = () => {
+            googleMarkers.forEach(removeGoogleMarker);
+            maps.event.clearInstanceListeners(map);
+            container.replaceChildren();
+          };
           setMapReady(true);
           setLoading(false);
           return;
         }
 
         throw new Error('No Google Maps API key');
-      } catch (err) {
+      } catch {
         // Fallback to OSM
         if (cancelled || !mapRef.current) return;
-        initOSMMap();
+        await initOSMMap();
       }
     };
 
-    const initOSMMap = () => {
-      const mapId = `osm-map-${Math.random().toString(36).slice(2)}`;
-      mapRef.current!.innerHTML = `<div id="${mapId}" style="width:100%;height:100%;"></div>`;
-      const el = document.getElementById(mapId);
-      if (!el) return;
+    const initOSMMap = async () => {
+      try {
+        const L = await loadLeaflet();
+        if (cancelled || !mapRef.current) return;
 
-      // Calculate center
-      const centerLat = points.reduce((s, p) => s + p.lat, 0) / points.length;
-      const centerLng = points.reduce((s, p) => s + p.lng, 0) / points.length;
+        const centerLat = points.reduce((sum, point) => sum + point.lat, 0) / points.length;
+        const centerLng = points.reduce((sum, point) => sum + point.lng, 0) / points.length;
+        const map = L.map(mapRef.current, {
+          zoomAnimation: false,
+          fadeAnimation: false,
+          markerZoomAnimation: false,
+        }).setView([centerLat, centerLng], 13, { animate: false });
+        cleanupMapRef.current = () => {
+          map.stop();
+          map.off();
+          map.remove();
+        };
 
-      // Use Leaflet via CDN. Tag the injected elements so the cleanup
-      // function can remove them — otherwise every page-navigation that
-      // mounts this map leaks a fresh <link> and <script> into <head>.
-      const linkId = 'blinkgo-osm-css';
-      let link = document.getElementById(linkId) as HTMLLinkElement | null;
-      if (!link) {
-        link = document.createElement('link');
-        link.id = linkId;
-        link.rel = 'stylesheet';
-        link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-        document.head.appendChild(link);
-      }
-
-      const scriptId = 'blinkgo-osm-js';
-      const existingScript = document.getElementById(scriptId) as HTMLScriptElement | null;
-      const onScriptLoad = () => {
-        if (cancelled) return;
-        // @ts-ignore
-        const L = window.L;
-        if (!L) return;
-        const map = L.map(mapId).setView([centerLat, centerLng], 13);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
           attribution: '© OpenStreetMap, © CARTO',
           maxZoom: 19,
@@ -167,7 +179,7 @@ export function DriverOrderMap({
           }),
           restaurant: L.divIcon({
             className: '',
-            html: '<div style="background:#DC2626;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);">🏪</div>',
+            html: '<div style="background:#E10600;width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;color:white;font-weight:bold;border:2px solid white;box-shadow:0 2px 8px rgba(0,0,0,0.3);">🏪</div>',
             iconSize: [32, 32],
             iconAnchor: [16, 32],
           }),
@@ -180,17 +192,18 @@ export function DriverOrderMap({
         };
 
         points.forEach((p) => {
-          L.marker([p.lat, p.lng], { icon: icons[p.type] }).addTo(map);
+          const title = p.type === 'restaurant' ? (restaurantName || p.type) : p.type === 'customer' ? (customerName || p.type) : p.type;
+          L.marker([p.lat, p.lng], { icon: icons[p.type], title }).addTo(map);
         });
 
         // Draw route
-        if (driverLat && driverLng) {
-          const dest = driverIsPrimary
-            ? (restaurantLat && restaurantLng ? [restaurantLat, restaurantLng] : null)
-            : (customerLat && customerLng ? [customerLat, customerLng] : null);
+        if (driverLat != null && driverLng != null) {
+          const dest: [number, number] | null = driverIsPrimary
+            ? (restaurantLat != null && restaurantLng != null ? [restaurantLat, restaurantLng] : null)
+            : (customerLat != null && customerLng != null ? [customerLat, customerLng] : null);
           if (dest) {
             L.polyline([[driverLat, driverLng], dest], {
-              color: driverIsPrimary ? '#DC2626' : '#10b981',
+              color: driverIsPrimary ? '#E10600' : '#10b981',
               weight: 4,
               opacity: 0.8,
             }).addTo(map);
@@ -199,27 +212,16 @@ export function DriverOrderMap({
 
         if (points.length > 1) {
           const bounds = L.latLngBounds(points.map((p) => [p.lat, p.lng]));
-          map.fitBounds(bounds, { padding: [60, 60] });
+          map.fitBounds(bounds, { padding: [60, 60], animate: false });
         }
 
         setMapReady(true);
         setLoading(false);
-      };
-
-      if (existingScript) {
-        // Script already loaded — fire onload immediately
-        if ((window as any).L) {
-          onScriptLoad();
-        } else {
-          existingScript.addEventListener('load', onScriptLoad, { once: true });
-        }
-      } else {
-        const script = document.createElement('script');
-        script.id = scriptId;
-        script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-        script.async = true;
-        script.addEventListener('load', onScriptLoad, { once: true });
-        document.head.appendChild(script);
+      } catch (mapError) {
+        if (cancelled) return;
+        console.error('Driver map initialization failed', mapError);
+        setError(locale === 'ar' ? 'تعذر تحميل الخريطة' : 'Karte konnte nicht geladen werden');
+        setLoading(false);
       }
     };
 
@@ -227,11 +229,10 @@ export function DriverOrderMap({
 
     return () => {
       cancelled = true;
-      // Note: the <link> and <script> are kept in <head> (id-tagged, deduplicated)
-      // because subsequent mounts re-use them. The previous version appended a
-      // fresh <link>+<script> on every mount with no cleanup, leaking into <head>.
+      cleanupMapRef.current();
+      cleanupMapRef.current = () => undefined;
     };
-  }, [driverLat, driverLng, restaurantLat, restaurantLng, customerLat, customerLng, driverIsPrimary]);
+  }, [driverLat, driverLng, restaurantLat, restaurantLng, customerLat, customerLng, restaurantName, customerName, driverIsPrimary, locale, points]);
 
   if (points.length === 0) {
     return (
@@ -245,7 +246,13 @@ export function DriverOrderMap({
   }
 
   return (
-    <div className="relative bg-white rounded-3xl border border-gray-200 overflow-hidden shadow-sm" style={{ height: '280px' }}>
+    <div
+      className="relative bg-white rounded-3xl border border-gray-200 overflow-hidden shadow-sm"
+      style={{ height: '280px' }}
+      data-testid="driver-order-map"
+      role="region"
+      aria-label={locale === 'ar' ? 'خريطة التوصيل المباشرة' : locale === 'en' ? 'Live delivery map' : 'Live-Lieferkarte'}
+    >
       <div ref={mapRef} className="w-full h-full" />
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-white/80 backdrop-blur-sm">
@@ -259,27 +266,32 @@ export function DriverOrderMap({
         </div>
       )}
       {mapReady && (
-        <div className="absolute top-3 left-3 flex flex-col gap-1.5">
-          {restaurantLat && (
-            <div className="flex items-center gap-1.5 bg-white/95 backdrop-blur-sm rounded-full px-2.5 py-1 shadow-sm border border-accent-200">
+        <div
+          className="absolute top-3 left-3 flex flex-col gap-1.5"
+          data-testid="driver-map-legend"
+          role="list"
+          aria-label={locale === 'ar' ? 'مفتاح الخريطة' : 'Kartenlegende'}
+        >
+          {restaurantLat != null && (
+            <div role="listitem" className="flex items-center gap-1.5 bg-white/95 backdrop-blur-sm rounded-full px-2.5 py-1 shadow-sm border border-accent-200">
               <div className="w-2 h-2 rounded-full bg-brand-500" />
-              <span className="text-[10px] font-extrabold text-text uppercase tracking-wide">
+              <span className="text-[10px] font-extrabold text-slate-900 uppercase tracking-wide">
                 {locale === 'ar' ? 'مطعم' : 'Restaurant'}
               </span>
             </div>
           )}
-          {customerLat && (
-            <div className="flex items-center gap-1.5 bg-white/95 backdrop-blur-sm rounded-full px-2.5 py-1 shadow-sm border border-success/30">
+          {customerLat != null && (
+            <div role="listitem" className="flex items-center gap-1.5 bg-white/95 backdrop-blur-sm rounded-full px-2.5 py-1 shadow-sm border border-success/30">
               <div className="w-2 h-2 rounded-full bg-emerald-500" />
-              <span className="text-[10px] font-extrabold text-text uppercase tracking-wide">
+              <span className="text-[10px] font-extrabold text-slate-900 uppercase tracking-wide">
                 {locale === 'ar' ? 'عميل' : 'Kunde'}
               </span>
             </div>
           )}
-          {driverLat && (
-            <div className="flex items-center gap-1.5 bg-white/95 backdrop-blur-sm rounded-full px-2.5 py-1 shadow-sm border border-info/30">
+          {driverLat != null && (
+            <div role="listitem" className="flex items-center gap-1.5 bg-white/95 backdrop-blur-sm rounded-full px-2.5 py-1 shadow-sm border border-info/30">
               <div className="w-2 h-2 rounded-full bg-blue-500" />
-              <span className="text-[10px] font-extrabold text-text uppercase tracking-wide">
+              <span className="text-[10px] font-extrabold text-slate-900 uppercase tracking-wide">
                 {locale === 'ar' ? 'أنت' : 'Sie'}
               </span>
             </div>
@@ -290,31 +302,7 @@ export function DriverOrderMap({
   );
 }
 
-async function loadGoogleMaps(apiKey: string): Promise<any> {
-  if (typeof window !== 'undefined' && (window as any).google?.maps) {
-    return (window as any).google.maps;
-  }
-  return new Promise((resolve, reject) => {
-    // Timeout after 5s to ensure fallback to OSM works
-    const timeout = setTimeout(() => reject(new Error('Google Maps load timeout')), 5000);
-    const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&v=weekly&libraries=places`;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => {
-      clearTimeout(timeout);
-      resolve((window as any).google.maps);
-    };
-    script.onerror = () => {
-      clearTimeout(timeout);
-      reject(new Error('Failed to load Google Maps'));
-    };
-    document.head.appendChild(script);
-  });
-}
-
-function getMarkerIcon(type: 'driver' | 'restaurant' | 'customer'): any {
-  const base = 'https://maps.google.com/mapfiles/ms/icons/';
+function getMarkerIcon(type: 'driver' | 'restaurant' | 'customer'): google.maps.Symbol | null {
   switch (type) {
     case 'driver':
       return {
@@ -329,7 +317,7 @@ function getMarkerIcon(type: 'driver' | 'restaurant' | 'customer'): any {
     case 'restaurant':
       return {
         path: 'M 0,-2 L -10,-2 L -10,8 L -3,8 L -3,16 L 3,16 L 3,8 L 10,8 L 10,-2 Z',
-        fillColor: '#DC2626',
+        fillColor: '#E10600',
         fillOpacity: 1,
         strokeColor: 'white',
         strokeWeight: 2,
@@ -347,6 +335,19 @@ function getMarkerIcon(type: 'driver' | 'restaurant' | 'customer'): any {
     default:
       return null;
   }
+}
+
+function getAdvancedMarkerVisual(type: 'driver' | 'restaurant' | 'customer'): HTMLDivElement {
+  const visual = createGoogleMarkerVisual(
+    type === 'driver' ? '➤' : type === 'restaurant' ? 'R' : '⌂',
+    {
+      background: type === 'driver' ? '#3b82f6' : type === 'restaurant' ? '#E10600' : '#10b981',
+      size: type === 'driver' ? 34 : 38,
+      radius: type === 'driver' ? '50% 50% 50% 0' : '10px',
+    },
+  );
+  if (type === 'driver') visual.style.transform = 'rotate(-45deg)';
+  return visual;
 }
 
 const mapStyles = [

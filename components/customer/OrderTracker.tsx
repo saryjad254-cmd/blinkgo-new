@@ -8,7 +8,6 @@ import Truck from 'lucide-react/dist/esm/icons/truck';
 import PackageCheck from 'lucide-react/dist/esm/icons/package-check';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Navigation from 'lucide-react/dist/esm/icons/navigation';
-import X from 'lucide-react/dist/esm/icons/x';
 import Link from 'next/link';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import type { Order, OrderStatus } from '@/lib/types';
@@ -18,7 +17,7 @@ import type { Order, OrderStatus } from '@/lib/types';
  * Uses i18n for all labels so DE/AR stay consistent.
  */
 export const OrderTracker = memo(function OrderTracker({ initialOrder }: { initialOrder: Order }) {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const [order, setOrder] = useState<Order>(initialOrder);
 
   const desc = t.customer.orderStatusDescription;

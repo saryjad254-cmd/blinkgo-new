@@ -1,6 +1,6 @@
 'use client';
 
-import type { HTMLAttributes, ReactNode } from 'react';
+import type { HTMLAttributes } from 'react';
 import { cn } from '@/lib/cn';
 
 /**
@@ -37,23 +37,21 @@ interface BlinkCardProps extends HTMLAttributes<HTMLDivElement> {
 
 const variantStyles: Record<Variant, string> = {
   default:
-    'bg-surface border border-edge shadow-sm ' +
-    'dark:bg-bg-elevated dark:border-edge',
+    'bg-surface-2 border border-border shadow-sm',
   elevated:
-    'bg-surface border border-edge-light shadow-lg ' +
-    'dark:bg-bg-elevated',
+    'bg-surface-2 border border-border shadow-xl',
   brand:
-    'bg-surface border border-edge shadow-md ' +
-    'before:absolute before:top-0 before:inset-x-0 before:h-1 before:bg-brand-red before:rounded-t-2xl ' +
+    'bg-surface-2 border border-border shadow-md ' +
+    'before:absolute before:top-0 before:inset-x-0 before:h-1 before:bg-brand before:rounded-t-2xl ' +
     'relative',
   dark:
-    'bg-brand-black border border-brand-black/40 shadow-brand-black text-white',
+    'bg-canvas border border-border shadow-xl text-white',
   outline:
-    'bg-transparent border-2 border-edge-strong',
+    'bg-transparent border-2 border-border-strong',
   glass:
     'bg-white/5 backdrop-blur-2xl border border-white/10 shadow-xl',
   flat:
-    'bg-surface-light border-0',
+    'bg-surface-1 border-0',
 };
 
 const paddingStyles: Record<Padding, string> = {
@@ -72,9 +70,9 @@ const radiusStyles = {
 };
 
 const accentStyles = {
-  red: 'before:bg-brand-red',
+  red: 'before:bg-brand',
   yellow: 'before:bg-brand-yellow',
-  black: 'before:bg-brand-black',
+  black: 'before:bg-canvas',
 };
 
 export function BlinkCard({
@@ -144,7 +142,7 @@ export function BlinkCardFooter({ className, children, ...rest }: HTMLAttributes
   return (
     <div
       className={cn(
-        'flex items-center gap-2 mt-4 pt-4 border-t border-edge',
+        'flex items-center gap-2 mt-4 pt-4 border-t border-border',
         className,
       )}
       {...rest}

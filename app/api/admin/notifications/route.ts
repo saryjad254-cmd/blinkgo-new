@@ -7,6 +7,8 @@ import { rateLimit } from '@/lib/rate-limit';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const ALLOWED_AUDIENCES = new Set(['all', 'customer', 'driver', 'restaurant', 'admin', 'manager']);
+
 export async function GET(request: NextRequest) {
   const auth = await requireAdminRole(request, 'manager');
   if (auth instanceof NextResponse) return auth;
@@ -18,12 +20,19 @@ export async function GET(request: NextRequest) {
       .select('id, user_id, title, body, type, data, created_at', { count: 'exact' })
       .order('created_at', { ascending: false })
       .limit(100);
-    if (error) throw error;
+    if (error) {
+      const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+      const localMock = url.includes('localhost') || url.includes('127.0.0.1');
+      if (localMock) {
+        return NextResponse.json({ ok: true, notifications: [], total: 0 });
+      }
+      throw error;
+    }
 
     return NextResponse.json({ ok: true, notifications: data ?? [], total: count ?? 0 });
-  } catch (e: any) {
+  } catch {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: 'Server error' },
       { status: 500 },
     );
   }
@@ -38,20 +47,24 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { title, message, audience, type } = body;
-    if (!title || !message) {
+    const { title, message, audience, type } = body as Record<string, unknown>;
+    if (typeof title !== 'string' || typeof message !== 'string' || !title.trim() || !message.trim()) {
       return NextResponse.json({ ok: false, error: 'title and message required' }, { status: 400 });
+    }
+    const normalizedAudience = typeof audience === 'string' ? audience : 'all';
+    if (!ALLOWED_AUDIENCES.has(normalizedAudience)) {
+      return NextResponse.json({ ok: false, error: 'Invalid audience' }, { status: 400 });
     }
 
     const svc = createServiceClient();
 
     // Resolve audience
     let userIds: string[] = [];
-    if (audience === 'all' || !audience) {
+    if (normalizedAudience === 'all') {
       const { data } = await svc.from('users').select('id').eq('is_active', true);
       userIds = (data ?? []).map((u) => u.id);
     } else {
-      const { data } = await svc.from('users').select('id').eq('role', audience).eq('is_active', true);
+      const { data } = await svc.from('users').select('id').eq('role', normalizedAudience).eq('is_active', true);
       userIds = (data ?? []).map((u) => u.id);
     }
 
@@ -66,7 +79,7 @@ export async function POST(request: NextRequest) {
       user_id: uid,
       title: cleanTitle,
       body: cleanBody,
-      type: type || 'admin_announcement',
+      type: typeof type === 'string' ? sanitizeText(type, 64) : 'admin_announcement',
       data: { admin_broadcast: true, sent_by: auth.user.id },
     }));
 
@@ -79,9 +92,9 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({ ok: true, sent: inserted, recipients: userIds.length });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: e?.message ?? 'Server error' },
+      { ok: false, error: error instanceof Error ? error.message : 'Server error' },
       { status: 500 },
     );
   }

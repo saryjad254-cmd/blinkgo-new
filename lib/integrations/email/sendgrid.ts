@@ -6,6 +6,11 @@
 
 import type { EmailProvider, EmailMessage, EmailResult, EmailProviderName } from './types';
 import { IntegrationError, readProviderConfig } from '../types';
+import { assertEmailAddress, assertEmailAddresses } from './safety';
+import { rejectSuppressedRecipients } from './suppression';
+
+type SendGridAddress = { email: string; name?: string };
+type SendGridPersonalization = { to: SendGridAddress[]; subject: string; cc?: SendGridAddress[]; bcc?: SendGridAddress[] };
 
 export class SendGridProvider implements EmailProvider {
   public readonly name: EmailProviderName = 'sendgrid';
@@ -14,8 +19,8 @@ export class SendGridProvider implements EmailProvider {
 
   constructor() {
     const cfg = readProviderConfig('SENDGRID');
-    this.apiKey = cfg.secret_key;
-    this.enabled = cfg.enabled && !!this.apiKey;
+    this.apiKey = process.env.SENDGRID_API_KEY || String(cfg.secret_key || '');
+    this.enabled = Boolean(this.apiKey);
   }
 
   private requireEnabled(): void {
@@ -26,15 +31,16 @@ export class SendGridProvider implements EmailProvider {
 
   private parseAddress(addr: string): { email: string; name?: string } {
     const match = addr.match(/^(.+?)\s*<(.+?)>$/);
-    if (match) return { name: match[1].trim(), email: match[2] };
-    return { email: addr };
+    if (match) return { name: match[1].trim(), email: assertEmailAddress(match[2]) };
+    return { email: assertEmailAddress(addr) };
   }
 
   async send(message: EmailMessage): Promise<EmailResult> {
     this.requireEnabled();
-    const recipients = Array.isArray(message.to) ? message.to : [message.to];
+    const recipients = assertEmailAddresses(message.to);
+    await rejectSuppressedRecipients(recipients);
     const from = this.parseAddress(message.from);
-    const personalizations: any[] = [
+    const personalizations: SendGridPersonalization[] = [
       {
         to: recipients.map((r) => this.parseAddress(r)),
         subject: message.subject,
@@ -46,12 +52,12 @@ export class SendGridProvider implements EmailProvider {
     if (message.bcc) {
       personalizations[0].bcc = (Array.isArray(message.bcc) ? message.bcc : [message.bcc]).map((r) => this.parseAddress(r));
     }
-    const content: any[] = [];
+    const content: Array<{ type: string; value: string }> = [];
     if (message.text) content.push({ type: 'text/plain', value: message.text });
     if (message.html) content.push({ type: 'text/html', value: message.html });
     if (content.length === 0) content.push({ type: 'text/plain', value: message.subject });
 
-    const body: any = {
+    const body: Record<string, unknown> = {
       personalizations,
       from,
       content,
@@ -80,11 +86,12 @@ export class SendGridProvider implements EmailProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new IntegrationError('sendgrid', err?.errors?.[0]?.message || 'API_ERROR', 'SendGrid send failed', {
-        retryable: res.status >= 500,
+      const err = await res.json() as { errors?: Array<{ message?: string }> };
+      throw new IntegrationError('sendgrid', err.errors?.[0]?.message || 'API_ERROR', 'SendGrid send failed', {
+        retryable: res.status === 408 || res.status === 429 || res.status >= 500,
       });
     }
     return {

@@ -30,7 +30,9 @@ export const AddToCartButton = memo(function AddToCartButton({ product, restaura
   const add = useCart((s) => s.add);
   const setQuantity = useCart((s) => s.setQuantity);
   const cartQty = useCart((s) =>
-    s.items.find((i) => i.product_id === product.id)?.quantity ?? 0
+    s.items
+      .filter((i) => i.restaurant_id === restaurant.id && i.product_id === product.id)
+      .reduce((sum, i) => sum + i.quantity, 0)
   );
 
   const labels = {
@@ -59,6 +61,7 @@ export const AddToCartButton = memo(function AddToCartButton({ product, restaura
       restaurant_lat: restaurant.latitude,
       restaurant_lng: restaurant.longitude,
       restaurant_min_order: restaurant.min_order_amount,
+      configuration: undefined, // no modifiers when added from a list card
     });
     toast({ type: 'success', message: labels.addedToast });
     setAnimating(true);
@@ -78,12 +81,22 @@ export const AddToCartButton = memo(function AddToCartButton({ product, restaura
       restaurant_lat: restaurant.latitude,
       restaurant_lng: restaurant.longitude,
       restaurant_min_order: restaurant.min_order_amount,
+      configuration: undefined,
     });
   }, [add, product.id, product.name, product.price, product.image_urls, restaurant.id, restaurant.name, restaurant.latitude, restaurant.longitude, restaurant.min_order_amount]);
 
   const handleDecrement = useCallback(() => {
-    setQuantity(product.id, Math.max(0, cartQty - 1));
-  }, [setQuantity, product.id, cartQty]);
+    // Decrement the most recently added line for this product (LIFO). The
+    // exact key doesn't matter for "one tap = remove 1" — but we must
+    // target the *line* with the highest quantity so the UI count stays
+    // consistent.
+    const target = useCart.getState().items
+      .filter((i) => i.restaurant_id === restaurant.id && i.product_id === product.id)
+      .sort((a, b) => b.quantity - a.quantity)[0];
+    if (target) {
+      setQuantity(target.config_key, Math.max(0, target.quantity - 1));
+    }
+  }, [setQuantity, product.id, restaurant.id]);
 
   if (!product.is_available) {
     return (

@@ -3,19 +3,16 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Navigation from 'lucide-react/dist/esm/icons/navigation';
-import Copy from 'lucide-react/dist/esm/icons/copy';
 import Phone from 'lucide-react/dist/esm/icons/phone';
 import Check from 'lucide-react/dist/esm/icons/check';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
 import ChevronUp from 'lucide-react/dist/esm/icons/chevron-up';
-import ExternalLink from 'lucide-react/dist/esm/icons/external-link';
 import Crosshair from 'lucide-react/dist/esm/icons/crosshair';
-import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
 import CopyIcon from 'lucide-react/dist/esm/icons/copy';
-import { useT, safeT } from '@/lib/i18n/I18nProvider';
+import { useI18n, useT, safeT } from '@/lib/i18n/I18nProvider';
 import { googleMapsUrl, googleMapsDirectionsUrl } from '@/lib/maps/google-maps';
 import { checkDeliveryZone } from '@/lib/delivery-zone';
 import { cn } from '@/lib/cn';
@@ -122,6 +119,7 @@ export function DeliveryAddressCard({
   mapProvider = 'google',
 }: Props) {
   const t = useT();
+  const { locale } = useI18n();
   // Normalize incoming address (string or object)
   const addr: DeliveryAddress = useMemo(() => {
     if (typeof rawAddress === 'string') {
@@ -181,18 +179,25 @@ export function DeliveryAddressCard({
     }
   }, [addr.address]);
 
-  if (!addr.address) return null;
-
-  // Build the Google Maps URL
+  // Build a provider-specific map URL without exposing an API key.
   const mapsUrl = useMemo(() => {
+    if (mapProvider === 'apple') {
+      const query = encodeURIComponent(addr.address);
+      return lat != null && lng != null
+        ? `https://maps.apple.com/?q=${query}&ll=${lat},${lng}`
+        : `https://maps.apple.com/?q=${query}`;
+    }
     if (lat != null && lng != null) {
       return googleMapsUrl(lat, lng, addr.address);
     }
     return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(addr.address)}`;
-  }, [lat, lng, addr.address]);
+  }, [lat, lng, addr.address, mapProvider]);
 
   const directionsUrl = useMemo(() => {
     if (lat != null && lng != null && directionsFrom) {
+      if (mapProvider === 'apple') {
+        return `https://maps.apple.com/?saddr=${directionsFrom.lat},${directionsFrom.lng}&daddr=${lat},${lng}&dirflg=d`;
+      }
       return googleMapsDirectionsUrl(
         directionsFrom.lat,
         directionsFrom.lng,
@@ -202,7 +207,7 @@ export function DeliveryAddressCard({
       );
     }
     return null;
-  }, [lat, lng, directionsFrom]);
+  }, [lat, lng, directionsFrom, mapProvider]);
 
   // Variant colors
   const theme = useMemo(() => {
@@ -246,6 +251,9 @@ export function DeliveryAddressCard({
     }
   }, [variant]);
 
+  // Guard: only render when we actually have an address
+  if (!addr.address) return null;
+
   // Labels (3-locale aware via i18n with safeT fallback)
   const labels = {
     title:
@@ -257,13 +265,17 @@ export function DeliveryAddressCard({
         : variant === 'driver'
         ? safeT(t, 'driver.address', 'Adresse')
         : safeT(t, 'customer.address', 'Adresse')),
-    openInMaps: safeT(t, 'customer.openInMaps', 'In Google Maps öffnen'),
-    directions: safeT(t, 'driver.directions', 'Route'),
+    openInMaps: safeT(t, 'customer.openInMaps', locale === 'ar' ? 'فتح في خرائط Google' : locale === 'en' ? 'Open in Google Maps' : 'In Google Maps öffnen'),
+    directions: safeT(
+      t,
+      'driver.directions',
+      locale === 'ar' ? 'الاتجاهات' : locale === 'en' ? 'Directions' : 'Route',
+    ),
     call: safeT(t, 'restaurant.callCustomer', 'Anrufen'),
-    copy: safeT(t, 'common.copy', 'Kopieren'),
-    copied: safeT(t, 'common.copied', 'Kopiert!'),
-    showMore: safeT(t, 'customer.showMore', 'Mehr anzeigen'),
-    showLess: safeT(t, 'customer.showLess', 'Weniger anzeigen'),
+    copy: safeT(t, 'common.copy', locale === 'ar' ? 'نسخ' : locale === 'en' ? 'Copy' : 'Kopieren'),
+    copied: safeT(t, 'common.copied', locale === 'ar' ? 'تم النسخ!' : locale === 'en' ? 'Copied!' : 'Kopiert!'),
+    showMore: safeT(t, 'customer.showMore', locale === 'ar' ? 'عرض المزيد' : locale === 'en' ? 'Show more' : 'Mehr anzeigen'),
+    showLess: safeT(t, 'customer.showLess', locale === 'ar' ? 'عرض أقل' : locale === 'en' ? 'Show less' : 'Weniger anzeigen'),
     floor: safeT(t, 'customer.floor', 'Etage'),
     door: safeT(t, 'customer.door', 'Tür'),
     notes: safeT(t, 'customer.notes', 'Notizen'),
@@ -444,11 +456,9 @@ export function DeliveryAddressCard({
               ? 'bg-success/15 text-success border border-success/30'
               : 'bg-danger/15 text-danger border border-danger/30',
           )}
-          title={
-            zoneCheck.ok
-              ? `Innerhalb des Liefergebiets (${zoneCheck.distanceKm.toFixed(1)} km)`
-              : `Außerhalb des Liefergebiets (${zoneCheck.distanceKm.toFixed(1)} km)`
-          }
+          title={zoneCheck.ok
+            ? `${locale === 'ar' ? 'ضمن منطقة التوصيل' : locale === 'en' ? 'Within delivery area' : 'Innerhalb des Liefergebiets'} (${zoneCheck.distanceKm.toFixed(1)} km)`
+            : `${locale === 'ar' ? 'خارج منطقة التوصيل' : locale === 'en' ? 'Outside delivery area' : 'Außerhalb des Liefergebiets'} (${zoneCheck.distanceKm.toFixed(1)} km)`}
         >
           {zoneCheck.ok ? (
             <CheckCircle2 className="w-3 h-3" />
@@ -457,8 +467,8 @@ export function DeliveryAddressCard({
           )}
           <span>
             {zoneCheck.ok
-              ? `Im Liefergebiet (${zoneCheck.distanceKm.toFixed(1)} km)`
-              : `Außerhalb (${zoneCheck.distanceKm.toFixed(1)} km)`}
+              ? `${locale === 'ar' ? 'ضمن منطقة التوصيل' : locale === 'en' ? 'In delivery area' : 'Im Liefergebiet'} (${zoneCheck.distanceKm.toFixed(1)} km)`
+              : `${locale === 'ar' ? 'خارج المنطقة' : locale === 'en' ? 'Outside area' : 'Außerhalb'} (${zoneCheck.distanceKm.toFixed(1)} km)`}
           </span>
         </div>
       )}

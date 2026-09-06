@@ -1,21 +1,17 @@
 'use client';
 
 import { useState, useTransition } from 'react';
-import UserIcon from 'lucide-react/dist/esm/icons/user';
 import Power from 'lucide-react/dist/esm/icons/power';
 import PowerOff from 'lucide-react/dist/esm/icons/power-off';
 import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
 import Truck from 'lucide-react/dist/esm/icons/truck';
-import Clock from 'lucide-react/dist/esm/icons/clock';
-import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import Wallet from 'lucide-react/dist/esm/icons/wallet';
-import Bell from 'lucide-react/dist/esm/icons/bell';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
 import Star from 'lucide-react/dist/esm/icons/star';
 import Link from 'next/link';
+import Image from 'next/image';
 import { cn } from '@/lib/cn';
 import { formatEUR } from '@/lib/format';
-import { OnlineToggle } from './OnlineToggle';
 
 export interface DriverHeaderProps {
   driverName: string;
@@ -99,7 +95,7 @@ export function DriverHeader({
     startTransition(async () => {
       try {
         await onToggleOnline?.(next);
-      } catch (e) {
+      } catch {
         setOptimisticOnline(!next); // revert
       }
     });
@@ -155,10 +151,13 @@ export function DriverHeader({
                 )}
               >
                 {driverPhoto ? (
-                  <img
+                  <Image
                     src={driverPhoto}
                     alt={driverName}
-                    className="w-full h-full object-cover rounded-2xl"
+                    fill
+                    sizes="(max-width: 640px) 56px, 64px"
+                    unoptimized
+                    className="object-cover rounded-2xl"
                   />
                 ) : (
                   initials

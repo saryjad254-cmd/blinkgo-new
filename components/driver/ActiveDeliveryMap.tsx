@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useState } from 'react';
 import { useDriverGPS } from '@/lib/hooks/useDriverGPS';
 import { DriverOrderMap } from '@/components/driver/DriverOrderMap';
 
@@ -47,7 +47,7 @@ export function ActiveDeliveryMap({
   );
 
   // GPS broadcaster. Drivers on an active delivery are presumed online.
-  const gps = useDriverGPS({
+  useDriverGPS({
     enabled: true,
     activeOrderId: orderId,
     minDistanceMeters: 6,
@@ -58,13 +58,6 @@ export function ActiveDeliveryMap({
       setDriverPos({ lat: fix.lat, lng: fix.lng });
     },
   });
-
-  // If the hook emits its first fix, use it
-  useEffect(() => {
-    if (gps.currentFix) {
-      setDriverPos({ lat: gps.currentFix.lat, lng: gps.currentFix.lng });
-    }
-  }, [gps.currentFix?.lat, gps.currentFix?.lng]);
 
   return (
     <DriverOrderMap

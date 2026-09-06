@@ -3,7 +3,6 @@
 import { useEffect, useState } from 'react';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { useRouter } from 'next/navigation';
-import Link from 'next/link';
 import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
@@ -11,6 +10,7 @@ import CheckCircle from 'lucide-react/dist/esm/icons/check-circle';
 import Database from 'lucide-react/dist/esm/icons/database';
 import Trash2 from 'lucide-react/dist/esm/icons/trash-2';
 import Archive from 'lucide-react/dist/esm/icons/archive';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 import History from 'lucide-react/dist/esm/icons/history';
 
 type PreviewData = {
@@ -88,10 +88,10 @@ export default function AdminResetPage() {
         setShowConfirmDialog(false);
         loadData();
       } else {
-        setResult({ ok: false, message: data.error || (locale === 'ar' ? 'فشل في إعادة التعيين' : locale === 'en' ? 'Reset failed' : 'Fehler beim Reset') });
+        setResult({ ok: false, message: extractErrorMessage(data, locale === 'ar' ? 'فشل في إعادة التعيين' : locale === 'en' ? 'Reset failed' : 'Fehler beim Reset') });
       }
-    } catch (e: any) {
-      setResult({ ok: false, message: e.message });
+    } catch (error: unknown) {
+      setResult({ ok: false, message: extractErrorMessage(error, 'Reset failed') });
     } finally {
       setResetting(false);
     }

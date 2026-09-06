@@ -29,6 +29,8 @@ interface Props {
     lng: number;
     placeId?: string;
   }) => void;
+  /** Called immediately when the user edits or clears the address text. */
+  onInputChange?: (value: string) => void;
   /** Disable interaction */
   disabled?: boolean;
   /** Custom placeholder */
@@ -65,6 +67,7 @@ export function AddressInput({
   lat: propLat,
   lng: propLng,
   onChange,
+  onInputChange,
   disabled,
   placeholder,
   variant = 'default',
@@ -84,7 +87,6 @@ export function AddressInput({
   const [resolved, setResolved] = useState<{ lat: number; lng: number } | null>(
     propLat != null && propLng != null ? { lat: propLat, lng: propLng } : null
   );
-  const [resolvedText, setResolvedText] = useState<string | null>(value || null);
   const [locationError, setLocationError] = useState<string | null>(null);
 
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -100,23 +102,26 @@ export function AddressInput({
 
   // Sync external value changes
   useEffect(() => {
-    if (value !== undefined && value !== input) {
-      setInput(value);
-    }
+    if (value === undefined || value === input) return;
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setInput(value); });
+    return () => { cancelled = true; };
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (propLat != null && propLng != null) {
-      setResolved({ lat: propLat, lng: propLng });
-    }
+    if (propLat == null || propLng == null) return;
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) setResolved({ lat: propLat, lng: propLng }); });
+    return () => { cancelled = true; };
   }, [propLat, propLng]);
 
   // Debounced fetch of suggestions
   useEffect(() => {
     const trimmed = input.trim();
     if (trimmed.length < 3) {
-      setPredictions([]);
-      return;
+      let cancelled = false;
+      queueMicrotask(() => { if (!cancelled) setPredictions([]); });
+      return () => { cancelled = true; };
     }
     let cancelled = false;
     const handle = setTimeout(async () => {
@@ -168,7 +173,6 @@ export function AddressInput({
         if (data?.ok && data?.data) {
           setInput(pred.description);
           setResolved({ lat: data.data.lat, lng: data.data.lng });
-          setResolvedText(pred.description);
           setShowSuggestions(false);
           onChange({
             address: pred.description,
@@ -206,7 +210,6 @@ export function AddressInput({
           const address = data?.ok ? data.data.formattedAddress : 'Aktueller Standort';
           setInput(address);
           setResolved({ lat: latitude, lng: longitude });
-          setResolvedText(address);
           setShowSuggestions(false);
           onChange({ address, lat: latitude, lng: longitude });
         } catch {
@@ -227,7 +230,6 @@ export function AddressInput({
             : locale === 'en'
             ? 'Cannot access your location. Please check permissions.'
             : 'Standort nicht verfügbar. Bitte Berechtigungen prüfen.';
-        // eslint-disable-next-line no-console
         console.warn('[AddressInput] Geolocation error:', err.message);
         setLocationError(msg);
       },
@@ -253,22 +255,29 @@ export function AddressInput({
           e.preventDefault();
           (async () => {
             setLoading(true);
-            const res = await fetch('/api/maps/geocode', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ action: 'geocode', address: input.trim() }),
-            });
-            const data = await res.json();
-            setLoading(false);
-            if (data?.ok && data?.data) {
-              setResolved({ lat: data.data.lat, lng: data.data.lng });
-              setResolvedText(input.trim());
-              setShowSuggestions(false);
-              onChange({
-                address: input.trim(),
-                lat: data.data.lat,
-                lng: data.data.lng,
+            setLocationError(null);
+            try {
+              const res = await fetch('/api/maps/geocode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'geocode', address: input.trim() }),
               });
+              const data = await res.json();
+              if (data?.ok && data?.data) {
+                setResolved({ lat: data.data.lat, lng: data.data.lng });
+                setShowSuggestions(false);
+                onChange({
+                  address: input.trim(),
+                  lat: data.data.lat,
+                  lng: data.data.lng,
+                });
+              } else {
+                setLocationError(locale === 'ar' ? 'تعذر التحقق من هذا العنوان.' : locale === 'en' ? 'We could not verify this address.' : 'Diese Adresse konnte nicht bestätigt werden.');
+              }
+            } catch {
+              setLocationError(locale === 'ar' ? 'تعذر الاتصال بخدمة العناوين.' : locale === 'en' ? 'The address service is unavailable.' : 'Der Adressdienst ist nicht erreichbar.');
+            } finally {
+              setLoading(false);
             }
           })();
         }
@@ -276,7 +285,7 @@ export function AddressInput({
         setShowSuggestions(false);
       }
     },
-    [activeIndex, predictions, resolveAndEmit, allowCustom, input, onChange]
+    [activeIndex, predictions, resolveAndEmit, allowCustom, input, locale, onChange]
   );
 
   const labels = useMemo(
@@ -316,8 +325,11 @@ export function AddressInput({
           type="text"
           value={input}
           onChange={(e) => {
-            setInput(e.target.value);
+            const nextValue = e.target.value;
+            setInput(nextValue);
+            onInputChange?.(nextValue);
             setShowSuggestions(true);
+            setLocationError(null);
             if (resolved) {
               setResolved(null); // user is editing
             }
@@ -347,6 +359,8 @@ export function AddressInput({
               setInput('');
               setPredictions([]);
               setResolved(null);
+              setLocationError(null);
+              onInputChange?.('');
             }}
             className="text-text-muted hover:text-white flex-shrink-0"
             aria-label="Clear"

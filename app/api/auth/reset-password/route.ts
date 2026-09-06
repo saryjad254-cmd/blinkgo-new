@@ -3,7 +3,7 @@ import crypto from 'crypto';
 import { createServiceClient } from '@/lib/supabase/service';
 import { authRateLimiters } from '@/lib/rate-limit';
 import { sanitizeEmail, isValidEmail } from '@/lib/validation';
-import { buildAuthUrl, getCanonicalBaseUrl } from '@/lib/auth/redirect-url';
+import { getCanonicalBaseUrl } from '@/lib/auth/redirect-url';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
@@ -35,9 +35,20 @@ function hashToken(token: string): string {
 }
 
 function signToken(token: string, email: string): string {
-  // Simple HMAC for tamper detection. Email signature stored alongside hash.
+  // SECURITY: the reset token is the only thing standing between a
+  // password-reset email and account takeover. We sign it with a
+  // dedicated RESET_TOKEN_SECRET (NOT the service-role key — that's
+  // meant to stay private to the server). If the env var is missing,
+  // fail closed: throw, do not silently fall back to a guessable key.
+  const secret = process.env.RESET_TOKEN_SECRET;
+  if (!secret) {
+    throw new Error(
+      'RESET_TOKEN_SECRET is not configured. Refusing to sign reset tokens with a ' +
+      'fallback secret — set it in your environment before deploying.',
+    );
+  }
   const hmac = crypto
-    .createHmac('sha256', process.env.SUPABASE_SERVICE_ROLE_KEY || 'fallback')
+    .createHmac('sha256', secret)
     .update(`${token}.${email}`)
     .digest('hex')
     .slice(0, 16);
@@ -65,6 +76,25 @@ async function resetPasswordHandler(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: true });
     }
 
+    const localTestBackend = ((process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').includes('localhost')
+        || (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').includes('127.0.0.1'));
+    if (localTestBackend && !process.env.RESET_TOKEN_SECRET) {
+      // Keep the no-enumeration contract in local demos without pretending
+      // that an email was sent. Production still fails closed below.
+      return ok({ sent: false, reason: 'email_not_configured' });
+    }
+
+    if (
+      !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      !process.env.SUPABASE_SERVICE_ROLE_KEY ||
+      !process.env.RESET_TOKEN_SECRET
+    ) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'PASSWORD_RESET_UNAVAILABLE', message: 'Password reset is not configured' } },
+        { status: 503 },
+      );
+    }
+
     // Use the canonical base URL (validated against allowlist). Falls back
     // to the request origin in development ONLY. Production throws if
     // APP_URL is missing — never falls back to localhost or arbitrary host.
@@ -82,8 +112,9 @@ async function resetPasswordHandler(req: NextRequest): Promise<NextResponse> {
     const token = crypto.randomBytes(32).toString('hex'); // 64-char url-safe
     const expiresAt = new Date(Date.now() + RESET_TOKEN_TTL_MIN * 60 * 1000).toISOString();
 
+    let customTokenStored = false;
     try {
-      await supabase
+      const { error: tokenInsertError } = await supabase
         .from('password_reset_tokens')
         .insert({
           email,
@@ -92,10 +123,12 @@ async function resetPasswordHandler(req: NextRequest): Promise<NextResponse> {
           used_at: null,
           ip_address: req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || null,
         });
-    } catch (tblErr: any) {
+      if (tokenInsertError) throw tokenInsertError;
+      customTokenStored = true;
+    } catch (tblErr: unknown) {
       // Table might not exist on projects that haven't run the migration.
       // We silently continue — the Supabase recovery email is still sent.
-      console.warn('[reset-password] could not insert token (table missing?):', tblErr?.message);
+      console.warn('[reset-password] could not insert token (table missing?):', tblErr instanceof Error ? tblErr.message : 'unknown error');
     }
 
     // 3) Detect locale from cookie so the email + redirect land in the
@@ -109,12 +142,9 @@ async function resetPasswordHandler(req: NextRequest): Promise<NextResponse> {
     // 4) Send the BRANDED email. The link uses our custom token; the
     //    /reset-password page validates the token via the API and then
     //    triggers the actual password update.
-    const signed = signToken(token, email);
-    const resetLink = `${appUrl}/reset-password?token=${signed}&email=${encodeURIComponent(email)}&lang=${locale}`;
-    // Debug log — never log the token. Only the host and the path.
-    console.log('[reset-password] generated link', { host: new URL(resetLink).host, path: new URL(resetLink).pathname, locale });
-
-    try {
+    if (customTokenStored) try {
+      const signed = signToken(token, email);
+      const resetLink = `${appUrl}/reset-password?token=${signed}&email=${encodeURIComponent(email)}&lang=${locale}`;
       const { sendPasswordResetEmail } = await import('@/lib/email-password-reset');
       const sendResult = await sendPasswordResetEmail({
         to: email,
@@ -125,8 +155,8 @@ async function resetPasswordHandler(req: NextRequest): Promise<NextResponse> {
       if (!sendResult.ok) {
         console.warn('[reset-password] branded email failed (Supabase email is still the fallback):', sendResult.error);
       }
-    } catch (e: any) {
-      console.warn('[reset-password] branded email service threw:', e?.message);
+    } catch (e: unknown) {
+      console.warn('[reset-password] branded email service threw:', e instanceof Error ? e.message : 'unknown error');
     }
 
     return ok({ sent: true });

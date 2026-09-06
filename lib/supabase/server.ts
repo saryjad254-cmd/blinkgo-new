@@ -4,13 +4,13 @@ import { cookies } from 'next/headers';
 const PLACEHOLDER_URL = 'https://placeholder.supabase.co';
 const PLACEHOLDER_KEY = 'placeholder-key-for-build-time-only';
 
-export function createServerClient() {
+export async function createServerClient() {
   // في وقت البناء، الـ env vars قد لا تكون متاحة.
   // نستخدم placeholders آمنة (التطبيق لن يعمل بدون الـ URL الحقيقي في runtime).
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || PLACEHOLDER_URL;
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || PLACEHOLDER_KEY;
 
-  const cookieStore = cookies();
+  const cookieStore = await cookies();
 
   return createSupabaseServerClient(url, key, {
     cookies: {

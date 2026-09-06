@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
-    secureRoute('moderate'),
+    secureRoute('moderate', ['customer', 'driver', 'restaurant', 'manager', 'admin', 'super_admin']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (ctx, r) => createShareLink(ctx.auth.user.id, r as NextRequest) as any,
   )(req)) as unknown as NextResponse;
@@ -27,7 +27,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 async function createShareLink(userId: string, req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
 
     const body = await req.json().catch(() => ({}));
     const { resource_type, resource_id, expires_in_hours } = body;

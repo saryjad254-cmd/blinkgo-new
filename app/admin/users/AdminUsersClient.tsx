@@ -1,21 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Users from 'lucide-react/dist/esm/icons/users';
-import Mail from 'lucide-react/dist/esm/icons/mail';
-import Phone from 'lucide-react/dist/esm/icons/phone';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
 import Power from 'lucide-react/dist/esm/icons/power';
 import PowerOff from 'lucide-react/dist/esm/icons/power-off';
-import Edit from 'lucide-react/dist/esm/icons/edit';
 import Trash2 from 'lucide-react/dist/esm/icons/trash-2';
-import Check from 'lucide-react/dist/esm/icons/check';
 import X from 'lucide-react/dist/esm/icons/x';
 import UserX from 'lucide-react/dist/esm/icons/user-x';
 import UserCheck from 'lucide-react/dist/esm/icons/user-check';
 import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 const T = {
   de: {
@@ -116,6 +112,18 @@ const ROLE_COLORS: Record<string, string> = {
   manager: 'bg-violet-500/15 text-violet-400',
 };
 
+interface ManagedUser {
+  id: string;
+  name?: string | null;
+  email: string;
+  phone?: string | null;
+  role: string;
+  is_active: boolean;
+  is_verified?: boolean;
+  created_at: string;
+  last_login_at?: string | null;
+}
+
 export function AdminUsersClient({
   user,
   locale = 'de',
@@ -125,7 +133,7 @@ export function AdminUsersClient({
 }) {
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [users, setUsers] = useState<any[]>([]);
+  const [users, setUsers] = useState<ManagedUser[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [roleFilter, setRoleFilter] = useState<string>('all');
@@ -148,7 +156,9 @@ export function AdminUsersClient({
   };
 
   useEffect(() => {
-    fetchUsers();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void fetchUsers(); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roleFilter]);
 
@@ -158,7 +168,7 @@ export function AdminUsersClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search]);
 
-  const toggleActive = async (u: any) => {
+  const toggleActive = async (u: ManagedUser) => {
     const res = await fetch('/api/admin/users', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -171,14 +181,14 @@ export function AdminUsersClient({
     }
   };
 
-  const deleteUser = async (u: any) => {
+  const deleteUser = async (u: ManagedUser) => {
     if (!confirm(t.confirmDelete)) return;
     const res = await fetch(`/api/admin/users?id=${u.id}`, { method: 'DELETE' });
     if (res.ok) {
       setUsers((prev) => prev.filter((x) => x.id !== u.id));
     } else {
       const data = await res.json();
-      alert(data.error || 'Delete failed');
+      alert(extractErrorMessage(data, 'Delete failed'));
     }
   };
 
@@ -201,7 +211,7 @@ export function AdminUsersClient({
         setSelected(new Set());
       } else {
         const data = await res.json();
-        alert(data.error || 'Bulk action failed');
+        alert(extractErrorMessage(data, 'Bulk action failed'));
       }
     } finally {
       setBusy(false);

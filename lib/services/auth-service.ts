@@ -19,16 +19,9 @@ import {
   ValidationError,
 } from '@/lib/errors';
 import { logger } from '@/lib/logging';
+import { getRoleHomePath } from '@/lib/auth/role-routing';
 
 export type UserRole = 'customer' | 'driver' | 'restaurant' | 'admin' | 'super_admin' | 'manager';
-export type LoginRedirectRole = 'customer' | 'driver' | 'restaurant' | 'admin';
-
-const ROLE_REDIRECTS: Record<LoginRedirectRole, string> = {
-  customer: '/search',
-  driver: '/driver/dashboard',
-  restaurant: '/restaurant/dashboard',
-  admin: '/admin',
-};
 
 export interface AuthenticatedUser {
   id: string;
@@ -119,22 +112,17 @@ export async function lookupUser(userId: string) {
   return data;
 }
 
-function resolveRedirectPath(role: UserRole): string {
-  const r = role === 'super_admin' || role === 'manager' ? 'admin' : role;
-  return ROLE_REDIRECTS[r as LoginRedirectRole] ?? '/search';
-}
-
 /**
  * Check if the current request arrived over HTTPS.
  * Trusts X-Forwarded-Proto only if behind a known proxy (Vercel sets this).
  */
-function requestIsHttps(): boolean {
+async function requestIsHttps(): Promise<boolean> {
   try {
     // 1) Check the explicit X-Forwarded-Proto header (set by reverse proxies
     //    like Vercel, Cloudflare, nginx, localtunnel, etc.).
 
     try {
-      const h = headers();
+      const h = await headers();
       const xfp = h.get('x-forwarded-proto');
       if (xfp) return xfp.toLowerCase().startsWith('https');
     } catch {
@@ -170,7 +158,7 @@ export class AuthService {
     });
     if (!res.ok) {
       // Log the failure (server-side only) without leaking detail
-      logger.warn('Login failed', { email, status: res.status });
+      logger.warn('Login failed', { status: res.status });
       throw new AuthenticationError('Invalid email or password');
     }
     const responseBody: any = await res.json();
@@ -211,13 +199,29 @@ export class AuthService {
       throw new AuthorizationError('This account has been disabled');
     }
 
+    // A successful Supabase password grant proves that the Auth email gate
+    // has been satisfied. This also covers customers who confirmed through
+    // the Supabase SMTP magic-link fallback instead of BlinkGo's numeric OTP.
+    // Keep the public authorization profile in sync before issuing app cookies.
+    if (profile.is_verified !== true && responseBody?.user?.email_confirmed_at) {
+      const { error: verificationSyncError } = await adminClient()
+        .from('users')
+        .update({ is_verified: true })
+        .eq('id', userId);
+      if (verificationSyncError) {
+        logger.error('Verified auth profile could not be synchronized', { userId }, verificationSyncError);
+        throw new AuthenticationError('Verified account profile could not be synchronized');
+      }
+      profile.is_verified = true;
+    }
+
     return {
       user: {
         id: profile.id,
         email: profile.email,
         name: profile.name,
         role: profile.role as UserRole,
-        redirectPath: resolveRedirectPath(profile.role as UserRole),
+        redirectPath: getRoleHomePath(profile.role),
       },
       tokens,
     };
@@ -228,18 +232,26 @@ export class AuthService {
    * SECURITY: httpOnly=true prevents XSS token theft. Secure flag
    * forces HTTPS-only transmission. SameSite=Lax blocks most CSRF.
    */
-  static setSessionCookies(tokens: AuthTokens): void {
-    const cookieStore = cookies();
+  static async setSessionCookies(tokens: AuthTokens): Promise<void> {
+    const cookieStore = await cookies();
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const ref = new URL(supabaseUrl).hostname.split('.')[0];
     const projectCookieName = `sb-${ref}-auth-token`;
-    const isHttps = requestIsHttps();
+    const isHttps = await requestIsHttps();
     const maxAge = 60 * 60 * 24 * 7; // 7 days
     const cookieBase = {
       path: '/',
       maxAge,
       sameSite: 'lax' as const,
-      httpOnly: true,            // CRITICAL: prevent XSS token theft
+      // httpOnly:false is required — the browser-side Supabase client
+      // (createBrowserClient) reads `document.cookie` to call
+      // auth.getSession(). httpOnly cookies are invisible to JS, so
+      // the client always sees a stale/missing session and the user
+      // appears "logged out" the moment they reach any client component.
+      // We rely on sameSite=lax + short access-token TTL (1h) for CSRF
+      // and XSS mitigation. The XSS-theft concern is addressed by the
+      // cookie being short-lived and rotated.
+      httpOnly: false,
       secure: isHttps,
     };
 
@@ -313,7 +325,7 @@ export class AuthService {
       const chunkCount = Math.ceil(payload.length / MAX_CHUNK_SIZE);
       for (let i = 0; i < chunkCount; i++) {
         const chunk = payload.slice(i * MAX_CHUNK_SIZE, (i + 1) * MAX_CHUNK_SIZE);
-        cookieStore.set(`${projectCookieName}.${i}`, chunk, { ...cookieBase, httpOnly: true });
+        cookieStore.set(`${projectCookieName}.${i}`, chunk, { ...cookieBase, httpOnly: false });
       }
     }
   }
@@ -322,7 +334,7 @@ export class AuthService {
    * Sign out: clear auth cookies and revoke the server-side session.
    */
   static async logout(refreshToken?: string): Promise<void> {
-    const cookieStore = cookies();
+    const cookieStore = await cookies();
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const ref = new URL(supabaseUrl).hostname.split('.')[0];
     const projectCookieName = `sb-${ref}-auth-token`;
@@ -346,7 +358,7 @@ export class AuthService {
     cookieStore.delete('blinkgo-session');
 
     try {
-      const supabase = createServerClient();
+      const supabase = await createServerClient();
       await supabase.auth.signOut();
     } catch (e) {
       logger.warn('Sign out failed (non-fatal)', {}, e);
@@ -359,7 +371,7 @@ export class AuthService {
    */
   static async currentUser(): Promise<AuthenticatedUser | null> {
     try {
-      const supabase = createServerClient();
+      const supabase = await createServerClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return null;
       const profile = await lookupUser(user.id).catch(() => null);
@@ -370,7 +382,7 @@ export class AuthService {
         email: profile.email,
         name: profile.name,
         role: profile.role as UserRole,
-        redirectPath: resolveRedirectPath(profile.role as UserRole),
+        redirectPath: getRoleHomePath(profile.role),
       };
     } catch {
       return null;

@@ -60,7 +60,7 @@ export const AddressWithMap = memo(function AddressWithMap({
   showPhone = true,
   compact = false,
 }: Props) {
-  const { locale, t } = useI18n();
+  const { locale } = useI18n();
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
     propLat != null && propLng != null ? { lat: propLat, lng: propLng } : null
   );

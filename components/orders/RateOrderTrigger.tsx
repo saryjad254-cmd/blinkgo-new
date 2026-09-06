@@ -3,7 +3,6 @@
 import { useState } from 'react';
 import Star from 'lucide-react/dist/esm/icons/star';
 import { RateOrderModal } from './RateOrderModal';
-import { safeT } from '@/lib/i18n/I18nProvider';
 import { cn } from '@/lib/cn';
 
 interface Props {
@@ -31,11 +30,16 @@ export function RateOrderTrigger({
 }: Props) {
   const [open, setOpen] = useState(false);
 
-  const title = safeT(
-    { customer: { rateOrder: locale === 'ar' ? 'تقييم الطلب' : locale === 'en' ? 'Rate order' : 'Bestellung bewerten' } },
-    'rateOrder',
-    'Bestellung bewerten',
-  );
+  const title = locale === 'ar'
+    ? 'تقييم الطلب'
+    : locale === 'en'
+      ? 'Rate order'
+      : 'Bestellung bewerten';
+  const cardTitle = locale === 'ar'
+    ? 'قيّم طلبك'
+    : locale === 'en'
+      ? 'Rate your order'
+      : 'Bewerte deine Bestellung';
 
   if (variant === 'card') {
     return (
@@ -57,7 +61,7 @@ export function RateOrderTrigger({
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-base font-extrabold text-white">
-                {safeT({ customer: { rateYourOrder: locale === 'ar' ? 'قيّم طلبك' : locale === 'en' ? 'Rate your order' : 'Bewerte deine Bestellung' } }, 'rateYourOrder', 'Bewerte deine Bestellung')}
+                {cardTitle}
               </p>
               <p className="text-xs text-text-secondary mt-0.5">
                 {locale === 'ar'

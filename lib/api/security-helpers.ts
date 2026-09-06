@@ -2,8 +2,10 @@
  * Security Helper Shortcuts
  * ─────────────────────────
  * Curated rate-limit tiers and convenience wrappers around withSecurity.
- * Use these instead of inlining rate-limit numbers so the policy is
- * centralized.
+ *
+ * Built on @/lib/foundation:
+ *   - Role type re-exported from Foundation
+ *   - Tier definitions centralized; rate-limit logic in lib/rate-limit
  *
  * Tiers (in requests / 15 min unless noted):
  *  - auth     : 5/15min  (login, register, magic-link, reset-password, oauth)
@@ -11,11 +13,10 @@
  *  - moderate : 30/15min (customer state changes, driver state changes)
  *  - lenient  : 60/15min (reads, search, list endpoints)
  *  - system   : 300/15min (webhooks, cron, system endpoints)
- *  - open     : 120/15min (public read-only endpoints — health, metrics,
- *                          bestsellers, geocode, etc.)
+ *  - open     : 120/15min (public read-only endpoints — health, metrics, etc.)
  */
 
-import type { RateLimitConfig } from '@/lib/rate-limit';
+import { getClientIp, type RateLimitConfig } from '@/lib/rate-limit';
 import { withSecurity, type SecurityOptions, type Role } from '@/lib/api/security';
 
 const FIFTEEN_MIN = 15 * 60;
@@ -33,33 +34,32 @@ export const RATE_TIERS: Record<string, RateLimitConfig> = {
   search: { limit: 60, windowSec: FIFTEEN_MIN, name: 'search' },
   geocode: { limit: 60, windowSec: FIFTEEN_MIN, name: 'geocode' },
   metrics: { limit: 300, windowSec: FIFTEEN_MIN, name: 'metrics' },
+  tracking: { limit: 300, windowSec: FIFTEEN_MIN, name: 'tracking' },
 };
 
-/**
- * Convenience: rate-limit option for a given tier name.
- */
 export function tier(name: keyof typeof RATE_TIERS): RateLimitConfig {
   return RATE_TIERS[name];
 }
 
-/**
- * Build a SecurityOptions object from a tier name and a list of roles.
- * Use this with withSecurity to get the canonical pattern:
- *
- *   withSecurity(secureRoute('strict', ['admin']), handler)
- *   withSecurity(secureRoute('moderate', ['customer', 'admin']), handler)
- */
 export function secureRoute(
   rateLimitTier: keyof typeof RATE_TIERS,
   roles?: Role[],
   extras: Partial<SecurityOptions> = {},
 ): SecurityOptions {
+  const isPublic = !roles || roles.length === 0;
+  const selectedTier = tier(rateLimitTier);
   return {
     ...(roles && roles.length > 0 ? { roles } : {}),
-    rateLimit: tier(rateLimitTier),
+    // A tier is shared by many endpoints. Namespace its bucket by pathname so
+    // ordinary browsing cannot exhaust unrelated read APIs that use the same
+    // tier (for example search must not block order tracking).
+    rateLimit: {
+      ...selectedTier,
+      keyFn: selectedTier.keyFn ?? ((req) => `${getClientIp(req)}:${req.nextUrl.pathname}`),
+    },
+    ...(isPublic ? { publicAccess: true } : {}),
     ...extras,
   };
 }
 
-// Re-export withSecurity so routes can import everything from one place.
 export { withSecurity };

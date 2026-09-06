@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminAuditPage() {
   const user = await requireRole('admin');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
 
   const { data: profile } = await supabase
     .from('users')
@@ -17,7 +17,7 @@ export default async function AdminAuditPage() {
     .eq('id', user.id)
     .single();
 
-  const cookieHeader = cookies()
+  const cookieHeader = (await cookies())
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');

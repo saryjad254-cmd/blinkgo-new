@@ -40,7 +40,7 @@ async function postReset(req: NextRequest): Promise<NextResponse> {
     const { user, profile } = auth;
 
     const body = await req.json().catch(() => ({}));
-    const { confirmation, scope } = body;
+    const { confirmation } = body;
 
     if (confirmation !== 'RESET TODAY') {
       throw new ValidationError('Bestätigung muss genau "RESET TODAY" lauten');
@@ -122,12 +122,12 @@ async function postReset(req: NextRequest): Promise<NextResponse> {
   });
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   return (await withSecurity(
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => getReset() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function getReset(): Promise<NextResponse> {

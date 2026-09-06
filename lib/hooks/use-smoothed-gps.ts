@@ -193,18 +193,22 @@ export function useSmoothedGPS(options: UseSmoothedGPSOptions): UseSmoothedGPSRe
         clearInterval(predictTimerRef.current);
         predictTimerRef.current = null;
       }
-      setStatus('idle');
+      queueMicrotask(() => setStatus('idle'));
       return;
     }
 
     if (typeof window === 'undefined' || !navigator.geolocation) {
-      setStatus('unavailable');
-      setError('Geolocation not supported');
+      queueMicrotask(() => {
+        setStatus('unavailable');
+        setError('Geolocation not supported');
+      });
       return;
     }
 
-    setStatus('requesting');
-    setError(null);
+    queueMicrotask(() => {
+      setStatus('requesting');
+      setError(null);
+    });
 
     const id = navigator.geolocation.watchPosition(
       (pos) => {

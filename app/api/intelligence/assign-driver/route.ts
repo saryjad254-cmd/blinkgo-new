@@ -1,11 +1,39 @@
 /**
- * Smart Driver Assignment API
- * Returns ranked driver candidates for an order.
+ * Smart Driver Assignment API — Phase 7H-C rewrite
+ * ──────────────────────────────────────────────────
+ * Returns ranked driver candidates for an order, using the REAL Supabase
+ * schema (no more queries against `users` for driver-only fields).
+ *
+ * Source of truth:
+ *   - users               (role, is_active, name)
+ *   - drivers             (full_name, is_available, vehicle_type)
+ *   - driver_status       (is_online, is_on_delivery, current_order_id,
+ *                          latitude, longitude, updated_at)
+ *   - driver_working_hours(day_of_week, start_time, end_time, is_enabled)
+ *
+ * Auto-dispatch eligibility (ALL must be true):
+ *   1. role = 'driver' AND is_active = true
+ *   2. driver row exists AND is_available = true
+ *   3. driver_status.is_online = true
+ *   4. driver_status.is_on_delivery = false
+ *   5. driver_status.current_order_id IS NULL
+ *   6. location is fresh (driver_status.updated_at within GPS_FRESH_MS)
+ *   7. within working hours (driver_working_hours)
+ *   8. coordinates pass validateLocation()
+ *
+ * Manual dispatch (admin) may bypass checks 5-7 and force a specific driver.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
+import { createServiceClient } from '@/lib/data/clients';
 import { scoreDrivers, type DriverCandidate } from '@/lib/intelligence/driver-assignment';
+import {
+  validateLocation,
+  classifyLocationFreshness,
+  isWithinWorkingHours,
+  type WorkingHourRow,
+} from '@/lib/driver/dispatch-policy';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { AuthenticationError, ValidationError } from '@/lib/errors';
 import type { LatLng } from '@/lib/delivery-zone';
@@ -19,99 +47,213 @@ interface RequestBody {
   restaurant_lat?: number;
   restaurant_lng?: number;
   urgency?: number;
+  /** When true, perform a manual assignment (admin) and actually mutate orders.driver_id. */
+  manual_assign?: boolean;
+  /** Required when manual_assign=true: the driver to force-assign. */
+  driver_id?: string;
+}
+
+type RestaurantRelation = {
+  latitude: number | null;
+  longitude: number | null;
+  owner_id: string | null;
+};
+
+function relation<T>(value: T | T[] | null | undefined): T | null {
+  if (Array.isArray(value)) return value[0] ?? null;
+  return value ?? null;
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    const server = await createServerClient();
+    const { data: { user } } = await server.auth.getUser();
     if (!user) throw new AuthenticationError();
 
     const body: RequestBody = await req.json().catch(() => ({}));
     let restaurantLoc: LatLng;
 
+    // 1) Authorization
+    const { data: callerProfile } = await server
+      .from('users')
+      .select('role')
+      .eq('id', user.id)
+      .single();
+    const callerRole = callerProfile?.role ?? 'customer';
+    const isAdmin = callerRole === 'admin' || callerRole === 'super_admin';
+
     if (body.order_id) {
-      // v81: ownership check — only the order's restaurant owner or an
-      // admin may request driver suggestions for a specific order. The
-      // result returns online driver GPS + IDs which would be a leak
-      // for any other caller.
-      const { data: callerProfile } = await supabase
-        .from('users')
-        .select('role')
-        .eq('id', user.id)
-        .single();
-      const callerRole = callerProfile?.role ?? 'customer';
-      const { data: order } = await supabase
+      // Only the order's restaurant owner or an admin may request suggestions.
+      const { data: order } = await server
         .from('orders')
-        .select('restaurant:restaurant_id(latitude, longitude, owner_id)')
+        .select('restaurant_id, driver_id, status, restaurant:restaurant_id(latitude, longitude, owner_id)')
         .eq('id', body.order_id)
         .single();
-      const rest = order?.restaurant as any;
-      if (!rest?.latitude || !rest?.longitude) {
+      const rest = relation(order?.restaurant as RestaurantRelation | RestaurantRelation[] | null);
+      if (rest?.latitude == null || rest.longitude == null) {
         throw new ValidationError('Restaurant location missing');
       }
       const isRestaurantOwner = rest.owner_id === user.id;
-      const isAdmin = callerRole === 'admin' || callerRole === 'super_admin';
       if (!isRestaurantOwner && !isAdmin) {
         throw new ValidationError('Not authorized for this order');
       }
       restaurantLoc = { lat: Number(rest.latitude), lng: Number(rest.longitude) };
     } else {
-      if (!body.restaurant_id || body.restaurant_lat == null || body.restaurant_lng == null) {
+      if (
+        body.restaurant_id == null ||
+        body.restaurant_lat == null ||
+        body.restaurant_lng == null
+      ) {
         throw new ValidationError('restaurant_id + coordinates required');
       }
-      restaurantLoc = { lat: body.restaurant_lat, lng: body.restaurant_lng };
+      const v = validateLocation(body.restaurant_lat, body.restaurant_lng);
+      if (!v.ok) throw new ValidationError(`restaurant coords invalid: ${v.reason}`);
+      restaurantLoc = { lat: v.lat, lng: v.lng };
     }
 
-    // Fetch all available drivers
-    const { data: drivers } = await supabase
-      .from('users')
-      .select('id, name, rating, current_latitude, current_longitude, current_order_id, online_status, last_delivery_at, total_accepted, total_rejected, total_deliveries')
-      .eq('role', 'driver')
-      .eq('is_active', true)
-      .in('online_status', ['online', 'idle']);
-
-    if (!drivers) {
-      return ok({ candidates: [] });
+    // 2) Load candidate drivers — REAL schema.
+    //    We must use the service role to read driver_status (RLS hides it
+    //    from non-admin, non-self callers — which is the whole point).
+    const admin = createServiceClient();
+    const { data: statusRows, error: dsErr } = await admin
+      .from('driver_status')
+      .select('driver_id, is_online, is_on_delivery, current_order_id, latitude, longitude, bearing, speed, updated_at')
+      .eq('is_online', true)
+      .is('is_on_delivery', false)
+      .is('current_order_id', null);
+    if (dsErr) throw dsErr;
+    const candidateIds = (statusRows ?? []).map((r) => r.driver_id);
+    if (candidateIds.length === 0) {
+      return ok({ candidates: [], count: 0 });
     }
 
-    const candidates: DriverCandidate[] = drivers.map((d: any) => {
-      const minutesSinceLast = d.last_delivery_at
-        ? Math.floor((Date.now() - new Date(d.last_delivery_at).getTime()) / 60_000)
-        : 999;
-      const totalOrders = (d.total_accepted ?? 0) + (d.total_rejected ?? 0);
-      const acceptanceRate = totalOrders > 0 ? d.total_accepted / totalOrders : 0.95;
-      return {
-        id: d.id,
-        name: d.name ?? 'Driver',
-        currentLocation:
-          d.current_latitude != null && d.current_longitude != null
-            ? { lat: Number(d.current_latitude), lng: Number(d.current_longitude) }
-            : null,
-        activeOrderCount: d.current_order_id ? 1 : 0,
-        minutesSinceLastDelivery: minutesSinceLast,
-        headingTowardRestaurant: false, // computed if bearing data available
-        acceptanceRate,
-        rating: Number(d.rating ?? 5),
-        speedFactor: 0.8 + (Number(d.rating ?? 5) - 3) * 0.2,
-      };
-    });
+    // 3) Load user + driver rows for those candidates
+    const [{ data: users }, { data: driverRows }] = await Promise.all([
+      admin
+        .from('users')
+        .select('id, name, is_active')
+        .in('id', candidateIds)
+        .eq('role', 'driver')
+        .eq('is_active', true),
+      admin
+        .from('drivers')
+        .select('id, full_name, is_available, vehicle_type')
+        .in('id', candidateIds)
+        .eq('is_available', true),
+    ]);
 
+    const userById = new Map((users ?? []).map((u) => [u.id, u]));
+    const driverById = new Map((driverRows ?? []).map((d) => [d.id, d]));
+
+    // 4) Working hours — single query
+    const { data: whRows } = await admin
+      .from('driver_working_hours')
+      .select('driver_id, day_of_week, start_time, end_time, is_enabled')
+      .in('driver_id', candidateIds);
+    const whByDriver = new Map<string, WorkingHourRow[]>();
+    for (const r of whRows ?? []) {
+      const arr = whByDriver.get(r.driver_id) ?? [];
+      arr.push({
+        day_of_week: r.day_of_week,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        is_enabled: r.is_enabled,
+      });
+      whByDriver.set(r.driver_id, arr);
+    }
+
+    // 5) Build candidates
+    const now = new Date();
+    const candidates: DriverCandidate[] = [];
+    const diagnostics: Array<{ driver_id: string; reason: string }> = [];
+
+    for (const s of statusRows ?? []) {
+      const u = userById.get(s.driver_id);
+      const d = driverById.get(s.driver_id);
+      if (!u || !d) {
+        diagnostics.push({ driver_id: s.driver_id, reason: 'missing user or driver row' });
+        continue;
+      }
+      const loc = validateLocation(s.latitude, s.longitude);
+      if (!loc.ok) {
+        diagnostics.push({ driver_id: s.driver_id, reason: `bad coords: ${loc.reason}` });
+        continue;
+      }
+      const fresh = classifyLocationFreshness(s.updated_at);
+      if (fresh.status !== 'fresh') {
+        diagnostics.push({ driver_id: s.driver_id, reason: `not fresh: ${fresh.status} (age ${fresh.ageMs}ms)` });
+        continue;
+      }
+      const wh = isWithinWorkingHours(whByDriver.get(s.driver_id) ?? [], now);
+      if (!wh.within) {
+        diagnostics.push({ driver_id: s.driver_id, reason: 'outside working hours' });
+        continue;
+      }
+      candidates.push({
+        id: s.driver_id,
+        name: d.full_name ?? u.name ?? 'Driver',
+        currentLocation: { lat: loc.lat, lng: loc.lng },
+        activeOrderCount: 0,
+        minutesSinceLastDelivery: 999,
+        headingTowardRestaurant: false,
+        acceptanceRate: 0.95,
+        rating: 5,
+        speedFactor: 1,
+      });
+    }
+
+    // 6) Score + rank
     const scored = scoreDrivers(candidates, {
       restaurantLocation: restaurantLoc,
-      orderPlacedAt: new Date(),
+      orderPlacedAt: now,
       urgency: body.urgency ?? 0.5,
-    });
+    }).slice(0, 10);
 
-    return ok({ candidates: scored.slice(0, 10) });
+    // 7) Optional manual assignment
+    if (body.manual_assign && body.order_id && body.driver_id) {
+      if (!isAdmin) throw new ValidationError('manual_assign requires admin role');
+      const [{ data: targetUser }, { data: targetDriver }] = await Promise.all([
+        admin.from('users').select('id').eq('id', body.driver_id).eq('role', 'driver').eq('is_active', true).maybeSingle(),
+        admin.from('drivers').select('id').eq('id', body.driver_id).maybeSingle(),
+      ]);
+      if (!targetUser || !targetDriver) throw new ValidationError('Target driver is invalid or inactive');
+      // Atomic single-claim
+      const { data: updated, error: claimErr } = await admin
+        .from('orders')
+        .update({
+          driver_id: body.driver_id,
+          accepted_at: new Date().toISOString(),
+        })
+        .eq('id', body.order_id)
+        .eq('fulfillment_type', 'delivery')
+        .is('driver_id', null)
+        .in('status', ['confirmed', 'preparing', 'ready'])
+        .select()
+        .single();
+      if (claimErr) throw claimErr;
+      if (!updated) {
+        return ok({ candidates: scored, manual_assign: { ok: false, reason: 'order already has a driver or wrong status' } });
+      }
+      // Update driver_status.current_order_id
+      await admin
+        .from('driver_status')
+        .update({ current_order_id: body.order_id })
+        .eq('driver_id', body.driver_id)
+        .is('current_order_id', null);
+      return ok({
+        candidates: scored,
+        manual_assign: { ok: true, order: updated },
+      });
+    }
+
+    return ok({
+      candidates: scored,
+      total_candidates: candidates.length,
+      rejected: diagnostics,
+    });
   });
 }
 
-/**
- * v80: Explicit GET handler so this route is discoverable in production.
- * Without it, the App Router returns 404 for non-POST methods, which makes
- * the route look "missing" instead of "method-not-allowed".
- */
 export async function GET(): Promise<NextResponse> {
   return new NextResponse('Method Not Allowed', {
     status: 405,

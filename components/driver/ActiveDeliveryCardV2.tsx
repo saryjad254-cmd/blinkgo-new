@@ -12,7 +12,6 @@
  */
 
 import { useState } from 'react';
-import Link from 'next/link';
 import Phone from 'lucide-react/dist/esm/icons/phone';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Navigation2 from 'lucide-react/dist/esm/icons/navigation-2';
@@ -20,14 +19,12 @@ import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import Package from 'lucide-react/dist/esm/icons/package';
 import ChevronDown from 'lucide-react/dist/esm/icons/chevron-down';
 import ChevronUp from 'lucide-react/dist/esm/icons/chevron-up';
-import MessageSquare from 'lucide-react/dist/esm/icons/message-square';
 import { useT } from '@/lib/i18n/I18nProvider';
 import { haptic } from '@/lib/utils/haptics';
 import { playDriverSound } from '@/lib/utils/driver-sound';
 import { formatEUR } from '@/lib/format';
 
-interface ActiveDeliveryCardV2Props {
-  order: {
+export interface ActiveDeliveryOrder {
     id: string;
     order_number: string;
     status: string;
@@ -43,13 +40,15 @@ interface ActiveDeliveryCardV2Props {
     restaurant_longitude: number;
     customer_latitude: number;
     customer_longitude: number;
-  };
+}
+
+interface ActiveDeliveryCardV2Props {
+  order: ActiveDeliveryOrder;
   distanceToNextKm: number;
   etaMinutes: number;
   /** Stage of delivery — controls which action is primary. */
-  stage: 'to_restaurant' | 'at_restaurant' | 'to_customer' | 'at_customer' | 'completed';
+  stage: 'to_restaurant' | 'at_restaurant' | 'to_customer' | 'at_customer';
   onPrimaryAction: () => void;
-  onMarkArrived: () => void;
   onComplete: () => void;
   busy?: boolean;
 }
@@ -60,7 +59,6 @@ export function ActiveDeliveryCardV2({
   etaMinutes,
   stage,
   onPrimaryAction,
-  onMarkArrived,
   onComplete,
   busy,
 }: ActiveDeliveryCardV2Props) {
@@ -72,7 +70,6 @@ export function ActiveDeliveryCardV2({
     at_restaurant: t.driver?.at_restaurant ?? 'Im Restaurant',
     to_customer: t.driver?.to_customer ?? 'Zum Kunden',
     at_customer: t.driver?.at_customer ?? 'Beim Kunden',
-    completed: t.driver?.completed ?? 'Abgeschlossen',
   }[stage];
 
   const earnings = (order.delivery_fee ?? 0) + (order.tip ?? 0);
@@ -81,7 +78,6 @@ export function ActiveDeliveryCardV2({
     at_restaurant: { label: t.driver?.confirm_pickup ?? 'Abholung bestätigen', icon: Package, action: onPrimaryAction, variant: 'success' as const },
     to_customer: { label: t.driver?.navigate_to_customer ?? 'Navigation zum Kunden', icon: Navigation2, action: onPrimaryAction, variant: 'primary' as const },
     at_customer: { label: t.driver?.confirm_delivery ?? 'Lieferung bestätigen', icon: CheckCircle2, action: onComplete, variant: 'success' as const },
-    completed: { label: t.driver?.next_order ?? 'Nächster Auftrag', icon: ChevronDown, action: () => {}, variant: 'subtle' as const },
   }[stage];
 
   const PrimaryIcon = primaryAction.icon;
@@ -226,14 +222,19 @@ export function ActiveDeliveryCardV2({
   );
 }
 
-function formatAddress(addr: any): string {
+function formatAddress(addr: unknown): string {
   if (!addr) return '—';
   if (typeof addr === 'string') return addr;
   if (typeof addr === 'object') {
+    const address = addr as Record<string, unknown>;
+    const formatted = typeof address.formatted_address === 'string' ? address.formatted_address : '';
+    const plain = typeof address.address === 'string' ? address.address : '';
+    const parts = [address.street, address.postal ?? address.postal_code, address.city]
+      .filter((value): value is string => typeof value === 'string' && value.length > 0);
     return (
-      addr.formatted_address ||
-      addr.address ||
-      [addr.street, addr.postal || addr.postal_code, addr.city].filter(Boolean).join(', ') ||
+      formatted ||
+      plain ||
+      parts.join(', ') ||
       '—'
     );
   }

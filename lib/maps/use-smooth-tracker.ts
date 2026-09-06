@@ -25,9 +25,9 @@ export function useSmoothTracker(options: UseSmoothTrackerOptions) {
   const { initial, duration_ms = 2000, snap_threshold_m = 500 } = options;
   const [position, setPosition] = useState<LatLng | null>(initial);
   const [heading, setHeading] = useState<number | null>(null);
+  const [velocity, setVelocity] = useState(0);
   const animatorRef = useRef<MarkerAnimator | null>(null);
   const lastUpdateRef = useRef<LatLng | null>(initial);
-  const velocityRef = useRef<number>(0);
 
   useEffect(() => {
     const anim = new MarkerAnimator();
@@ -53,7 +53,7 @@ export function useSmoothTracker(options: UseSmoothTrackerOptions) {
       // Too far — snap
       lastUpdateRef.current = next;
       setPosition(next);
-      velocityRef.current = 0;
+      setVelocity(0);
       return;
     }
 
@@ -64,7 +64,7 @@ export function useSmoothTracker(options: UseSmoothTrackerOptions) {
     }
 
     // Estimate velocity (assuming updates every ~3s)
-    velocityRef.current = dist / 3; // m/s
+    setVelocity(dist / 3); // m/s
     lastUpdateRef.current = next;
     anim.setPosition(next.lat, next.lng, duration_ms);
   };
@@ -77,7 +77,7 @@ export function useSmoothTracker(options: UseSmoothTrackerOptions) {
   return {
     position,
     heading,
-    velocity_ms: velocityRef.current,
+    velocity_ms: velocity,
     update,
     setImmediate,
   };

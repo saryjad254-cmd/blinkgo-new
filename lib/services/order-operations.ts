@@ -17,15 +17,18 @@ import { NotificationService } from './notification-service';
 export async function reassignOrderToDriver(
   orderId: string,
   driverId: string,
-  adminId: string
+  adminId: string,
+  reason: string,
 ): Promise<{ ok: boolean; error?: string }> {
+  const normalizedReason = reason.trim().slice(0, 500);
+  if (normalizedReason.length < 5) return { ok: false, error: 'Reason required (min 5 chars)' };
   try {
     const svc = createServiceClient();
 
     // Verify driver exists and is online
     const { data: driver, error: driverErr } = await svc
       .from('driver_status')
-      .select('driver_id, is_online')
+      .select('driver_id, is_online, is_on_delivery, current_order_id')
       .eq('driver_id', driverId)
       .single();
 
@@ -34,6 +37,9 @@ export async function reassignOrderToDriver(
     }
     if (!driver.is_online) {
       return { ok: false, error: 'Driver is offline' };
+    }
+    if (driver.is_on_delivery && driver.current_order_id !== orderId) {
+      return { ok: false, error: 'Driver already has an active delivery' };
     }
 
     // Verify order exists
@@ -46,13 +52,21 @@ export async function reassignOrderToDriver(
     if (orderErr || !order) {
       return { ok: false, error: 'Order not found' };
     }
+    if (!['pending', 'confirmed', 'preparing', 'ready', 'assigned'].includes(order.status)) {
+      return { ok: false, error: `Order cannot be reassigned in status ${order.status}` };
+    }
+    if (order.driver_id === driverId) return { ok: true };
 
     // Update order
     const { error: updateErr } = await svc
       .from('orders')
       .update({
         driver_id: driverId,
-        status: 'confirmed',
+        status: order.status === 'pending'
+          ? 'confirmed'
+          : order.status === 'ready'
+            ? 'assigned'
+            : order.status,
         updated_at: new Date().toISOString(),
       })
       .eq('id', orderId);
@@ -85,7 +99,7 @@ export async function reassignOrderToDriver(
       action: 'order.reassigned',
       resourceType: 'order',
       resourceId: orderId,
-      metadata: { from_driver_id: order.driver_id, to_driver_id: driverId },
+      metadata: { from_driver_id: order.driver_id, to_driver_id: driverId, reason: normalizedReason },
     });
 
     return { ok: true };

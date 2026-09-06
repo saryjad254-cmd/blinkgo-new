@@ -45,9 +45,9 @@ const BASE = 'https://www.blinkgo.de';
 // ─── WF-D: scheduled orders cron with missing secret ───────────────
 {
   const r = await fetch(`${BASE}/api/cron/scheduled-orders`, { method: 'POST' });
-  // If CRON_SECRET is not set the route accepts; if set, it returns 401.
-  // Both behaviours are correct.
-  assert.ok([200, 401, 403].includes(r.status), `expected 200/401/403, got ${r.status}`);
+  // Production cron routes always fail closed: 401 when configured, 503 when
+  // the server secret is missing. They must never execute unauthenticated.
+  assert.ok([401, 403, 503].includes(r.status), `expected 401/403/503, got ${r.status}`);
   console.log(`PASS WF-D cron endpoint returns ${r.status} without auth`);
 }
 

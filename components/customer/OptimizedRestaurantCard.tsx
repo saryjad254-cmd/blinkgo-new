@@ -13,17 +13,15 @@
 
 import { memo, useMemo } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 import Star from 'lucide-react/dist/esm/icons/star';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import Truck from 'lucide-react/dist/esm/icons/truck';
-import Heart from 'lucide-react/dist/esm/icons/heart';
 import BadgeCheck from 'lucide-react/dist/esm/icons/badge-check';
 import { formatEUR } from '@/lib/format';
 import { haversineDistance, formatDistance } from '@/lib/delivery-zone';
 import { cn } from '@/lib/cn';
 import { FavoriteButton } from './FavoriteButton';
-import { LazyImage } from './LazyImage';
+import { CatalogImage } from './CatalogImage';
 
 export interface RestaurantCardData {
   id: string;
@@ -57,7 +55,7 @@ function RestaurantCardInner({ restaurant: r, userLocation, view = 'grid', t = {
       { lat: userLocation.lat, lng: userLocation.lng },
       { lat: r.latitude, lng: r.longitude }
     );
-  }, [userLocation?.lat, userLocation?.lng, r.latitude, r.longitude]);
+  }, [userLocation, r.latitude, r.longitude]);
 
   const distanceLabel = useMemo(() => {
     if (!distance) return null;
@@ -72,11 +70,11 @@ function RestaurantCardInner({ restaurant: r, userLocation, view = 'grid', t = {
         aria-label={`${r.name} — ${t.view || 'View'}`}
       >
         <div className="relative w-20 h-20 flex-shrink-0 rounded-xl overflow-hidden">
-          <LazyImage
+          <CatalogImage
             src={r.cover_url}
             alt={r.name}
-            fill
-            className="object-cover"
+            name={r.name}
+            kind="restaurant"
             sizes="80px"
           />
         </div>
@@ -123,11 +121,12 @@ function RestaurantCardInner({ restaurant: r, userLocation, view = 'grid', t = {
       aria-label={`${r.name} — ${t.view || 'View'}`}
     >
       <div className="relative aspect-[16/10] overflow-hidden bg-bg-secondary">
-        <LazyImage
+        <CatalogImage
           src={r.cover_url}
           alt={r.name}
-          fill
-          className="object-cover group-hover:scale-105 transition-transform duration-300"
+          name={r.name}
+          kind="restaurant"
+          className="group-hover:scale-[1.045]"
           sizes="(max-width: 768px) 50vw, 25vw"
         />
         {r.is_promoted && (

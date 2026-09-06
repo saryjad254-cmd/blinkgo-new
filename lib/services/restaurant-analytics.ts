@@ -58,7 +58,7 @@ export async function getRestaurantKPIs(restaurantId: string): Promise<Restauran
     svc.from('orders')
       .select('id', { count: 'exact', head: true })
       .eq('restaurant_id', restaurantId)
-      .in('status', ['pending', 'confirmed', 'preparing', 'ready', 'picked_up']),
+      .in('status', ['pending', 'confirmed', 'preparing', 'ready', 'assigned', 'picked_up']),
     svc.from('restaurants')
       .select('rating, review_count')
       .eq('id', restaurantId)
@@ -66,7 +66,11 @@ export async function getRestaurantKPIs(restaurantId: string): Promise<Restauran
   ]);
 
   const todayOrders = todayRes.data?.length ?? 0;
-  const todayRevenue = (todayRes.data ?? []).reduce((s, o) => s + Number(o.total ?? 0), 0);
+  // Recognize merchant revenue only after delivery. Pending, preparing,
+  // ready and cancelled orders must never inflate the financial KPI.
+  const todayRevenue = (todayRes.data ?? [])
+    .filter((order) => order.status === 'delivered')
+    .reduce((sum, order) => sum + Number(order.total ?? 0), 0);
   const activeOrders = activeRes.count ?? 0;
 
   let accepted = 0;

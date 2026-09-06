@@ -1,10 +1,9 @@
 'use client';
 import { motion, AnimatePresence } from 'framer-motion';
 
-import { useState, useEffect } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useT } from '@/lib/i18n/I18nProvider';
 
-import Users from 'lucide-react/dist/esm/icons/users';
 import Copy from 'lucide-react/dist/esm/icons/copy';
 import Check from 'lucide-react/dist/esm/icons/check';
 import Send from 'lucide-react/dist/esm/icons/send';
@@ -29,11 +28,7 @@ export function ReferralCard() {
   const [copied, setCopied] = useState(false);
   const [showInvite, setShowInvite] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     setLoading(true);
     try {
       const [codeRes, listRes] = await Promise.all([
@@ -46,7 +41,13 @@ export function ReferralCard() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void loadData(); });
+    return () => { cancelled = true; };
+  }, [loadData]);
 
   const copyCode = () => {
     navigator.clipboard.writeText(code);
@@ -180,6 +181,7 @@ export function ReferralCard() {
                   type="button"
                   onClick={sendInvite}
                   disabled={sending || !email}
+                  aria-label={t.referral.send}
                   className="rounded-xl bg-white px-4 py-2.5 text-racing-red transition hover:bg-white/90 disabled:opacity-50"
                 >
                   <Send className="h-4 w-4" />

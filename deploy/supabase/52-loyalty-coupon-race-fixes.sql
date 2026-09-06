@@ -227,6 +227,15 @@ COMMENT ON FUNCTION public.enforce_order_transition IS
 -- by the user (read_at IS NULL) AND are older than 5 minutes \u2014
 -- candidates for a retry push.
 
+CREATE TABLE IF NOT EXISTS public.notification_delivery_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  notification_id uuid NOT NULL REFERENCES public.notifications(id) ON DELETE CASCADE,
+  channel text NOT NULL,
+  attempted_at timestamptz NOT NULL DEFAULT now(),
+  success boolean NOT NULL,
+  error text
+);
+
 CREATE OR REPLACE VIEW public.v_unacked_notifications AS
 SELECT n.id, n.user_id, n.type, n.title, n.body, n.data, n.created_at
   FROM public.notifications n

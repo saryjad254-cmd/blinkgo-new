@@ -1,12 +1,12 @@
 import { requireRole } from '@/lib/rbac';
 import { createServerClient } from '@/lib/supabase/server';
 import { cookies } from 'next/headers';
-import nextDynamic from 'next/dynamic';
 import { getServerLocale } from '@/lib/i18n/server-translations';
 import type { Locale } from '@/lib/i18n/server-translations';
+import { AdminMapLoader } from './AdminMapLoader';
 
 // Lazy-load map (Google Maps bundle is heavy)
-const AdminMapClient = nextDynamic(
+/* const AdminMapClient = nextDynamic(
   () => import('./AdminMapClient').then((m) => m.AdminMapClient),
   {
     ssr: false,
@@ -16,13 +16,13 @@ const AdminMapClient = nextDynamic(
       </div>
     ),
   },
-);
+); */
 
 export const dynamic = 'force-dynamic';
 
 export default async function AdminMapPage() {
   const user = await requireRole('admin');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
 
   const { data: profile } = await supabase
     .from('users')
@@ -30,14 +30,14 @@ export default async function AdminMapPage() {
     .eq('id', user.id)
     .single();
 
-  const cookieHeader = cookies()
+  const cookieHeader = (await cookies())
     .getAll()
     .map((c) => `${c.name}=${c.value}`)
     .join('; ');
   const locale: Locale = getServerLocale(cookieHeader);
 
   return (
-    <AdminMapClient
+    <AdminMapLoader
       user={{
         name: profile?.name ?? 'Admin',
         email: profile?.email ?? user.email ?? '',

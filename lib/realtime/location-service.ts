@@ -4,7 +4,10 @@
  */
 
 import { createBrowserClient } from '@/lib/supabase/client';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+
+type RealtimeRow = Record<string, unknown>;
+type RealtimePayload = RealtimePostgresChangesPayload<RealtimeRow>;
 
 export interface LocationUpdate {
   latitude: number;
@@ -78,7 +81,7 @@ export async function sendDriverLocation(update: LocationUpdate): Promise<boolea
  * Subscribe to a specific order's updates (customer-facing tracking)
  * Listens to orders table changes for status + location updates
  */
-export function subscribeToOrder(orderId: string, onUpdate: (payload: any) => void): () => void {
+export function subscribeToOrder(orderId: string, onUpdate: (payload: RealtimeRow) => void): () => void {
   const supabase = createBrowserClient();
   const channel: RealtimeChannel = supabase
     .channel(`order:${orderId}`)
@@ -116,7 +119,7 @@ export function subscribeToOrder(orderId: string, onUpdate: (payload: any) => vo
 /**
  * Subscribe to driver orders (for driver dashboard)
  */
-export function subscribeToDriverOrders(driverId: string, onUpdate: (payload: any) => void): () => void {
+export function subscribeToDriverOrders(driverId: string, onUpdate: (payload: RealtimePayload) => void): () => void {
   const supabase = createBrowserClient();
   const channel: RealtimeChannel = supabase
     .channel(`driver-orders:${driverId}`)
@@ -142,7 +145,7 @@ export function subscribeToDriverOrders(driverId: string, onUpdate: (payload: an
 /**
  * Subscribe to customer notifications
  */
-export function subscribeToNotifications(userId: string, onNotification: (n: any) => void): () => void {
+export function subscribeToNotifications(userId: string, onNotification: (notification: RealtimeRow) => void): () => void {
   const supabase = createBrowserClient();
   const channel: RealtimeChannel = supabase
     .channel(`notifications:${userId}`)

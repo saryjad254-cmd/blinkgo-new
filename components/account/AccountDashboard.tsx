@@ -1,10 +1,9 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
-import User from 'lucide-react/dist/esm/icons/user';
 import Mail from 'lucide-react/dist/esm/icons/mail';
 import Phone from 'lucide-react/dist/esm/icons/phone';
 import Calendar from 'lucide-react/dist/esm/icons/calendar';
@@ -14,7 +13,6 @@ import Award from 'lucide-react/dist/esm/icons/award';
 import ArrowRight from 'lucide-react/dist/esm/icons/arrow-right';
 import LogOut from 'lucide-react/dist/esm/icons/log-out';
 import Edit3 from 'lucide-react/dist/esm/icons/edit-3';
-import Camera from 'lucide-react/dist/esm/icons/camera';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import CreditCard from 'lucide-react/dist/esm/icons/credit-card';
 import Tag from 'lucide-react/dist/esm/icons/tag';
@@ -32,8 +30,42 @@ import Heart from 'lucide-react/dist/esm/icons/heart';
 import Receipt from 'lucide-react/dist/esm/icons/receipt';
 import Settings from 'lucide-react/dist/esm/icons/settings';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
+import Camera from 'lucide-react/dist/esm/icons/camera';
+import Trash2 from 'lucide-react/dist/esm/icons/trash-2';
 import { cn } from '@/lib/cn';
 import { useToast } from '@/components/ui/Toast';
+import { BackButton } from '@/components/shared/BackButton';
+import { BlinkLogo } from '@/components/brand/BlinkLogo';
+import { LanguageSwitcher } from '@/components/i18n/LanguageSwitcher';
+import { useI18n } from '@/lib/i18n/I18nProvider';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
+import type { LucideIcon } from 'lucide-react';
+
+interface AccountCoupon {
+  id: string;
+  code: string;
+  discount_type: string;
+  discount_value: number | string;
+}
+
+interface AccountAddress {
+  id: string;
+  label?: string | null;
+  address?: string | null;
+  street?: string | null;
+  postal_code?: string | null;
+  city?: string | null;
+  is_default?: boolean;
+}
+
+interface AccountPaymentMethod {
+  id: string;
+  brand?: string | null;
+  last4?: string | null;
+  exp_month?: number | null;
+  exp_year?: number | null;
+  is_default?: boolean;
+}
 
 interface AccountDashboardProps {
   user: { id: string; email: string };
@@ -55,9 +87,9 @@ interface AccountDashboardProps {
     loyalty: { points: number; lifetime_points: number; tier: string };
     wallet: { balance: number; currency: string };
   };
-  coupons: any[];
-  addresses: any[];
-  paymentMethods: any[];
+  coupons: AccountCoupon[];
+  addresses: AccountAddress[];
+  paymentMethods: AccountPaymentMethod[];
 }
 
 const COPY = {
@@ -67,6 +99,13 @@ const COPY = {
     heroSubtitle: 'Verwalten Sie Ihr Konto, Ihre Bestellungen und Prämien an einem Ort.',
     editProfile: 'Profil bearbeiten',
     uploadPhoto: 'Foto hochladen',
+    removePhoto: 'Foto entfernen',
+    photoSaved: 'Profilfoto gespeichert.',
+    photoRemoved: 'Profilfoto entfernt.',
+    photoError: 'Profilfoto konnte nicht gespeichert werden.',
+    photoType: 'Bitte JPG, PNG oder WebP auswählen.',
+    photoSize: 'Das Profilfoto darf höchstens 2 MB groß sein.',
+    removePhotoConfirm: 'Profilfoto wirklich entfernen?',
     verified: 'Verifiziert',
     notVerified: 'Nicht verifiziert',
     active: 'Aktiv',
@@ -104,6 +143,7 @@ const COPY = {
     emailCopied: 'E-Mail kopiert!',
     notProvided: 'Nicht angegeben',
     viewAll: 'Alle anzeigen',
+    name: 'Name', phone: 'Telefon', save: 'Speichern', cancel: 'Abbrechen', profileSaved: 'Profil gespeichert.', profileError: 'Profil konnte nicht gespeichert werden.',
   },
   ar: {
     welcome: (name: string) => `أهلاً بعودتك، ${name}!`,
@@ -111,6 +151,13 @@ const COPY = {
     heroSubtitle: 'أدر حسابك وطلباتك ومكافآتك في مكان واحد.',
     editProfile: 'تعديل الملف',
     uploadPhoto: 'تحميل صورة',
+    removePhoto: 'حذف الصورة',
+    photoSaved: 'تم حفظ الصورة الشخصية.',
+    photoRemoved: 'تم حذف الصورة الشخصية.',
+    photoError: 'تعذّر حفظ الصورة الشخصية.',
+    photoType: 'اختر صورة JPG أو PNG أو WebP.',
+    photoSize: 'يجب ألا يتجاوز حجم الصورة 2 ميغابايت.',
+    removePhotoConfirm: 'هل تريد حذف الصورة الشخصية؟',
     verified: 'موثّق',
     notVerified: 'غير موثّق',
     active: 'نشط',
@@ -148,6 +195,7 @@ const COPY = {
     emailCopied: 'تم نسخ البريد!',
     notProvided: 'غير محدد',
     viewAll: 'عرض الكل',
+    name: 'الاسم', phone: 'الهاتف', save: 'حفظ', cancel: 'إلغاء', profileSaved: 'تم حفظ الملف الشخصي.', profileError: 'تعذّر حفظ الملف الشخصي.',
   },
   en: {
     welcome: (name: string) => `Welcome back, ${name}!`,
@@ -155,6 +203,13 @@ const COPY = {
     heroSubtitle: 'Manage your account, orders, and rewards in one place.',
     editProfile: 'Edit profile',
     uploadPhoto: 'Upload photo',
+    removePhoto: 'Remove photo',
+    photoSaved: 'Profile photo saved.',
+    photoRemoved: 'Profile photo removed.',
+    photoError: 'Profile photo could not be saved.',
+    photoType: 'Choose a JPG, PNG, or WebP image.',
+    photoSize: 'Profile photos must be 2 MB or smaller.',
+    removePhotoConfirm: 'Remove your profile photo?',
     verified: 'Verified',
     notVerified: 'Not verified',
     active: 'Active',
@@ -192,16 +247,9 @@ const COPY = {
     emailCopied: 'Email copied!',
     notProvided: 'Not provided',
     viewAll: 'View all',
+    name: 'Name', phone: 'Phone', save: 'Save', cancel: 'Cancel', profileSaved: 'Profile saved.', profileError: 'Profile could not be saved.',
   },
 };
-
-function getLocaleFromCookie(): 'de' | 'ar' | 'en' {
-  if (typeof document === 'undefined') return 'de';
-  const m = document.cookie.split(';').find((c) => c.trim().startsWith('blinkgo-locale='));
-  const v = m?.split('=')[1]?.trim();
-  if (v === 'ar' || v === 'en' || v === 'de') return v;
-  return 'de';
-}
 
 function formatDate(iso: string, locale: 'de' | 'ar' | 'en'): string {
   if (!iso) return '—';
@@ -217,7 +265,7 @@ function formatCurrency(amount: number, currency: string, locale: 'de' | 'ar' | 
   }).format(amount || 0);
 }
 
-const TIER_COLORS: Record<string, { from: string; to: string; icon: any; ring: string }> = {
+const TIER_COLORS: Record<string, { from: string; to: string; icon: LucideIcon; ring: string }> = {
   bronze: { from: 'from-amber-700/30', to: 'to-amber-900/10', icon: Award, ring: 'ring-amber-700/30' },
   silver: { from: 'from-slate-400/30', to: 'to-slate-600/10', icon: Star, ring: 'ring-slate-400/30' },
   gold: { from: 'from-yellow-500/30', to: 'to-yellow-700/10', icon: Crown, ring: 'ring-yellow-500/30' },
@@ -227,29 +275,108 @@ const TIER_COLORS: Record<string, { from: string; to: string; icon: any; ring: s
 export function AccountDashboard({
   user, profile, stats, coupons, addresses, paymentMethods,
 }: AccountDashboardProps) {
-  const [locale, setLocale] = useState<'de' | 'ar' | 'en'>('de');
+  const { locale: currentLocale } = useI18n();
+  const locale: 'de' | 'ar' | 'en' = currentLocale === 'ar' || currentLocale === 'en' ? currentLocale : 'de';
+  const [profileState, setProfileState] = useState(profile);
   const [emailCopied, setEmailCopied] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [draftName, setDraftName] = useState(profile?.name || '');
+  const [draftPhone, setDraftPhone] = useState(profile?.phone || '');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const [addressState, setAddressState] = useState(addresses);
+  const toastApi = useToast();
 
   useEffect(() => {
-    setLocale(getLocaleFromCookie());
+    let active = true;
+    fetch('/api/addresses', { cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        if (active && payload) setAddressState(payload?.data?.addresses ?? payload?.addresses ?? []);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
   }, []);
 
   const t = COPY[locale];
   const dir = locale === 'ar' ? 'rtl' : 'ltr';
 
-  const displayName = profile?.name || user.email?.split('@')[0] || t.welcomeAnon;
+  const displayName = profileState?.name || user.email?.split('@')[0] || t.welcomeAnon;
   const tierKey = (stats.loyalty.tier || 'bronze').toLowerCase() as keyof typeof TIER_COLORS;
   const tier = TIER_COLORS[tierKey] || TIER_COLORS.bronze;
   const TierIcon = tier.icon;
 
   const copyEmail = useCallback(() => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
-      navigator.clipboard.writeText(profile?.email || user.email);
+      navigator.clipboard.writeText(profileState?.email || user.email);
       setEmailCopied(true);
       setTimeout(() => setEmailCopied(false), 2000);
     }
-  }, [profile, user]);
+  }, [profileState, user]);
+
+  const saveProfile = useCallback(async () => {
+    if (savingProfile) return;
+    setSavingProfile(true);
+    try {
+      const response = await fetch('/api/account/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: draftName, phone: draftPhone }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload?.error?.message || t.profileError);
+      const updated = payload?.data?.profile ?? payload?.profile;
+      if (updated) setProfileState((current) => ({ ...(current || {}), ...updated }));
+      setEditing(false);
+      toastApi.success(t.profileSaved);
+    } catch (error) {
+      toastApi.error(error instanceof Error ? error.message : t.profileError);
+    } finally {
+      setSavingProfile(false);
+    }
+  }, [draftName, draftPhone, savingProfile, t.profileError, t.profileSaved, toastApi]);
+
+  const uploadAvatar = useCallback(async (file: File) => {
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return toastApi.error(t.photoType);
+    if (file.size > 2 * 1024 * 1024) return toastApi.error(t.photoSize);
+    const preview = URL.createObjectURL(file);
+    setAvatarPreview(preview);
+    setUploadingAvatar(true);
+    try {
+      const form = new FormData();
+      form.set('file', file);
+      const response = await fetch('/api/account/avatar', { method: 'POST', body: form });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.avatar_url) throw new Error(payload.error || t.photoError);
+      setProfileState((current) => ({ ...(current || { id: user.id, email: user.email }), avatar_url: payload.avatar_url }));
+      toastApi.success(t.photoSaved);
+    } catch (error) {
+      toastApi.error(error instanceof Error ? error.message : t.photoError);
+    } finally {
+      URL.revokeObjectURL(preview);
+      setAvatarPreview(null);
+      setUploadingAvatar(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = '';
+    }
+  }, [t.photoError, t.photoSaved, t.photoSize, t.photoType, toastApi, user.email, user.id]);
+
+  const removeAvatar = useCallback(async () => {
+    if (!profileState?.avatar_url || uploadingAvatar || !window.confirm(t.removePhotoConfirm)) return;
+    setUploadingAvatar(true);
+    try {
+      const response = await fetch('/api/account/avatar', { method: 'DELETE' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || t.photoError);
+      setProfileState((current) => current ? { ...current, avatar_url: null } : current);
+      toastApi.success(t.photoRemoved);
+    } catch (error) {
+      toastApi.error(error instanceof Error ? error.message : t.photoError);
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }, [profileState?.avatar_url, t.photoError, t.photoRemoved, t.removePhotoConfirm, toastApi, uploadingAvatar]);
 
   // Stat cards data
   const statCards = [
@@ -269,7 +396,7 @@ export function AccountDashboard({
       icon: Flame,
       gradient: 'from-brand-yellow-500/20 via-brand-yellow-500/10 to-transparent',
       accent: 'text-brand-yellow-500',
-      href: '/profile?tab=loyalty',
+      href: '/profile#rewards',
     },
     {
       key: 'lifetime',
@@ -278,7 +405,7 @@ export function AccountDashboard({
       icon: Sparkles,
       gradient: 'from-purple-500/20 via-purple-500/10 to-transparent',
       accent: 'text-purple-400',
-      href: '/profile?tab=loyalty',
+      href: '/profile#rewards',
     },
     {
       key: 'wallet',
@@ -287,15 +414,15 @@ export function AccountDashboard({
       icon: Wallet,
       gradient: 'from-emerald-500/20 via-emerald-500/10 to-transparent',
       accent: 'text-emerald-400',
-      href: '/profile?tab=wallet',
+      href: '/payment-history',
     },
   ];
 
   const quickActions = [
     { key: 'orders', label: t.myOrders, icon: ShoppingBag, href: '/orders', gradient: 'from-brand-red-500/15 to-brand-red-500/0' },
     { key: 'favorites', label: t.favorites, icon: Heart, href: '/favorites', gradient: 'from-pink-500/15 to-pink-500/0' },
-    { key: 'addresses', label: t.addresses, icon: MapPin, href: '/profile?tab=addresses', gradient: 'from-emerald-500/15 to-emerald-500/0' },
-    { key: 'payments', label: t.paymentMethods, icon: CreditCard, href: '/profile?tab=payments', gradient: 'from-cyan-500/15 to-cyan-500/0' },
+    { key: 'addresses', label: t.addresses, icon: MapPin, href: '/addresses', gradient: 'from-emerald-500/15 to-emerald-500/0' },
+    { key: 'payments', label: t.paymentMethods, icon: CreditCard, href: '/payment-history', gradient: 'from-cyan-500/15 to-cyan-500/0' },
   ];
 
   return (
@@ -316,30 +443,29 @@ export function AccountDashboard({
         <div className="absolute bottom-0 left-0 w-48 h-48 rounded-full bg-brand-red-500/20 blur-2xl" />
 
         <div className="relative max-w-4xl mx-auto px-4 sm:px-6 pt-8 pb-6 sm:pt-10 sm:pb-8">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <BackButton fallback="/home" className="bg-black/40 ring-1 ring-white/10 hover:bg-black/60" />
+            <BlinkLogo variant="horizontal" size="sm" priority />
+          </div>
           <div className="flex flex-col sm:flex-row items-center sm:items-start gap-5 sm:gap-6">
             {/* Avatar */}
             <div className="relative flex-shrink-0">
               <div className="absolute -inset-1 bg-gradient-to-br from-brand-red-500 via-brand-yellow-500 to-brand-red-500 rounded-full blur-md opacity-60" />
               <div className="relative w-24 h-24 sm:w-28 sm:h-28 rounded-full bg-gradient-to-br from-brand-red-500 to-brand-red-700 flex items-center justify-center text-3xl sm:text-4xl font-black text-white border-4 border-bg-elevated shadow-2xl">
-                {profile?.avatar_url ? (
+                {avatarPreview || profileState?.avatar_url ? (
                   <Image
-                    src={profile.avatar_url}
+                    src={avatarPreview || profileState?.avatar_url || ''}
                     alt={displayName}
                     fill
                     sizes="112px"
+                    unoptimized={Boolean(avatarPreview)}
                     className="rounded-full object-cover"
                   />
                 ) : (
                   <span>{displayName.charAt(0).toUpperCase()}</span>
                 )}
               </div>
-              <button
-                type="button"
-                className="absolute -bottom-1 -end-1 w-9 h-9 rounded-full bg-bg-elevated border-2 border-bg flex items-center justify-center hover:bg-bg transition-colors"
-                aria-label={t.uploadPhoto}
-              >
-                <Camera className="w-4 h-4 text-text-secondary" />
-              </button>
+              {uploadingAvatar && <div className="absolute inset-0 grid place-items-center rounded-full bg-black/60" aria-live="polite"><Loader2 className="size-7 animate-spin text-white" /></div>}
             </div>
 
             {/* Welcome + name */}
@@ -351,9 +477,15 @@ export function AccountDashboard({
                 {t.heroSubtitle}
               </p>
 
+              <div className="mb-3 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
+                <input ref={avatarInputRef} type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadAvatar(file); }} />
+                <button type="button" disabled={uploadingAvatar} onClick={() => avatarInputRef.current?.click()} className="inline-flex min-h-11 items-center gap-2 rounded-xl border border-white/15 bg-black/30 px-3 text-xs font-bold text-white hover:bg-black/50 disabled:opacity-50"><Camera className="size-4" />{t.uploadPhoto}</button>
+                {profileState?.avatar_url && <button type="button" disabled={uploadingAvatar} onClick={() => void removeAvatar()} className="inline-flex min-h-11 items-center gap-2 rounded-xl px-3 text-xs font-bold text-red-300 hover:bg-red-500/10 disabled:opacity-50"><Trash2 className="size-4" />{t.removePhoto}</button>}
+              </div>
+
               {/* Status chips */}
               <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-1">
-                {profile?.is_verified ? (
+                {profileState?.is_verified ? (
                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-success/15 border border-success/30 text-[10px] font-extrabold text-success uppercase tracking-wider">
                     <CheckCircle2 className="w-3 h-3" /> {t.verified}
                   </span>
@@ -364,11 +496,11 @@ export function AccountDashboard({
                 )}
                 <span className={cn(
                   'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider',
-                  profile?.is_active !== false
+                  profileState?.is_active !== false
                     ? 'bg-success/15 border border-success/30 text-success'
                     : 'bg-danger/15 border border-danger/30 text-danger'
                 )}>
-                  {profile?.is_active !== false ? t.active : t.inactive}
+                  {profileState?.is_active !== false ? t.active : t.inactive}
                 </span>
                 <span className={cn(
                   'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-gradient-to-r text-[10px] font-extrabold uppercase tracking-wider ring-1',
@@ -382,8 +514,13 @@ export function AccountDashboard({
             {/* Edit button */}
             <button
               type="button"
-              onClick={() => setEditing((v) => !v)}
-              className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-bg-elevated/70 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-xs font-bold text-text-secondary hover:text-text transition-all flex-shrink-0"
+              onClick={() => {
+                setDraftName(profileState?.name || '');
+                setDraftPhone(profileState?.phone || '');
+                setEditing((value) => !value);
+              }}
+              aria-expanded={editing}
+              className="inline-flex min-h-11 items-center gap-1.5 px-3.5 rounded-xl bg-bg-elevated/70 hover:bg-bg-elevated border border-edge hover:border-edge-strong text-xs font-bold text-text-secondary hover:text-text transition-all flex-shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand"
             >
               <Edit3 className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{t.editProfile}</span>
@@ -401,7 +538,7 @@ export function AccountDashboard({
                   onClick={copyEmail}
                   className="text-xs font-bold text-text truncate max-w-full hover:text-brand transition-colors flex items-center gap-1"
                 >
-                  <span className="truncate">{profile?.email || user.email}</span>
+                  <span className="truncate">{profileState?.email || user.email}</span>
                   {emailCopied ? (
                     <CheckCircle2 className="w-3.5 h-3.5 text-success flex-shrink-0" />
                   ) : (
@@ -413,9 +550,9 @@ export function AccountDashboard({
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-bg-elevated/50 border border-edge">
               <Phone className="w-4 h-4 text-text-muted flex-shrink-0" />
               <div className="flex-1 min-w-0">
-                <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">Phone</p>
+                <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">{t.phone}</p>
                 <p className="text-xs font-bold text-text truncate">
-                  {profile?.phone || t.notProvided}
+                  {profileState?.phone || t.notProvided}
                 </p>
               </div>
             </div>
@@ -424,11 +561,53 @@ export function AccountDashboard({
               <div className="flex-1 min-w-0">
                 <p className="text-[10px] font-bold uppercase tracking-wider text-text-muted">{t.memberSince}</p>
                 <p className="text-xs font-bold text-text truncate">
-                  {profile?.created_at ? formatDate(profile.created_at, locale) : '—'}
+                  {profileState?.created_at ? formatDate(profileState.created_at, locale) : '—'}
                 </p>
               </div>
             </div>
           </div>
+
+          {editing && (
+            <form
+              className="mt-4 grid gap-3 rounded-2xl border border-brand-red-500/25 bg-black/35 p-4 backdrop-blur-xl sm:grid-cols-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveProfile();
+              }}
+            >
+              <label className="space-y-1.5 text-start">
+                <span className="text-xs font-bold text-text-secondary">{t.name}</span>
+                <input
+                  value={draftName}
+                  onChange={(event) => setDraftName(event.target.value)}
+                  minLength={2}
+                  maxLength={80}
+                  required
+                  autoComplete="name"
+                  className="min-h-11 w-full rounded-xl border border-edge bg-bg-elevated px-3 text-sm text-text outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
+                />
+              </label>
+              <label className="space-y-1.5 text-start">
+                <span className="text-xs font-bold text-text-secondary">{t.phone}</span>
+                <input
+                  value={draftPhone}
+                  onChange={(event) => setDraftPhone(event.target.value)}
+                  type="tel"
+                  autoComplete="tel"
+                  className="min-h-11 w-full rounded-xl border border-edge bg-bg-elevated px-3 text-sm text-text outline-none focus:border-brand focus:ring-2 focus:ring-brand/30"
+                />
+              </label>
+              <div className="flex gap-2 sm:col-span-2 sm:justify-end">
+                <button type="button" onClick={() => setEditing(false)} disabled={savingProfile} className="min-h-11 rounded-xl border border-edge px-4 text-sm font-bold text-text-secondary focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">
+                  {t.cancel}
+                </button>
+                <button type="submit" disabled={savingProfile || draftName.trim().length < 2} className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-speed-gradient px-5 text-sm font-extrabold text-white shadow-glow disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand">
+                  {savingProfile && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
+                  {t.save}
+                </button>
+              </div>
+            </form>
+          )}
         </div>
       </div>
 
@@ -465,7 +644,7 @@ export function AccountDashboard({
         </section>
 
         {/* Stats */}
-        <section>
+        <section id="rewards" className="scroll-mt-24">
           <h2 className="text-xs font-extrabold uppercase tracking-wider text-text-muted mb-3">
             {t.stats}
           </h2>
@@ -524,7 +703,7 @@ export function AccountDashboard({
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {coupons.slice(0, 4).map((c: any) => (
+              {coupons.slice(0, 4).map((c) => (
                 <div key={c.id} className="card-glass p-4 flex items-center gap-3 hover:border-edge-strong transition-colors">
                   <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-brand-yellow-500/20 to-brand-yellow-700/10 border border-brand-yellow-500/30 flex items-center justify-center flex-shrink-0">
                     <Gift className="w-6 h-6 text-brand-yellow-500" strokeWidth={2} />
@@ -532,7 +711,7 @@ export function AccountDashboard({
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-extrabold text-text truncate">{c.code}</p>
                     <p className="text-xs text-text-secondary truncate">
-                      {c.discount_type === 'percentage' ? `${c.discount_value}%` : formatCurrency(c.discount_value, 'EUR', locale)}
+                      {c.discount_type === 'percentage' ? `${c.discount_value}%` : formatCurrency(Number(c.discount_value), 'EUR', locale)}
                       {' '}{locale === 'ar' ? 'خصم' : locale === 'de' ? 'Rabatt' : 'off'}
                     </p>
                   </div>
@@ -551,25 +730,25 @@ export function AccountDashboard({
         </section>
 
         {/* Addresses */}
-        <section>
+        <section id="addresses" className="scroll-mt-24">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-extrabold uppercase tracking-wider text-text-muted flex items-center gap-2">
               <MapPin className="w-3.5 h-3.5" />
               {t.addressBook}
             </h2>
-            <Link href="/profile?tab=addresses" className="text-[10px] font-extrabold uppercase tracking-wider text-brand hover:text-brand/80 transition-colors">
+            <Link href="/addresses" className="text-[10px] font-extrabold uppercase tracking-wider text-brand hover:text-brand/80 transition-colors">
               {t.addAddress}
             </Link>
           </div>
 
-          {addresses.length === 0 ? (
+          {addressState.length === 0 ? (
             <div className="card-glass p-6 text-center">
               <div className="w-12 h-12 mx-auto rounded-2xl bg-bg-elevated border border-edge flex items-center justify-center mb-3">
                 <MapPin className="w-6 h-6 text-text-muted" />
               </div>
               <p className="text-sm font-bold text-text mb-2">{t.noAddresses}</p>
               <Link
-                href="/profile?tab=addresses&action=new"
+                href="/addresses?new=1"
                 className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-gradient-to-br from-brand-red-500 to-brand-red-600 text-white text-xs font-extrabold shadow-glow active:scale-95 transition-transform"
               >
                 {t.addAddress}
@@ -578,7 +757,7 @@ export function AccountDashboard({
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {addresses.slice(0, 4).map((a: any) => (
+              {addressState.slice(0, 4).map((a) => (
                 <div key={a.id} className={cn(
                   'card-glass p-4 flex items-start gap-3',
                   a.is_default && 'border-brand-red-500/40 bg-gradient-to-br from-brand-red-500/5 to-transparent'
@@ -596,7 +775,7 @@ export function AccountDashboard({
                       )}
                     </div>
                     <p className="text-xs text-text-secondary truncate">
-                      {a.street}, {a.postal_code} {a.city}
+                      {a.address || [a.street, a.postal_code, a.city].filter(Boolean).join(', ')}
                     </p>
                   </div>
                 </div>
@@ -606,14 +785,14 @@ export function AccountDashboard({
         </section>
 
         {/* Payment methods */}
-        <section>
+        <section id="payments" className="scroll-mt-24">
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-xs font-extrabold uppercase tracking-wider text-text-muted flex items-center gap-2">
               <CreditCard className="w-3.5 h-3.5" />
               {t.paymentBook}
             </h2>
-            <Link href="/profile?tab=payments" className="text-[10px] font-extrabold uppercase tracking-wider text-brand hover:text-brand/80 transition-colors">
-              {t.addPayment}
+            <Link href="/payment-history" className="text-[10px] font-extrabold uppercase tracking-wider text-brand hover:text-brand/80 transition-colors">
+              {t.viewAll}
             </Link>
           </div>
 
@@ -626,7 +805,7 @@ export function AccountDashboard({
             </div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {paymentMethods.slice(0, 4).map((p: any) => (
+              {paymentMethods.slice(0, 4).map((p) => (
                 <div key={p.id} className="card-glass p-4 flex items-center gap-3">
                   <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/15 to-cyan-500/5 border border-cyan-500/30 flex items-center justify-center flex-shrink-0">
                     <CreditCard className="w-5 h-5 text-cyan-400" />
@@ -659,10 +838,21 @@ export function AccountDashboard({
             {[
               { key: 'notif', label: t.notifications, icon: Bell, href: '/notifications' },
               { key: 'security', label: t.security, icon: Shield, href: '/forgot-password' },
-              { key: 'lang', label: t.language, icon: Sparkles, href: '#' },
+              { key: 'lang', label: t.language, icon: Sparkles, href: '' },
               { key: 'legal', label: t.legal, icon: Receipt, href: '/legal/impressum' },
             ].map((row) => {
               const Icon = row.icon;
+              if (row.key === 'lang') {
+                return (
+                  <div key={row.key} className="flex min-h-14 items-center gap-3 rounded-xl px-3 py-2.5">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-bg-elevated text-text-secondary">
+                      <Icon className="h-4 w-4" strokeWidth={2} />
+                    </div>
+                    <p className="flex-1 text-sm font-bold text-text">{row.label}</p>
+                    <LanguageSwitcher />
+                  </div>
+                );
+              }
               return (
                 <Link
                   key={row.key}
@@ -681,7 +871,7 @@ export function AccountDashboard({
               );
             })}
             <DeleteAccountRow locale={locale} label={t.deleteAccount} dir={dir} />
-            <LogoutRow locale={locale} label={t.logout} dir={dir} />
+            <LogoutRow label={t.logout} />
           </div>
         </section>
       </div>
@@ -690,6 +880,7 @@ export function AccountDashboard({
 }
 
 function DeleteAccountRow({ label, locale, dir }: { label: string; locale: 'de' | 'ar' | 'en'; dir: 'ltr' | 'rtl' }) {
+  const router = useRouter();
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [confirmText, setConfirmText] = useState('');
@@ -737,15 +928,16 @@ function DeleteAccountRow({ label, locale, dir }: { label: string; locale: 'de' 
       const res = await fetch('/api/account/delete', { method: 'DELETE' });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
-        throw new Error(json.error || 'failed');
+        throw new Error(extractErrorMessage(json, 'failed'));
       }
       toast({ type: 'success', message: t.success });
       // Bounce to home; the session is no longer valid after deactivation.
       setTimeout(() => {
-        window.location.href = '/';
+        router.replace('/');
+        router.refresh();
       }, 1200);
-    } catch (e: any) {
-      toast({ type: 'error', message: e?.message || t.error });
+    } catch (error: unknown) {
+      toast({ type: 'error', message: extractErrorMessage(error, t.error) });
       setLoading(false);
     }
   }
@@ -819,7 +1011,7 @@ function DeleteAccountRow({ label, locale, dir }: { label: string; locale: 'de' 
   );
 }
 
-function LogoutRow({ label, locale, dir }: { label: string; locale: 'de' | 'ar' | 'en'; dir: 'ltr' | 'rtl' }) {
+function LogoutRow({ label }: { label: string }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   async function onClick() {
@@ -829,7 +1021,7 @@ function LogoutRow({ label, locale, dir }: { label: string; locale: 'de' | 'ar' 
       await fetch('/api/auth/logout', { method: 'POST' });
       router.push('/');
       router.refresh();
-    } catch (e) {
+    } catch {
       setLoading(false);
     }
   }

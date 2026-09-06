@@ -1,5 +1,5 @@
 /**
- * Impressum (§ 5 TMG, German Telemedia Act)
+ * Impressum (§ 5 DDG, German Digital Services Act)
  * ──────────────────────────────────────────
  *
  * DRAFT — requires review and approval by a German Rechtsanwalt
@@ -14,7 +14,7 @@
  * the draft banner.
  */
 
-import { getDisplayCompanyInfo, COMPANY } from '@/lib/legal/company-info';
+import { getDisplayCompanyInfo } from '@/lib/legal/company-info';
 import { LegalBanner } from '@/components/legal/LegalBanner';
 import { getServerLocale } from '@/lib/i18n/server-translations';
 import { cookies } from 'next/headers';
@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic';
 const COPY = {
   de: {
     title: 'Impressum',
-    subtitle: 'Angaben gemäß § 5 TMG',
+    subtitle: 'Angaben gemäß § 5 DDG',
     sections: {
       company: 'Anbieter und verantwortlich für den Inhalt',
       contact: 'Kontakt',
@@ -37,7 +37,7 @@ const COPY = {
       area: 'Tätigkeitsgebiet',
       hours: 'Erreichbarkeit',
       dispute: 'Streitschlichtung',
-      eu: 'EU-Plattform zur Online-Streitbeilegung',
+      eu: 'Verbraucherstreitbeilegung',
       arbitration: 'Bereitschaft zur Verbraucherschlichtung',
       liability: 'Haftung für Inhalte',
       links: 'Haftung für Links',
@@ -52,12 +52,12 @@ const COPY = {
       copyright:
         'Die durch den Anbieter erstellten Inhalte und Werke auf diesen Seiten unterliegen dem deutschen Urheberrecht. Vervielfältigung, Bearbeitung, Verbreitung und jede Art der Verwertung außerhalb der Grenzen des Urheberrechts bedürfen der schriftlichen Zustimmung des jeweiligen Autors bzw. Erstellers.',
       eu:
-        'Die Europäische Kommission stellt eine Plattform zur Online-Streitbeilegung (OS) bereit. Wir sind nicht verpflichtet und nicht bereit, an einem Streitbeilegungsverfahren vor einer Verbraucherschlichtungsstelle teilzunehmen.',
+        'Die frühere EU-Plattform zur Online-Streitbeilegung wurde zum 20. Juli 2025 eingestellt. Angaben zur Teilnahme an einem Verfahren vor einer Verbraucherschlichtungsstelle richten sich nach dem Verbraucherstreitbeilegungsgesetz und der unten genannten Erklärung.',
     },
   },
   en: {
     title: 'Legal Notice (Impressum)',
-    subtitle: 'Information pursuant to § 5 TMG (German Telemedia Act)',
+    subtitle: 'Information pursuant to § 5 DDG (German Digital Services Act)',
     sections: {
       company: 'Service provider and content responsible',
       contact: 'Contact',
@@ -70,7 +70,7 @@ const COPY = {
       area: 'Operating area',
       hours: 'Availability',
       dispute: 'Dispute resolution',
-      eu: 'EU Online Dispute Resolution platform',
+      eu: 'Consumer dispute resolution',
       arbitration: 'Consumer arbitration',
       liability: 'Liability for content',
       links: 'Liability for links',
@@ -81,12 +81,12 @@ const COPY = {
       liability: '[Translation] The contents of our pages were created with great care. However, we cannot guarantee the accuracy, completeness, or timeliness of the content.',
       links: '[Translation] Our website contains links to external third-party websites whose content is beyond our control.',
       copyright: '[Translation] The content and works on these pages are subject to German copyright law.',
-      eu: '[Translation] The European Commission provides an Online Dispute Resolution platform. We are neither obliged nor willing to participate in dispute resolution proceedings before a consumer arbitration board.',
+      eu: '[Translation] The former EU Online Dispute Resolution platform was discontinued on 20 July 2025. Participation in consumer arbitration follows the German Consumer Dispute Resolution Act and the statement below.',
     },
   },
   ar: {
     title: 'بيانات الناشر (Impressum)',
-    subtitle: 'معلومات وفق § 5 من قانون TMG الألماني',
+    subtitle: 'معلومات وفق § 5 من قانون DDG الألماني',
     sections: {
       company: 'مقدم الخدمة والمسؤول عن المحتوى',
       contact: 'بيانات الاتصال',
@@ -99,7 +99,7 @@ const COPY = {
       area: 'منطقة الخدمة',
       hours: 'ساعات العمل',
       dispute: 'حل النزاعات',
-      eu: 'منصة الاتحاد الأوروبي لحل النزاعات',
+      eu: 'تسوية نزاعات المستهلكين',
       arbitration: 'التحكيم الاستهلاكي',
       liability: 'المسؤولية عن المحتوى',
       links: 'المسؤولية عن الروابط',
@@ -110,13 +110,13 @@ const COPY = {
       liability: '[ترجمة] تم إعداد محتوى صفحاتنا بعناية فائقة، لكننا لا نضمن دقتها أو اكتمالها أو حداثتها.',
       links: '[ترجمة] يحتوي موقعنا على روابط لمواقع أطراف ثالثة لا نتحكم في محتواها.',
       copyright: '[ترجمة] تخضع المحتويات والأعمال في هذه الصفحات لقانون حقوق النشر الألماني.',
-      eu: '[ترجمة] توفر المفوضية الأوروبية منصة لحل النزاعات عبر الإنترنت. لسنا ملزمين أو راغبين في المشاركة.',
+      eu: '[ترجمة] أُوقفت منصة الاتحاد الأوروبي السابقة لتسوية النزاعات عبر الإنترنت في 20 يوليو 2025. تخضع المشاركة في التحكيم الاستهلاكي للقانون الألماني وللبيان أدناه.',
     },
   },
 } as const;
 
-export default function ImpressumPage() {
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
+export default async function ImpressumPage() {
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale = getServerLocale(cookieHeader) as 'de' | 'ar' | 'en';
   const c = getDisplayCompanyInfo();
   const t = COPY[locale] || COPY.de;
@@ -199,7 +199,6 @@ export default function ImpressumPage() {
 
       <Section title={t.sections.dispute}>
         <p className="text-sm">{t.notes.eu}</p>
-        {c.euDisputeResolution && <p className="mt-1">{c.euDisputeResolution}</p>}
         {c.consumerArbitration && (
           <p className="mt-1 text-sm">{c.consumerArbitration}</p>
         )}

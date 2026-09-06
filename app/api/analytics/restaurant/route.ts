@@ -1,10 +1,9 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
 import {
   computeRestaurantMetrics,
   computeProductPerformance,
-  getPeakHourInsight,
   type RestaurantOrderRow,
   type RestaurantItemRow,
 } from '@/lib/analytics/restaurant-intelligence';
@@ -12,7 +11,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const auth = await requireApiRole(['admin']);
   if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 
@@ -21,33 +20,42 @@ export async function GET(req: NextRequest) {
     const days = 30;
     const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-    const { data: orders } = await db.from('orders').select('*')
-      .gte('created_at', start.toISOString());
-    const { data: items } = await db.from('order_items').select('*')
-      .gte('created_at', start.toISOString());
+    const [orderResult, itemResult] = await Promise.all([
+      db.from('orders')
+        .select('id, restaurant_id, total, status, created_at, accepted_at, prepared_at, picked_up_at, delivered_at, cancelled_at, cancellation_reason')
+        .gte('created_at', start.toISOString()),
+      db.from('order_items')
+        .select('product_id, product_name, quantity, unit_price, subtotal, product_price, price, order_id, created_at')
+        .gte('created_at', start.toISOString()),
+    ]);
+    if (orderResult.error) throw orderResult.error;
+    if (itemResult.error) throw itemResult.error;
+    const orders = orderResult.data ?? [];
+    const items = itemResult.data ?? [];
 
-    const orderRows: RestaurantOrderRow[] = (orders || []).map((o) => ({
+    const orderRows: RestaurantOrderRow[] = orders.map((o) => ({
       id: o.id,
       restaurant_id: o.restaurant_id,
       total: o.total ?? 0,
       status: o.status,
       created_at: o.created_at,
       accepted_at: o.accepted_at,
-      ready_at: o.ready_at,
+      ready_at: o.prepared_at,
       picked_up_at: o.picked_up_at,
       delivered_at: o.delivered_at,
       cancelled_at: o.cancelled_at,
       cancellation_reason: o.cancellation_reason,
     }));
 
-    const itemRows: RestaurantItemRow[] = (items || []).map((i) => ({
+    const restaurantByOrder = new Map(orders.map((order) => [order.id, order.restaurant_id]));
+    const itemRows: RestaurantItemRow[] = items.map((i) => ({
       product_id: i.product_id,
       product_name: i.product_name || 'Unknown',
       quantity: i.quantity ?? 1,
       unit_price: i.unit_price ?? 0,
-      total: i.total ?? 0,
+      total: i.subtotal ?? (Number(i.unit_price ?? i.product_price ?? i.price ?? 0) * Number(i.quantity ?? 1)),
       order_id: i.order_id,
-      restaurant_id: i.restaurant_id,
+      restaurant_id: restaurantByOrder.get(i.order_id) ?? '',
       created_at: i.created_at,
     }));
 

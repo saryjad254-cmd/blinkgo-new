@@ -1,14 +1,5 @@
 'use client';
 
-import { type CSSProperties } from 'react';
-import Store from 'lucide-react/dist/esm/icons/store';
-import Home from 'lucide-react/dist/esm/icons/home';
-import Truck from 'lucide-react/dist/esm/icons/truck';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
-import Pill from 'lucide-react/dist/esm/icons/pill';
-import { cn } from '@/lib/cn';
-
 type MarkerType = 'restaurant' | 'market' | 'pharmacy' | 'customer' | 'driver' | 'pickup';
 
 interface PremiumMarkerProps {
@@ -19,21 +10,6 @@ interface PremiumMarkerProps {
   className?: string;
   label?: string;
 }
-
-const config: Record<MarkerType, { Icon: any; bg: string; ring: string; label: string }> = {
-  restaurant: { Icon: Store,       bg: 'bg-brand-red-500',  ring: 'ring-brand-red-500/30',  label: 'Restaurant' },
-  market:     { Icon: ShoppingBag, bg: 'bg-emerald',    ring: 'ring-emerald/30',    label: 'Market' },
-  pharmacy:   { Icon: Pill,        bg: 'bg-info',       ring: 'ring-info/30',       label: 'Pharmacy' },
-  customer:   { Icon: Home,        bg: 'bg-cyan',       ring: 'ring-cyan/30',       label: 'You' },
-  driver:     { Icon: Truck,       bg: 'bg-brand-yellow-500', ring: 'ring-brand-yellow-500/40', label: 'Driver' },
-  pickup:     { Icon: MapPin,      bg: 'bg-violet',     ring: 'ring-violet/30',     label: 'Pickup' },
-};
-
-const sizes = {
-  sm: { wrap: 'w-8 h-8',  icon: 'w-4 h-4' },
-  md: { wrap: 'w-10 h-10', icon: 'w-5 h-5' },
-  lg: { wrap: 'w-12 h-12', icon: 'w-6 h-6' },
-};
 
 /**
  * Premium map marker — used by OSMMap and GoogleMap via L.divIcon.
@@ -54,12 +30,7 @@ export function PremiumMarker({
   className,
   label,
 }: PremiumMarkerProps) {
-  const cfg = config[type];
-  const s = sizes[size];
-  const Icon = cfg.Icon;
-
   const transform = rotation != null ? `rotate(${rotation}deg)` : undefined;
-  const transformStyle: CSSProperties = transform ? { transform } : {};
 
   const html = `
     <div style="position: relative; display: inline-flex; align-items: center; justify-content: center; ${className ? `class: ${className};` : ''}">

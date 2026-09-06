@@ -7,6 +7,7 @@ import X from 'lucide-react/dist/esm/icons/x';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
 import { cn } from '@/lib/cn';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 export type PromoStatus = 'idle' | 'loading' | 'success' | 'error' | 'expired';
 
@@ -54,11 +55,15 @@ export function PromoCodeInput({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (applied) {
+    if (!applied) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
       setStatus('success');
       setValue(applied.code);
       setErrorMsg(null);
-    }
+    });
+    return () => { cancelled = true; };
   }, [applied]);
 
   async function handleApply() {
@@ -70,9 +75,9 @@ export function PromoCodeInput({
       await onApply(code);
       // parent will set applied → triggers useEffect above
       setStatus('success');
-    } catch (e: any) {
+    } catch (error: unknown) {
       setStatus('error');
-      setErrorMsg(e?.message ?? t.invalid ?? 'Ungültig');
+      setErrorMsg(extractErrorMessage(error, t.invalid ?? 'Ungültig'));
     }
   }
 
@@ -89,7 +94,7 @@ export function PromoCodeInput({
     applied?.type === 'free_delivery'
       ? (t.free ?? 'Gratis Lieferung')
       : applied?.type === 'percent'
-      ? `-${applied.discount}%${applied.discount ? '' : ''}`
+      ? `-${applied.discount}% · -${(subtotal * applied.discount / 100).toLocaleString(locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}${currency}`
       : applied
       ? `-${(applied.discount ?? 0).toLocaleString(locale, { minimumFractionDigits: 2 })}${currency}`
       : '';

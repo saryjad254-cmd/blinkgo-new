@@ -10,7 +10,7 @@ import type { Locale } from '@/lib/i18n/server-translations';
 
 interface ConfigItem {
   key: string;
-  value: any;
+  value: unknown;
   description: string | null;
   updated_at: string;
 }
@@ -34,7 +34,7 @@ export function AdminConfigClient({
   const save = async (key: string) => {
     setSaving((s) => ({ ...s, [key]: true }));
     try {
-      let parsed: any = edits[key];
+      let parsed: unknown = edits[key];
       try { parsed = JSON.parse(edits[key]); } catch { parsed = edits[key]; }
       const res = await fetch('/api/admin/config', {
         method: 'PATCH',

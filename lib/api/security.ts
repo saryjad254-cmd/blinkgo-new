@@ -1,37 +1,44 @@
 /**
  * Security Hardening — Production-Grade Defense in Depth
  * ─────────────────────────────────────────────────────
- * Centralized security helpers for every API route:
- *  - Input validation
- *  - Authentication (JWT verification via Supabase)
- *  - Authorization (role-based)
- *  - Rate limiting
- *  - CSRF protection
- *  - IDOR prevention
- *  - Audit logging
- *  - Safe error responses
- *  - Resource ownership verification
+ * Centralized security helpers for every API route.
  *
- * Every API route should use these helpers. Manual checks are an
- * anti-pattern that has led to 5+ vulnerabilities in the past.
+ * Built on @/lib/foundation:
+ *   - All errors use Foundation's AppError hierarchy
+ *   - Logging uses Foundation's logger
+ *   - Response building uses Foundation's fail()
+ *
+ * Exports:
+ *  - withSecurity(opts, handler)    → wraps a route with auth + rate + role + error
+ *  - withPublicSecurity(opts, h)    → public route wrapper
+ *  - secureRoute(tier, roles?)      → build SecurityOptions quickly
+ *  - authenticateRequest(req)       → verify JWT, return AuthedContext
+ *  - verifyOwnership(...)           → IDOR prevention
+ *  - types: Role, AuthedContext, HandlerContext, SecurityOptions
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { rateLimit, authRateLimiters, getClientIp, type RateLimitConfig } from '@/lib/rate-limit';
+import { rateLimit, getClientIp, type RateLimitConfig } from '@/lib/rate-limit';
 import { fail, type ApiResponse, type ApiFailure } from '@/lib/api/response';
-import { logger } from '@/lib/logging';
 import {
+  activeConnections,
+  httpErrorsTotal,
+  httpRequestDurationMs,
+  httpRequestsTotal,
+} from '@/lib/observability/metrics';
+import {
+  log,
   AppError,
   AuthenticationError,
   AuthorizationError,
   NotFoundError,
-} from '@/lib/errors';
+  type Role,
+} from '@/lib/foundation';
 
 // ── Types ──
-
-export type Role = 'customer' | 'driver' | 'restaurant' | 'admin' | 'super_admin' | 'manager';
+export type { Role } from '@/lib/foundation/types';
 
 export interface AuthedContext {
   user: {
@@ -45,14 +52,11 @@ export interface AuthedContext {
 }
 
 export interface SecurityOptions {
-  /** Allowed roles (any of these). Empty = any authenticated user. */
   roles?: Role[];
-  /** Rate limit config (per-user+IP) */
   rateLimit?: RateLimitConfig;
-  /** Admin secret key (alternative to user auth) */
   allowAdminKey?: boolean;
-  /** Custom authorization predicate */
   customAuth?: (ctx: AuthedContext, req: NextRequest) => Promise<boolean>;
+  publicAccess?: boolean;
 }
 
 export interface HandlerContext {
@@ -62,24 +66,55 @@ export interface HandlerContext {
   startTime: number;
 }
 
-// ── Core helpers ──
+export interface PublicHandlerContext {
+  req: NextRequest;
+  auth: AuthedContext | null;
+  requestId: string;
+  startTime: number;
+}
 
-/**
- * Verify JWT and return the authenticated user.
- * Uses Supabase server client which validates the JWT signature.
- * Returns null if not authenticated.
- */
+// ── Core helpers ──
 export async function authenticateRequest(req: NextRequest): Promise<AuthedContext | null> {
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data: { user }, error } = await supabase.auth.getUser();
-    if (error || !user) return null;
+    let jwtPerms: string[] = [];
+    let userId: string | null = null;
+    let userEmail: string | null = null;
 
-    const { data: profile } = await supabase
+    if (error || !user) {
+      // Bearer fallback: ask Supabase Auth to verify the signature. Never
+      // authorize from a locally decoded, unverified JWT payload.
+      const auth = req.headers.get('authorization') || req.headers.get('Authorization');
+      if (auth && auth.toLowerCase().startsWith('bearer ')) {
+        const token = auth.slice(7).trim();
+        if (token) {
+          try {
+            const { data: { user: bearerUser }, error: bearerError } = await supabase.auth.getUser(token);
+            if (!bearerError && bearerUser) {
+              userId = bearerUser.id;
+              userEmail = bearerUser.email ?? null;
+              jwtPerms = Array.isArray(bearerUser.app_metadata?.permissions) ? bearerUser.app_metadata.permissions : [];
+            }
+          } catch {
+            // ignore
+          }
+        }
+      }
+      if (!userId) return null;
+    } else {
+      userId = user.id;
+      userEmail = user.email ?? null;
+      jwtPerms = (user.app_metadata as { permissions?: string[] } | undefined)?.permissions ?? [];
+    }
+
+    // Look up the profile (always via service client to bypass RLS)
+    const service = createServiceClient();
+    const { data: profile } = await service
       .from('users')
       .select('id, email, name, role, is_active, is_verified')
-      .eq('id', user.id)
-      .single();
+      .eq('id', userId)
+      .maybeSingle();
 
     if (!profile) return null;
     if (profile.is_active === false) return null;
@@ -87,23 +122,20 @@ export async function authenticateRequest(req: NextRequest): Promise<AuthedConte
     return {
       user: {
         id: profile.id,
-        email: profile.email,
-        role: profile.role as Role,
+        email: profile.email ?? userEmail,
+        role: profile.role as 'customer' | 'driver' | 'restaurant' | 'manager' | 'admin' | 'super_admin',
         name: profile.name,
         isActive: profile.is_active !== false,
         isVerified: profile.is_verified === true,
-      },
+        permissions: jwtPerms,
+      } as unknown as AuthedContext['user'] & { permissions?: string[] },
     };
   } catch (e) {
-    logger.warn('Authentication failed', { error: (e as Error).message });
+    log.warn('Authentication failed', { error: (e as Error).message });
     return null;
   }
 }
 
-/**
- * Verify a user owns a resource (IDOR prevention).
- * Throws AuthorizationError if not owner.
- */
 export async function verifyOwnership(
   userId: string,
   role: Role,
@@ -111,7 +143,6 @@ export async function verifyOwnership(
   resourceId: string,
   resourceOwnerField: string = 'user_id'
 ): Promise<void> {
-  // Admins can access any resource
   if (role === 'admin' || role === 'super_admin' || role === 'manager') return;
 
   const svc = createServiceClient();
@@ -125,9 +156,8 @@ export async function verifyOwnership(
     throw new NotFoundError(resourceType);
   }
 
-  const ownerId = (data as any)[resourceOwnerField];
+  const ownerId = (data as unknown as Record<string, unknown>)[resourceOwnerField];
   if (ownerId !== userId) {
-    // Special cases
     if (resourceType === 'order' && role === 'driver' && resourceOwnerField === 'driver_id') {
       if (ownerId === userId) return;
     }
@@ -139,17 +169,21 @@ export async function verifyOwnership(
 }
 
 // ── Higher-level wrappers ──
+function generateRequestId(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+}
 
-/**
- * Wrap an API handler with comprehensive security:
- *  1. Auth (with admin key bypass for system routes)
- *  2. Rate limiting (per-user, per-IP, per-endpoint)
- *  3. Role-based authorization
- *  4. Custom authorization
- *  5. Request ID + timing
- *  6. Audit logging
- *  7. Safe error responses
- */
+function metricRoute(req: NextRequest): string {
+  return req.nextUrl.pathname
+    .split('/')
+    .map((segment) => {
+      if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(segment)) return ':id';
+      if (/^\d{4,}$/.test(segment) || segment.length > 48) return ':id';
+      return segment;
+    })
+    .join('/') || '/';
+}
+
 export function withSecurity<T = unknown>(
   options: SecurityOptions,
   handler: (ctx: HandlerContext, req: NextRequest) => Promise<NextResponse<ApiResponse<T>>>
@@ -157,27 +191,30 @@ export function withSecurity<T = unknown>(
   return async (req: NextRequest): Promise<NextResponse<ApiResponse<T> | ApiFailure>> => {
     const startTime = Date.now();
     const requestId = req.headers.get('x-request-id') || generateRequestId();
+    const route = metricRoute(req);
+    const method = req.method.toUpperCase();
+    const connectionLabels = { method, route };
+    let responseStatus = 500;
+    activeConnections.inc(connectionLabels);
+
+    const finalize = <R extends NextResponse>(response: R): R => {
+      responseStatus = response.status;
+      return response;
+    };
 
     try {
-      // 1) Rate limit (IP-based, always).
-      //    v81 unification: route through the canonical fail() helper so
-      //    every error response in the system uses the same shape and the
-      //    same safe-message mapping.
       if (options.rateLimit) {
         const limited = rateLimit(options.rateLimit, req);
         if (limited) {
-          logger.warn('Rate limit hit', {
+          log.warn('Rate limit hit', {
             requestId,
             endpoint: options.rateLimit.name,
             ip: getClientIp(req),
           });
-          return limited as NextResponse<ApiFailure>;
+          return finalize(limited as NextResponse<ApiFailure>);
         }
       }
 
-      // 2) Admin key bypass (system routes). When the admin key matches
-      //    we run the handler with a synthesized super_admin context — this
-      //    is the documented escape hatch for cron / webhook callers.
       if (options.allowAdminKey) {
         const adminKey = req.headers.get('x-admin-key');
         const expectedKey = process.env.ADMIN_SECRET_KEY || process.env.CRON_SECRET;
@@ -191,66 +228,91 @@ export function withSecurity<T = unknown>(
           const response = await handler(ctx, req);
           response.headers.set('X-Request-Id', requestId);
           response.headers.set('X-Response-Time', `${Date.now() - startTime}ms`);
-          return response;
+          return finalize(response);
         }
       }
 
-      // 3) User authentication
+      if (options.publicAccess) {
+        const ctx: PublicHandlerContext = {
+          req,
+          auth: null,
+          requestId,
+          startTime,
+        };
+        const response = await (handler as (ctx: PublicHandlerContext, req: NextRequest) => Promise<NextResponse<ApiResponse<T>>>)(ctx, req);
+        response.headers.set('X-Request-Id', requestId);
+        response.headers.set('X-Response-Time', `${Date.now() - startTime}ms`);
+        return finalize(response);
+      }
+
       const auth = await authenticateRequest(req);
       if (!auth) {
-        return fail(new AuthenticationError('Authentication required'));
+        return finalize(fail(new AuthenticationError('Authentication required')));
       }
 
-      // 4) Role check
       if (options.roles && options.roles.length > 0) {
         if (!options.roles.includes(auth.user.role)) {
-          return fail(new AuthorizationError('Insufficient permissions'));
+          return finalize(fail(new AuthorizationError('Insufficient permissions')));
         }
       }
 
-      // 5) Custom authorization
       if (options.customAuth) {
         const allowed = await options.customAuth(auth, req);
         if (!allowed) {
-          return fail(new AuthorizationError('Access denied'));
+          return finalize(fail(new AuthorizationError('Access denied')));
         }
       }
 
-      // 6) Account state checks
       if (!auth.user.isActive) {
-        return fail(new AuthorizationError('Account is disabled'));
+        return finalize(fail(new AuthorizationError('Account is disabled')));
       }
 
-      // 7) Execute handler
       const ctx: HandlerContext = { req, auth, requestId, startTime };
       const response = await handler(ctx, req);
 
-      // 8) Add security headers
       response.headers.set('X-Request-Id', requestId);
       response.headers.set('X-Response-Time', `${Date.now() - startTime}ms`);
 
-      return response;
+      return finalize(response);
     } catch (e) {
       const duration = Date.now() - startTime;
-      const isAppError = e instanceof AppError;
+      const isAppErr = e instanceof AppError;
 
-      logger.error('API error', {
+      log.error('API error', {
         requestId,
         path: new URL(req.url).pathname,
         method: req.method,
         duration_ms: duration,
-        error: isAppError ? e.message : 'unexpected',
-        code: isAppError ? e.code : 'INTERNAL',
+        error: isAppErr ? e.message : 'unexpected',
+        code: isAppErr ? e.code : 'INTERNAL',
       });
 
-      // All errors go through fail() so the shape, safe-message mapping,
-      // and status-code selection are guaranteed consistent.
-      return fail(e);
+      return finalize(fail(e));
+    } finally {
+      const status = String(responseStatus);
+      const labels = { method, route, status };
+      const durationMs = Date.now() - startTime;
+      httpRequestsTotal.inc(labels);
+      httpRequestDurationMs.observe(durationMs, labels);
+      if (responseStatus >= 500) httpErrorsTotal.inc(labels);
+      activeConnections.dec(connectionLabels);
+      log.info('API request completed', {
+        requestId,
+        method,
+        route,
+        status: responseStatus,
+        duration_ms: durationMs,
+      });
     }
   };
 }
 
-// Stub for generateRequestId if not imported elsewhere
-function generateRequestId(): string {
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
+export function withPublicSecurity<T = unknown>(
+  options: Omit<SecurityOptions, 'publicAccess' | 'roles' | 'customAuth' | 'allowAdminKey'>,
+  handler: (ctx: PublicHandlerContext, req: NextRequest) => Promise<NextResponse<ApiResponse<T>>>
+) {
+  return withSecurity(
+    { ...options, publicAccess: true },
+    handler as unknown as (ctx: HandlerContext, req: NextRequest) => Promise<NextResponse<ApiResponse<T>>>,
+  ) as unknown as (req: NextRequest) => Promise<NextResponse>;
 }

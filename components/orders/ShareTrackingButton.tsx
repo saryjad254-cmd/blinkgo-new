@@ -103,6 +103,7 @@ export function ShareTrackingButton({ orderId, restaurantName }: ShareTrackingBu
                   />
                   <button
                     onClick={copyLink}
+                    aria-label={copied ? 'Link copied' : 'Copy tracking link'}
                     className="rounded-lg bg-ink-1 p-2 text-white transition hover:bg-ink-2"
                   >
                     {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}

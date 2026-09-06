@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from 'react';
 import { PremiumMarker } from '@/components/maps/PremiumMarker';
+import { loadLeaflet } from '@/lib/maps/load-leaflet';
+import type { Layer, Map as LeafletMap } from 'leaflet';
 
 interface Driver {
   id: string;
@@ -16,44 +18,10 @@ interface HeatmapMapProps {
   drivers: Driver[];
 }
 
-/** Load Leaflet via CDN (consistent with other map components) */
-function loadLeaflet(): Promise<any> {
-  if (typeof window === 'undefined') return Promise.reject('SSR');
-  return new Promise((resolve, reject) => {
-    if ((window as any).L) {
-      resolve((window as any).L);
-      return;
-    }
-    // CSS
-    if (!document.getElementById('leaflet-css-heatmap')) {
-      const link = document.createElement('link');
-      link.id = 'leaflet-css-heatmap';
-      link.rel = 'stylesheet';
-      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-      link.crossOrigin = '';
-      document.head.appendChild(link);
-    }
-    // JS
-    const existing = document.getElementById('leaflet-js-heatmap') as HTMLScriptElement | null;
-    if (existing) {
-      existing.addEventListener('load', () => resolve((window as any).L));
-      existing.addEventListener('error', () => reject(new Error('Leaflet load failed')));
-      return;
-    }
-    const script = document.createElement('script');
-    script.id = 'leaflet-js-heatmap';
-    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    script.crossOrigin = '';
-    document.head.appendChild(script);
-    script.onload = () => resolve((window as any).L);
-    script.onerror = () => reject(new Error('Leaflet load failed'));
-  });
-}
-
 export default function HeatmapMap({ drivers }: HeatmapMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const mapRef = useRef<any>(null);
-  const layersRef = useRef<any[]>([]);
+  const mapRef = useRef<LeafletMap | null>(null);
+  const layersRef = useRef<Layer[]>([]);
 
   useEffect(() => {
     if (!containerRef.current) return;

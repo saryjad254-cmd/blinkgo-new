@@ -1,16 +1,13 @@
 /**
- * Auth Helper — Secure Server-Side User Lookup
- * ──────────────────────────────────────────────
- * All functions in this module verify the JWT signature via Supabase's
- * server-side auth.getUser() — they never decode JWTs without verification.
+ * Canonical server-side authentication and role lookup.
  *
- * The legacy getApiUser() / getApiUserWithRole() (which decoded JWTs without
- * signature verification) have been REMOVED. Use createServerClient().auth.getUser()
- * directly, or use the higher-level helpers requireRole() / requireAdminRole()
- * in lib/rbac.ts and lib/admin/admin-rbac.ts.
+ * Identity always comes from Supabase Auth's signature-verified getUser().
+ * Authorization always comes from public.users and protected app_metadata.
+ * Editable user_metadata is never an authorization source.
  */
-
 import { createServerClient } from '@/lib/supabase/server';
+import { createServiceClient } from '@/lib/supabase/service';
+import type { User } from '@supabase/supabase-js';
 
 export interface AuthedUser {
   id: string;
@@ -19,55 +16,108 @@ export interface AuthedUser {
   name: string | null;
   isActive: boolean;
   isVerified: boolean;
+  permissions?: string[];
 }
 
-/**
- * Get the current user with their public profile (role, name, is_active, is_verified).
- * Returns null if not authenticated, or if the user is not active.
- *
- * SECURITY: Uses Supabase server client which verifies the JWT signature
- * via the project's JWT secret. No way to forge identity.
- */
-export async function getApiUserWithRole(): Promise<{ user: AuthedUser; profile: any } | null> {
+export interface AuthProfile {
+  id: string;
+  email: string | null;
+  name: string | null;
+  role: string;
+  is_active: boolean | null;
+  is_verified: boolean | null;
+}
+
+export interface ApiAuthResult {
+  user: AuthedUser;
+  profile: AuthProfile;
+}
+
+type VerifiedAuthUser = Pick<User, 'id' | 'email' | 'app_metadata'>;
+
+function permissionsFrom(user: VerifiedAuthUser): string[] {
+  const permissions = user.app_metadata?.permissions;
+  return Array.isArray(permissions)
+    ? permissions.filter((value): value is string => typeof value === 'string')
+    : [];
+}
+
+async function buildAuthResult(user: VerifiedAuthUser): Promise<ApiAuthResult | null> {
+  const service = createServiceClient();
+  const { data } = await service
+    .from('users')
+    .select('id, email, name, role, is_active, is_verified')
+    .eq('id', user.id)
+    .maybeSingle();
+  const profile = data as AuthProfile | null;
+  if (!profile || profile.is_active === false) return null;
+
+  return {
+    user: {
+      id: profile.id,
+      email: profile.email ?? user.email ?? null,
+      role: profile.role,
+      name: profile.name ?? null,
+      isActive: true,
+      isVerified: profile.is_verified === true,
+      permissions: permissionsFrom(user),
+    },
+    profile,
+  };
+}
+
+/** Resolve a cookie-bound authenticated user and authoritative profile. */
+export async function getApiUserWithRole(): Promise<ApiAuthResult | null> {
   try {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data: { user }, error } = await supabase.auth.getUser();
     if (error || !user) return null;
-
-    const { data: profile } = await supabase
-      .from('users')
-      .select('id, email, name, role, is_active, is_verified')
-      .eq('id', user.id)
-      .single();
-    if (!profile) return null;
-
-    return {
-      user: {
-        id: profile.id,
-        email: profile.email ?? user.email ?? null,
-        role: profile.role,
-        name: profile.name ?? null,
-        isActive: profile.is_active !== false,
-        isVerified: profile.is_verified === true,
-      },
-      profile,
-    };
+    return buildAuthResult(user);
   } catch {
     return null;
   }
 }
 
 /**
- * Require an active authenticated user with one of the allowed roles.
- * Returns the user info on success, or null on failure.
+ * Resolve cookie auth first, then a Bearer token. Bearer tokens are always
+ * verified by Supabase Auth, including local and staging development.
  */
+export async function getApiUserFromRequest(
+  req: { headers: { get(name: string): string | null } } | null,
+): Promise<ApiAuthResult | null> {
+  const cookieResult = await getApiUserWithRole();
+  if (cookieResult) return cookieResult;
+  if (!req) return null;
+
+  const authorization = req.headers.get('authorization') || req.headers.get('Authorization');
+  if (!authorization?.toLowerCase().startsWith('bearer ')) return null;
+  const token = authorization.slice(7).trim();
+  if (!token) return null;
+
+  try {
+    const supabase = await createServerClient();
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (error || !user) return null;
+    return buildAuthResult(user);
+  } catch {
+    return null;
+  }
+}
+
+/** Require an active user whose authoritative role satisfies the route. */
 export async function requireApiRole(
   allowed: string | string[],
+  request: { headers: { get(name: string): string | null } } | null = null,
 ): Promise<AuthedUser | null> {
-  const result = await getApiUserWithRole();
-  if (!result) return null;
-  if (!result.user.isActive) return null;
-  const allowed_ = Array.isArray(allowed) ? allowed : [allowed];
-  if (!allowed_.includes(result.user.role)) return null;
+  const result = request ? await getApiUserFromRequest(request) : await getApiUserWithRole();
+  if (!result?.user.isActive) return null;
+  const allowedRoles = Array.isArray(allowed) ? allowed : [allowed];
+
+  const roleRank: Record<string, number> = { super_admin: 3, admin: 2, manager: 1 };
+  const minimumAdminRank = Math.max(0, ...allowedRoles.map((role) => roleRank[role] ?? 0));
+  const userRank = roleRank[result.user.role] ?? 0;
+  const hierarchyOk = minimumAdminRank > 0 && userRank >= minimumAdminRank;
+
+  if (!allowedRoles.includes(result.user.role) && !hierarchyOk) return null;
   return result.user;
 }

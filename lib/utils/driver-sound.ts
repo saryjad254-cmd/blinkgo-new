@@ -18,7 +18,10 @@ let volume = 0.5;
 function getCtx(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   if (!audioContext) {
-    const Ctx = window.AudioContext || (window as any).webkitAudioContext;
+    const audioWindow = window as Window & typeof globalThis & {
+      webkitAudioContext?: typeof AudioContext;
+    };
+    const Ctx = window.AudioContext || audioWindow.webkitAudioContext;
     if (!Ctx) return null;
     audioContext = new Ctx();
   }
@@ -79,7 +82,7 @@ export function playDriverSound(sound: DriverSound): void {
   if (!ctx) return;
   const pattern = SOUND_PATTERNS[sound];
   const startTime = ctx.currentTime;
-  pattern.forEach((tone, i) => {
+  pattern.forEach((tone) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = tone.type ?? 'sine';

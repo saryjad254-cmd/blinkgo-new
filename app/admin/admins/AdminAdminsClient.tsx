@@ -1,15 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import Shield from 'lucide-react/dist/esm/icons/shield';
-import Mail from 'lucide-react/dist/esm/icons/mail';
+import { useState, useEffect, useRef } from 'react';
 import Plus from 'lucide-react/dist/esm/icons/plus';
 import X from 'lucide-react/dist/esm/icons/x';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
-import Trash2 from 'lucide-react/dist/esm/icons/trash-2';
 import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
+import { useModalAccessibility } from '@/lib/hooks/use-modal-accessibility';
 
 const T = {
   de: {
@@ -104,6 +103,14 @@ const ROLE_COLORS: Record<string, string> = {
   manager: 'bg-cyan-500 text-white',
 };
 
+interface ManagedAdmin {
+  id: string;
+  name: string | null;
+  email: string;
+  role: string;
+  is_active: boolean;
+}
+
 export function AdminAdminsClient({
   user,
   locale = 'de',
@@ -113,15 +120,17 @@ export function AdminAdminsClient({
 }) {
   const t = T[locale] ?? T.de;
   const isAr = locale === 'ar';
-  const [admins, setAdmins] = useState<any[]>([]);
+  const [admins, setAdmins] = useState<ManagedAdmin[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const createTriggerRef = useRef<HTMLButtonElement>(null);
+  const firstCreateFieldRef = useRef<HTMLInputElement>(null);
+  useModalAccessibility(showCreate, () => setShowCreate(false), firstCreateFieldRef, createTriggerRef);
 
   const [form, setForm] = useState({
     name: '',
     email: '',
-    password: '',
     role: 'manager',
   });
   const [creating, setCreating] = useState(false);
@@ -144,7 +153,9 @@ export function AdminAdminsClient({
   };
 
   useEffect(() => {
-    fetchAdmins();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void fetchAdmins(); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -166,20 +177,20 @@ export function AdminAdminsClient({
       });
       const data = await res.json();
       if (!res.ok) {
-        setCreateError(data.error || 'Failed');
+        setCreateError(extractErrorMessage(data, 'Failed'));
         return;
       }
-      setForm({ name: '', email: '', password: '', role: 'manager' });
+      setForm({ name: '', email: '', role: 'manager' });
       setShowCreate(false);
       fetchAdmins();
-    } catch (e: any) {
-      setCreateError(e.message);
+    } catch (error: unknown) {
+      setCreateError(extractErrorMessage(error, 'Failed'));
     } finally {
       setCreating(false);
     }
   };
 
-  const toggleActive = async (a: any) => {
+  const toggleActive = async (a: ManagedAdmin) => {
     const res = await fetch('/api/admin/admins', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -202,6 +213,7 @@ export function AdminAdminsClient({
           </div>
           {isSuperAdmin && (
             <button
+              ref={createTriggerRef}
               type="button"
               onClick={() => setShowCreate(true)}
               className="inline-flex items-center gap-2 h-10 px-4 rounded-xl bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active text-white text-sm font-extrabold hover:opacity-90"
@@ -214,14 +226,17 @@ export function AdminAdminsClient({
 
         {/* Create modal */}
         {showCreate && isSuperAdmin && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" onClick={() => setShowCreate(false)}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" role="presentation" onClick={() => setShowCreate(false)}>
             <form
               onSubmit={handleCreate}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="create-admin-title"
               className="w-full max-w-md bg-surface-elevated rounded-2xl border border-edge p-6 space-y-4"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between">
-                <h2 className="text-lg font-extrabold text-white">{t.createAdmin}</h2>
+                <h2 id="create-admin-title" className="text-lg font-extrabold text-white">{t.createAdmin}</h2>
                 <button type="button" onClick={() => setShowCreate(false)} aria-label="Schließen" className="w-8 h-8 rounded-lg bg-ink-700 flex items-center justify-center text-text-secondary hover:text-white focus:outline-none focus:ring-2 focus:ring-brand-500/50">
                   <X className="w-4 h-4" />
                 </button>
@@ -232,6 +247,7 @@ export function AdminAdminsClient({
                 </div>
               )}
               <input
+                ref={firstCreateFieldRef}
                 type="text"
                 placeholder={t.name2}
                 value={form.name}
@@ -248,16 +264,9 @@ export function AdminAdminsClient({
                 dir="ltr"
                 className="w-full h-11 px-4 rounded-xl bg-ink-700 border border-edge text-white placeholder:text-text-muted focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none"
               />
-              <input
-                type="password"
-                placeholder={t.password}
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-                required
-                minLength={8}
-                dir="ltr"
-                className="w-full h-11 px-4 rounded-xl bg-ink-700 border border-edge text-white placeholder:text-text-muted focus:border-brand-red-500 focus:ring-2 focus:ring-brand-red-500/20 focus:outline-none"
-              />
+              <p className="rounded-xl border border-brand-yellow/30 bg-brand-yellow/10 p-3 text-sm font-bold text-brand-yellow">
+                {locale === 'ar' ? 'ستُرسل دعوة تفعيل آمنة إلى البريد. كلمة المرور يختارها المستخدم ولا يراها السوبر أدمن.' : locale === 'en' ? 'A secure activation invitation will be emailed. The user chooses a password that the super-admin never sees.' : 'Eine sichere Aktivierungseinladung wird per E-Mail versendet. Das Passwort wählt der Benutzer selbst.'}
+              </p>
               <select
                 value={form.role}
                 onChange={(e) => setForm({ ...form, role: e.target.value })}

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth-helper';
 import { createServiceClient } from '@/lib/supabase/service';
 import { computeDriverMetrics, recommendDriverImprovements } from '@/lib/analytics/driver-intelligence';
@@ -7,7 +7,7 @@ import type { DriverRow, DriverOrderRow } from '@/lib/analytics/driver-intellige
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const auth = await requireApiRole(['admin']);
   if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
 

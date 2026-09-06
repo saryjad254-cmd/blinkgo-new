@@ -6,6 +6,8 @@
 
 import type { EmailProvider, EmailMessage, EmailResult, EmailProviderName } from './types';
 import { IntegrationError, readProviderConfig } from '../types';
+import { assertEmailAddresses } from './safety';
+import { rejectSuppressedRecipients } from './suppression';
 
 export class ResendProvider implements EmailProvider {
   public readonly name: EmailProviderName = 'resend';
@@ -14,8 +16,8 @@ export class ResendProvider implements EmailProvider {
 
   constructor() {
     const cfg = readProviderConfig('RESEND');
-    this.apiKey = cfg.secret_key;
-    this.enabled = cfg.enabled && !!this.apiKey;
+    this.apiKey = process.env.RESEND_API_KEY || String(cfg.secret_key || '');
+    this.enabled = Boolean(this.apiKey);
   }
 
   private requireEnabled(): void {
@@ -26,8 +28,9 @@ export class ResendProvider implements EmailProvider {
 
   async send(message: EmailMessage): Promise<EmailResult> {
     this.requireEnabled();
-    const recipients = Array.isArray(message.to) ? message.to : [message.to];
-    const body: any = {
+    const recipients = assertEmailAddresses(message.to);
+    await rejectSuppressedRecipients(recipients);
+    const body: Record<string, unknown> = {
       from: message.from,
       to: recipients,
       subject: message.subject,
@@ -46,13 +49,15 @@ export class ResendProvider implements EmailProvider {
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
+        ...(message.idempotency_key ? { 'Idempotency-Key': message.idempotency_key } : {}),
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
     });
     const data = await res.json();
     if (!res.ok) {
       throw new IntegrationError('resend', data.statusCode?.toString() || 'API_ERROR', data.message || 'Resend send failed', {
-        retryable: res.status >= 500,
+        retryable: res.status === 408 || res.status === 429 || res.status >= 500,
       });
     }
     return {
@@ -72,8 +77,8 @@ export class ResendProvider implements EmailProvider {
         headers: { Authorization: `Bearer ${this.apiKey}` },
       });
       return { ok: res.ok, latency_ms: Date.now() - start };
-    } catch (e: any) {
-      return { ok: false, latency_ms: Date.now() - start, error: e.message };
+    } catch (e: unknown) {
+      return { ok: false, latency_ms: Date.now() - start, error: e instanceof Error ? e.message : 'Health check failed' };
     }
   }
 }

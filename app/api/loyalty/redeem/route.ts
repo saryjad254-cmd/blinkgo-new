@@ -5,9 +5,9 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
-import { ok, fail, withErrorHandling } from '@/lib/api/response';
+import { ok, withErrorHandling } from '@/lib/api/response';
 import { LoyaltyService } from '@/lib/services/loyalty-service';
-import { ValidationError, AuthenticationError, ConflictError } from '@/lib/errors';
+import { ValidationError, AuthenticationError } from '@/lib/errors';
 import { rateLimit } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
@@ -19,16 +19,20 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const limited = rateLimit({ limit: 10, windowSec: 15 * 60, name: 'loyalty-redeem' }, req);
     if (limited) return limited;
 
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new AuthenticationError();
 
-    const body = await req.json().catch(() => ({}));
-    const { points, order_id } = body;
-    if (typeof points !== 'number' || points < 100) {
-      throw new ValidationError('points must be at least 100');
+    const rawBody: unknown = await req.json().catch(() => null);
+    const body = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as Record<string, unknown>
+      : {};
+    const points = body.points;
+    const orderId = typeof body.order_id === 'string' ? body.order_id.slice(0, 80) : undefined;
+    if (typeof points !== 'number' || !Number.isInteger(points) || points < 100 || points > 1_000_000) {
+      throw new ValidationError('points must be an integer between 100 and 1000000');
     }
-    const result = await LoyaltyService.redeem(user.id, points, order_id);
+    const result = await LoyaltyService.redeem(user.id, points, orderId);
     return ok(result);
   });
 }

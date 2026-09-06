@@ -112,6 +112,7 @@ export function ThemeToggle({ variant = 'icon', className }: ThemeToggleProps) {
       <button
         type="button"
         onClick={toggle}
+        aria-label="Theme menu"
         className="w-10 h-10 rounded-full flex items-center justify-center bg-surface-light hover:bg-surface text-text border border-edge"
       >
         {resolvedTheme === 'dark' ? (

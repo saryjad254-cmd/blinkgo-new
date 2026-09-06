@@ -46,35 +46,18 @@ interface BlinkButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantStyles: Record<Variant, string> = {
   primary:
-    'bg-brand-red text-white border-brand-red shadow-brand-red ' +
-    'hover:bg-brand-red-hover hover:border-brand-red-hover ' +
-    'active:bg-brand-red-active ' +
-    'focus-visible:ring-brand-red/40',
+    'bg-brand text-white border-brand shadow-[0_10px_30px_rgba(225,6,0,.22)] ' +
+    'hover:bg-brand-hover hover:border-brand-hover active:bg-brand-active focus-visible:ring-brand/40',
   secondary:
-    'bg-brand-black text-white border-brand-black shadow-brand-black ' +
-    'hover:bg-brand-black-hover ' +
-    'active:bg-brand-black-active ' +
-    'focus-visible:ring-brand-black/40',
+    'bg-surface-3 text-text-primary border-border-strong hover:bg-surface-2 active:bg-surface-1 focus-visible:ring-white/20',
   accent:
-    'bg-brand-yellow text-brand-black border-brand-yellow shadow-brand-yellow ' +
-    'hover:bg-brand-yellow-hover ' +
-    'active:bg-brand-yellow-active ' +
-    'focus-visible:ring-brand-yellow/40',
+    'bg-brand-yellow text-canvas border-brand-yellow hover:bg-brand-yellow-hover active:bg-brand-yellow-active focus-visible:ring-brand-yellow/40',
   outlined:
-    'bg-transparent text-text-primary border-edge-strong ' +
-    'hover:bg-surface-light hover:border-brand-red hover:text-brand-red ' +
-    'active:bg-surface ' +
-    'focus-visible:ring-brand-red/40',
+    'bg-transparent text-text-primary border-border-strong hover:bg-surface-2 hover:border-brand hover:text-brand-hover active:bg-surface-1 focus-visible:ring-brand/40',
   ghost:
-    'bg-transparent text-text-primary border-transparent ' +
-    'hover:bg-surface-light ' +
-    'active:bg-surface ' +
-    'focus-visible:ring-brand-red/40',
+    'bg-transparent text-text-primary border-transparent hover:bg-surface-2 active:bg-surface-1 focus-visible:ring-brand/40',
   danger:
-    'bg-brand-red text-white border-brand-red shadow-brand-red ' +
-    'hover:bg-brand-red-hover ' +
-    'active:bg-brand-red-active ' +
-    'focus-visible:ring-brand-red/40',
+    'bg-status-error text-white border-status-error hover:brightness-110 active:brightness-90 focus-visible:ring-status-error/40',
   success:
     'bg-emerald-500 text-white border-emerald-500 ' +
     'hover:bg-emerald-600 ' +
@@ -91,8 +74,8 @@ const sizeStyles: Record<Size, string> = {
   xs:  'h-7  px-2.5 text-xs gap-1.5',
   sm:  'h-9  px-3.5 text-sm gap-2',
   md:  'h-11 px-5 text-base gap-2',
-  lg:  'h-13 px-6 text-md gap-2.5',
-  xl:  'h-15 px-8 text-lg gap-3',
+  lg:  'h-12 px-6 text-base gap-2.5',
+  xl:  'h-14 px-8 text-lg gap-3',
   icon: 'h-11 w-11 p-0',
 };
 

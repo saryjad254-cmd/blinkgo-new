@@ -25,12 +25,14 @@ module.exports = {
       // TYPOGRAPHY — 1.25 modular scale, Cairo (AR) + Inter (DE/EN)
       // ════════════════════════════════════════════════════════════════
       fontFamily: {
-        arabic: ['var(--font-cairo)', 'Cairo', 'Tajawal', 'system-ui', 'sans-serif'],
-        display: ['var(--font-cairo)', 'Cairo', 'system-ui', 'sans-serif'],
-        sans: ['var(--font-inter)', 'Inter', 'system-ui', 'sans-serif'],
-        cairo: ['var(--font-cairo)', 'Cairo', 'system-ui', 'sans-serif'],
-        inter: ['var(--font-inter)', 'Inter', 'system-ui', 'sans-serif'],
-        mono: ['ui-monospace', 'SFMono-Regular', 'monospace'],
+        // PRECISION DELIVERY DNA: single font family (IBM Plex Sans)
+        // Latin: IBM Plex Sans / Arabic: IBM Plex Sans Arabic
+        sans: ['var(--font-ibm-plex)', 'IBM Plex Sans', 'system-ui', 'sans-serif'],
+        arabic: ['var(--font-ibm-plex-arabic)', 'IBM Plex Sans Arabic', 'system-ui', 'sans-serif'],
+        display: ['var(--font-ibm-plex)', 'IBM Plex Sans', 'system-ui', 'sans-serif'],
+        mono: ['var(--font-ibm-plex)', 'IBM Plex Sans', 'system-ui', 'monospace'],
+        ibm: ['var(--font-ibm-plex)', 'IBM Plex Sans', 'system-ui', 'sans-serif'],
+        legacy: ['var(--font-ibm-plex)', 'IBM Plex Sans', 'system-ui', 'sans-serif'],
       },
       fontSize: {
         // Compact 1.125 scale (saves vertical real estate, looks denser and more premium)
@@ -59,157 +61,124 @@ module.exports = {
       // ════════════════════════════════════════════════════════════════
       // COLOR SYSTEM — semantic, theme-aware
       // ════════════════════════════════════════════════════════════════
-      // v8.0 NEW BRAND IDENTITY — racing red + golden yellow + deep ink
-      // Inspired by the BlinkGo speed poster: bold, energetic, German.
+      // v4 EXACT VISUAL — exact match to 4 reference images
+      // Source of truth: attached mockups (4 approved visual targets)
       // ════════════════════════════════════════════════════════════════
       colors: {
-        // Brand: racing red (speed, urgency, premium German automotive)
-        'brand-yellow': {
-          50:  '#FFFBEB',
-          100: '#FEF3C7',
-          200: '#FDE68A',
-          300: '#FCD34D',
-          400: '#FBBF24',
-          500: '#F5B819',  // OFFICIAL BLINKGO YELLOW (from logo)
-          600: '#D97706',
-          700: '#B45309',
-          800: '#92400E',
-          900: '#78350F',
+        // ═══════════════════════════════════════════════════════════════
+        // EXACT VISUAL DIRECTION — v4 (deeper, more saturated)
+        // ═══════════════════════════════════════════════════════════════
+        // Canvas: #08090B (deeper black)
+        // Surface 1: #0E1014
+        // Surface 2: #15181D
+        // Surface 3: #1B1F25
+        // Primary Red: #E10600
+        // Active Red: #FF2A2A (brighter for selected states)
+        // Golden Yellow: #FFC107
+        canvas:    'var(--canvas)',
+        'surface-1': 'var(--surface-1)',
+        'surface-2': 'var(--surface-2)',
+        'surface-3': 'var(--surface-3)',
+        'surface-card': 'var(--surface-card)',
+        ink: {
+          DEFAULT: '#F7F7F5',
+          primary: '#F7F7F5',
+          secondary: '#A9ADB5',
+          muted: '#6B6F77',
+          subtle: '#4A4A52',
+          inverse: '#08090B',
+          500: '#2A2E35',
+          600: '#22262C',
+          700: '#1B1F25',
+          800: '#15181D',
+          900: '#08090B',
+        },
+        'text-primary':   'var(--text-primary)',
+        'text-secondary': 'var(--text-secondary)',
+        'text-muted':     'var(--text-muted)',
+        'text-subtle':    'var(--text-subtle)',
+        'border':         'var(--border)',
+        'border-strong':  'var(--border-strong)',
+        hairline:         'var(--hairline)',
+
+        // Brand
+        brand: {
+          DEFAULT: '#E10600',
+          50:  '#FFF1F0',
+          100: '#FFD9D6',
+          200: '#FFB3AC',
+          300: '#FF7A6E',
+          400: '#FF4131',
+          500: '#E10600',
+          600: '#C70500',
+          700: '#A30500',
+          800: '#7F0300',
+          900: '#5A0200',
+          hover: '#FF2A2A',
+          active: '#C70500',
         },
         'brand-red': {
-          50:  '#FEF2F2',
-          100: '#FEE2E2',
-          200: '#FECACA',
-          300: '#FCA5A5',
-          400: '#F87171',
-          500: '#DC2626',  // OFFICIAL BLINKGO RED (from logo)
-          600: '#B91C1C',
-          700: '#991B1B',
-          800: '#7F1D1D',
-          900: '#7F1D1D',
+          DEFAULT: '#E10600',
+          50: '#FFF1F0',
+          100: '#FFD9D6',
+          200: '#FFB3AC',
+          300: '#FF7A6E',
+          400: '#FF4131',
+          500: '#E10600',
+          600: '#C70500',
+          700: '#A30500',
+          800: '#7F0300',
+          900: '#5A0200',
+          hover: '#FF2A2A',
+          active: '#C70500',
+          dark: '#A30500',
         },
-        'brand-black': {
-          50:  '#F5F5F5',
-          100: '#E5E5E5',
-          200: '#D4D4D4',
-          300: '#A3A3A3',
-          400: '#737373',
-          500: '#525252',
-          600: '#404040',
-          700: '#262626',
-          800: '#171717',
-          900: '#0A0A0A',  // OFFICIAL BLINKGO BLACK (from logo)
+        'brand-yellow': {
+          DEFAULT: '#FFC107',
+          50:  '#FFFBEA',
+          100: '#FFF3C4',
+          200: '#FFE788',
+          300: '#FFD340',
+          400: '#FFC107',
+          500: '#FFC107',
+          600: '#E6B000',
+          700: '#CC9D00',
+          800: '#A37C00',
+          900: '#7A5C00',
+          hover: '#FFD340',
+          active: '#E6B000',
         },
-        brand: {
-          50:  '#FEF2F2',
-          100: '#FEE2E2',
-          200: '#FECACA',
-          300: '#FCA5A5',
-          400: '#F87171',
-          500: '#DC2626',   // primary brand — official BlinkGo racing red
-          600: '#DC2626',   // hover/active
-          700: '#B91C1C',
-          800: '#991B1B',
-          900: '#7F1D1D',
-        },
-        // Brand color tokens (mirror of CSS vars for utility classes)
-        'brand-red': '#DC2626',
-        'brand-red-hover': '#B91C1C',
-        'brand-red-active': '#991B1B',
-        'brand-yellow': '#F5B819',
-        'brand-yellow-hover': '#D97706',
-        'brand-yellow-active': '#B45309',
-        'brand-black': '#0A0A0A',
-        'brand-black-hover': '#262626',
-        'brand-black-active': '#404040',
 
-// Accent: golden yellow (warmth, speed, appetite)
+        // Status (semantic only)
+        'status-open':    '#22C55E',
+        'status-busy':    '#F59E0B',
+        'status-closed':  '#6B7280',
+        'status-success': '#22C55E',
+        'status-error':   '#EF4444',
+        'status-warning': '#F59E0B',
+        'status-info':    '#3B82F6',
+
         accent: {
-          50:  '#FFFBEB',
-          100: '#FEF3C7',
-          200: '#FDE68A',
-          300: '#FCD34D',
-          400: '#FBBF24',
-          500: '#F5B819',   // primary accent — official BlinkGo yellow
-          600: '#D97706',
-          700: '#B45309',
-          800: '#92400E',
-          900: '#78350F',
+          DEFAULT: '#FFC107',
+          400: '#FFD340',
+          500: '#FFC107',
+          600: '#E6B000',
         },
-        // Neutral: deep ink scale (rich blacks, premium contrast)
-        ink: {
-          0:    '#FFFFFF',
-          50:   '#FAFAFA',
-          100:  '#F4F4F5',
-          200:  '#E4E4E7',
-          300:  '#D4D4D8',
-          400:  '#A1A1AA',
-          500:  '#71717A',
-          600:  '#52525B',
-          700:  '#3F3F46',
-          800:  '#27272A',
-          900:  '#09090B',  // pure black for backgrounds
-        },
-        // Semantic
-        success: { DEFAULT: '#10B981', light: '#34D399', dark: '#059669' },
-        warning: { DEFAULT: '#F59E0B', light: '#FBBF24', dark: '#D97706' },
-        danger:  { DEFAULT: '#EF4444', light: '#F87171', dark: '#DC2626' },
-        info:    { DEFAULT: '#3B82F6', light: '#60A5FA', dark: '#2563EB' },
 
-        // Premium accents (for order statuses, badges, special moments)
-        rose:    { DEFAULT: '#FB7185', light: '#FDA4AF', dark: '#E11D48' },  // pink — for promotions/loved
-        emerald: { DEFAULT: '#10B981', light: '#34D399', dark: '#047857' },  // cash/money green
-        violet:  { DEFAULT: '#A855F7', light: '#C084FC', dark: '#7E22CE' },  // premium tier (Uber One)
-        cyan:    { DEFAULT: '#06B6D4', light: '#67E8F9', dark: '#0891B2' },  // live tracking (Careem)
-        lime:    { DEFAULT: '#84CC16', light: '#A3E635', dark: '#4D7C0F' },  // ready/fresh
-        gold:    { DEFAULT: '#EAB308', light: '#FACC15', dark: '#A16207' },  // premium tier badge
-        // Surfaces (dark mode default)
-        bg: {
-          DEFAULT: 'var(--bg)',
-          subtle:   'var(--bg-subtle)',
-          elevated: 'var(--bg-elevated)',
-          card:     'var(--bg-card)',
-        },
-        surface: {
-          DEFAULT: 'var(--surface)',
-          light:   'var(--surface-light)',
-          raised:  'var(--surface-raised)',
-        },
-        // Borders
-        edge: {
-          DEFAULT: 'var(--border)',
-          light:   'var(--border)',
-          strong:  'var(--border-strong)',
-          brand:   'rgba(220, 38, 38, 0.35)',
-        },
-        // Text
-        text: {
-          DEFAULT: 'var(--text-primary)',
-          secondary: 'var(--text-secondary)',
-          muted:     'var(--text-muted)',
-          disabled:  'var(--text-disabled)',
-        },
-        // Back-compat aliases (don't break existing code)
-        primary: {
-          DEFAULT: '#FF6B1A',
-          dark:    '#E5560A',
-          light:   '#FF8A3D',
-        },
-        secondary: {
-          DEFAULT: '#10B981',
-          light:   '#34D399',
-          dark:    '#059669',
-        },
-        ocean: {
-          DEFAULT: '#3B82F6',
-          light:   '#60A5FA',
-          dark:    '#2563EB',
-        },
-        speed: {
-          red:    '#E53935',
-          orange: '#FF6B1A',
-          yellow: '#F59E0B',
-        },
+        // Legacy aliases (mapped to new tokens so old class names still work)
+        'bg':         'var(--surface-1)',
+        'bg-card':    'var(--surface-card)',
+        'bg-elevated':'var(--surface-2)',
+        'bg-subtle':  'var(--surface-2)',
+        'surface':    'var(--surface-1)',
+        'surface-light': 'var(--surface-3)',
+        text: 'var(--text-primary)',
+        edge: 'var(--border)',
+        'edge-light': 'var(--border-strong)',
+        success: '#22C55E',
+        warning: '#F59E0B',
+        danger:  '#EF4444',
+        info:    '#3B82F6',
       },
 
       // ════════════════════════════════════════════════════════════════
@@ -242,9 +211,9 @@ module.exports = {
         'speed-lg':  '0 16px 40px rgba(0,0,0,0.36), 0 0 0 1px rgba(255,255,255,0.06)',
         'speed-xl':  '0 24px 60px rgba(0,0,0,0.45)',
         // Brand glow (red)
-        'glow':         '0 8px 28px -4px rgba(239, 68, 68, 0.45)',
-        'glow-strong':  '0 12px 36px -4px rgba(239, 68, 68, 0.65)',
-        'glow-accent':  '0 8px 28px -4px rgba(245, 158, 11, 0.45)',
+        'glow':         '0 8px 28px -4px rgba(225, 6, 0, 0.42)',
+        'glow-strong':  '0 12px 36px -4px rgba(225, 6, 0, 0.58)',
+        'glow-accent':  '0 8px 28px -4px rgba(255, 193, 7, 0.40)',
         // Status glows
         'glow-success': '0 8px 28px -4px rgba(16, 185, 129, 0.45)',
         'glow-info':    '0 8px 28px -4px rgba(6, 182, 212, 0.45)',
@@ -254,8 +223,8 @@ module.exports = {
         'premium':      '0 1px 2px rgba(0,0,0,0.05), 0 4px 12px rgba(0,0,0,0.08), 0 24px 48px -12px rgba(0,0,0,0.12)',
         'premium-lg':   '0 4px 8px rgba(0,0,0,0.08), 0 12px 24px rgba(0,0,0,0.10), 0 32px 64px -16px rgba(0,0,0,0.16)',
         // Backward-compat aliases
-        'speed-glow':    '0 8px 28px -4px rgba(239, 68, 68, 0.45)',
-        'speed-glow-strong': '0 12px 36px -4px rgba(239, 68, 68, 0.65)',
+        'speed-glow':    '0 8px 28px -4px rgba(225, 6, 0, 0.42)',
+        'speed-glow-strong': '0 12px 36px -4px rgba(225, 6, 0, 0.58)',
       },
 
       // ════════════════════════════════════════════════════════════════
@@ -263,9 +232,9 @@ module.exports = {
       // ════════════════════════════════════════════════════════════════
       backgroundImage: {
         // v8.0 NEW BRAND — racing red → golden yellow diagonal
-        'brand-gradient':    'linear-gradient(135deg, #DC2626 0%, #F59E0B 100%)',
-        'brand-gradient-soft': 'linear-gradient(135deg, #EF4444 0%, #FBBF24 100%)',
-        'brand-gradient-diagonal': 'linear-gradient(45deg, #DC2626 0%, #F59E0B 100%)',
+        'brand-gradient':    'linear-gradient(135deg, #FF2A2A 0%, #E10600 52%, #A30500 100%)',
+        'brand-gradient-soft': 'linear-gradient(135deg, #FF4131 0%, #E10600 100%)',
+        'brand-gradient-diagonal': 'linear-gradient(45deg, #E10600 0%, #A30500 100%)',
         // Aurora: used for cards and modals (red → gold)
         'aurora':            'linear-gradient(135deg, rgba(220,38,38,0.18) 0%, rgba(245,158,11,0.10) 100%)',
         // Accent surfaces

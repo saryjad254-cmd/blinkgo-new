@@ -1,228 +1,231 @@
+/**
+ * Driver Dashboard — Production rebuild
+ * ─────────────────────────────────────
+ * Modern, focused dashboard inspired by Uber / Wolt driver apps.
+ * Shows:
+ *   - Online/Offline toggle (big, primary action)
+ *   - Today's earnings + week + month
+ *   - Active order (if any) with quick actions
+ *   - Quick stats (deliveries today, rating, hours online)
+ *   - Available orders to accept
+ */
 import { requireRole } from '@/lib/rbac';
-import { createServerClient } from '@/lib/supabase/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { DriverDashboardV2 } from '@/components/driver/DriverDashboardV2';
-import { getServerTranslations } from '@/lib/i18n/server-translations';
-import { cookies } from 'next/headers';
 import { computeEarnings } from '@/lib/services/driver-earnings';
+import { DriverDashboardClient } from '@/components/driver/DriverDashboardClient';
+import { createDriverOfferQuote } from '@/lib/driver/offer-policy';
+import { isDriverVerificationComplete } from '@/lib/driver/verification';
+import { sanitizeDeliveryPreferences } from '@/lib/delivery-preferences';
 
-// Cache for 30s — driver dashboard data is fresh enough at 30s granularity
-// (active order + earnings) and dramatically reduces Supabase load.
-export const revalidate = 30;
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
-function detectLocale(): 'de' | 'ar' | 'en' {
-  const c = cookies().get('blinkgo-locale')?.value;
-  if (c === 'ar') return 'ar';
-  if (c === 'en') return 'en';
-  return 'de';
-}
+type EarningsOrder = {
+  delivery_fee?: number | null;
+  tip?: number | null;
+  restaurant_latitude?: number | null;
+  restaurant_longitude?: number | null;
+  customer_latitude?: number | null;
+  customer_longitude?: number | null;
+};
 
-async function getDashboardData(driverId: string) {
-  const supabase = createServerClient();
+async function loadDriverData(driverId: string) {
+  const supabase = createServiceClient();
+  const now = new Date();
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+  const startOfWeek = new Date(now);
+  startOfWeek.setHours(0, 0, 0, 0);
+  startOfWeek.setDate(startOfWeek.getDate() - 7);
+  const startOfMonth = new Date(now);
+  startOfMonth.setHours(0, 0, 0, 0);
+  startOfMonth.setDate(1);
 
-  // Run auth + all data queries in parallel for fast page load
-  const [userResult, activeResult, deliveredResult, totalCountResult, hoursResult] = await Promise.all([
-    supabase.auth.getUser(),
-    // Active order
+  const dashboardResults = await Promise.all([
+    supabase
+      .from('drivers')
+      .select('id, is_online, is_available, vehicle_type, rating, total_deliveries, current_lat, current_lng')
+      .eq('id', driverId)
+      .maybeSingle(),
     supabase
       .from('orders')
-      .select(
-        'id, order_number, status, total, tip, delivery_fee, payment_method, customer_latitude, customer_longitude, restaurant_latitude, restaurant_longitude, delivery_address, delivery_instructions, customer:customer_id(name, phone), restaurants:restaurant_id(name, address, phone)',
-      )
+      .select(`
+        id, order_number, status, total, tip, delivery_fee, payment_method, restaurant_id,
+        delivery_address, delivery_instructions, customer_latitude, customer_longitude,
+        restaurant_latitude, restaurant_longitude, accepted_at, created_at,
+        customer:customer_id(name, phone),
+        restaurants:restaurant_id(name, address, phone)
+      `)
       .eq('driver_id', driverId)
-      .in('status', ['pending', 'confirmed', 'preparing', 'ready', 'picked_up'])
+      .in('status', ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivering'])
       .order('accepted_at', { ascending: false })
-      .limit(1),
-    // Recent completed (delivered) for this driver — last 30 days
-    (() => {
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      return supabase
-        .from('orders')
-        .select(
-          'id, order_number, status, total, tip, delivery_fee, delivered_at, created_at, restaurants:restaurant_id(name), accepted_at, cancelled_at',
-        )
-        .eq('driver_id', driverId)
-        .in('status', ['delivered', 'cancelled'])
-        .gte('created_at', thirtyDaysAgo.toISOString())
-        .order('delivered_at', { ascending: false })
-        .limit(100);
-    })(),
-    // All-time delivered count
+      .limit(1)
+      .maybeSingle(),
     supabase
       .from('orders')
-      .select('id', { count: 'exact', head: true })
+      .select('id, total, delivery_fee, tip, delivered_at, restaurant_latitude, restaurant_longitude, customer_latitude, customer_longitude')
       .eq('driver_id', driverId)
-      .eq('status', 'delivered'),
-    // Working hours
+      .eq('status', 'delivered')
+      .gte('delivered_at', startOfDay.toISOString()),
     supabase
-      .from('driver_working_hours')
-      .select('*')
-      .eq('driver_id', driverId),
-  ]);
-
-  const { data: { user } } = userResult;
-  const { data: activeRows } = activeResult;
-  const { data: delivered } = deliveredResult;
-  const { count: allTimeCount } = totalCountResult;
-  const { data: hours } = hoursResult;
-
-  const meta = user?.user_metadata ?? {};
-  const isOnline = !!meta.is_online;
-  const driverName = meta.full_name || meta.name || 'Driver';
-  const rating = Number(meta.rating ?? 5.0);
-
-  const activeOrder = (activeRows ?? [])[0] ?? null;
-
-  // Compute stats
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const weekStart = new Date(todayStart);
-  weekStart.setDate(weekStart.getDate() - 7);
-  const monthStart = new Date(todayStart);
-  monthStart.setDate(monthStart.getDate() - 30);
-  const prevWeekStart = new Date(weekStart);
-  prevWeekStart.setDate(prevWeekStart.getDate() - 7);
-
-  let todayEarnings = 0;
-  let todayDeliveries = 0;
-  let weekEarnings = 0;
-  let monthEarnings = 0;
-  let lastWeekEarnings = 0;
-  let cancelledCount = 0;
-  let acceptedCount = 0;
-  let completedCount = 0;
-
-  for (const o of delivered ?? []) {
-    const earnings = computeEarnings({ delivery_fee: o.delivery_fee, tip: o.tip }).total;
-    const d = new Date(o.delivered_at ?? o.created_at);
-    if (d >= todayStart) {
-      todayEarnings += earnings;
-      if (o.status === 'delivered') todayDeliveries += 1;
-    }
-    if (d >= weekStart) {
-      weekEarnings += earnings;
-    }
-    if (d >= monthStart) {
-      monthEarnings += earnings;
-    }
-    if (d >= prevWeekStart && d < weekStart) {
-      lastWeekEarnings += earnings;
-    }
-    if (o.status === 'cancelled') cancelledCount += 1;
-    if (o.status === 'delivered') completedCount += 1;
-    if (o.accepted_at) acceptedCount += 1;
-  }
-
-  // All-time totals (already fetched in parallel above)
-  const totalDeliveries = allTimeCount ?? 0;
-
-  // Acceptance rate: deliveries / offers
-  // We don't track offers explicitly; use completion rate as proxy:
-  // (delivered) / (delivered + cancelled)
-  const total = completedCount + cancelledCount;
-  const completionRate = total > 0 ? (completedCount / total) * 100 : 100;
-  // Acceptance rate proxy: completed / accepted (some accepted may be cancelled)
-  const acceptanceRate = acceptedCount > 0 ? (completedCount / acceptedCount) * 100 : 100;
-
-  // Working hours (already fetched in parallel above)
-  let workingHours: Array<{ day: string; start: string; end: string; enabled: boolean }> = [];
-  try {
-    if (hours) {
-      const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-      workingHours = hours.map((h: any) => ({
-        day: dayNames[h.day_of_week] ?? `Day ${h.day_of_week}`,
-        start: h.start_time?.slice(0, 5) ?? '—',
-        end: h.end_time?.slice(0, 5) ?? '—',
-        enabled: !!h.is_enabled,
-      }));
-    }
-  } catch {
-    // table might not exist
-  }
-
-  // Week-over-week trend
-  const weekTrendPct = lastWeekEarnings > 0
-    ? ((weekEarnings - lastWeekEarnings) / lastWeekEarnings) * 100
-    : 0;
-
-  // Available count (from API)
-  let availableCount = 0;
-  try {
-    const { count } = await supabase
       .from('orders')
-      .select('id', { count: 'exact', head: true })
+      .select('id, total, delivery_fee, tip, delivered_at, restaurant_latitude, restaurant_longitude, customer_latitude, customer_longitude')
+      .eq('driver_id', driverId)
+      .eq('status', 'delivered')
+      .gte('delivered_at', startOfWeek.toISOString()),
+    supabase
+      .from('orders')
+      .select('id, total, delivery_fee, tip, delivered_at, restaurant_latitude, restaurant_longitude, customer_latitude, customer_longitude')
+      .eq('driver_id', driverId)
+      .eq('status', 'delivered')
+      .gte('delivered_at', startOfMonth.toISOString()),
+    // Available (no driver) orders that the driver can claim
+    supabase
+      .from('orders')
+      .select(`
+        id, order_number, total, delivery_fee, tip, delivery_address, driver_id,
+        created_at, customer_latitude, customer_longitude,
+        restaurant_latitude, restaurant_longitude,
+        restaurants:restaurant_id(name, address, latitude, longitude)
+      `)
       .is('driver_id', null)
-      .in('status', ['pending', 'confirmed', 'preparing', 'ready']);
-    availableCount = count ?? 0;
-  } catch {
-    availableCount = 0;
+      .eq('fulfillment_type', 'delivery')
+      .in('status', ['confirmed', 'preparing', 'ready'])
+      .order('created_at', { ascending: true })
+      .limit(10),
+    // Approximate online time today (last 5 minutes worth of location pings)
+    supabase
+      .from('driver_locations')
+      .select('recorded_at')
+      .eq('driver_id', driverId)
+      .gte('recorded_at', startOfDay.toISOString()),
+    supabase
+      .from('driver_status')
+      .select('latitude, longitude, updated_at, is_online, is_on_delivery, current_order_id')
+      .eq('driver_id', driverId)
+      .maybeSingle(),
+    supabase.from('users').select('is_active,is_verified').eq('id', driverId).maybeSingle(),
+    supabase.from('driver_documents').select('document_type,status,uploaded_at').eq('driver_id', driverId),
+  ]);
+  let driverResult = dashboardResults[0];
+  const activeOrderResult = dashboardResults[1];
+  const todayDelivered = dashboardResults[2];
+  const weekDelivered = dashboardResults[3];
+  const monthDelivered = dashboardResults[4];
+  const availableOrders = dashboardResults[5];
+  const todayMinutes = dashboardResults[6];
+  let driverStatus = dashboardResults[7];
+  let publicUserResult = dashboardResults[8];
+  let documentsResult = dashboardResults[9];
+
+  // The driver cockpit must not silently switch a courier offline because one
+  // critical Supabase read hit a short network interruption. Retry only the
+  // identity/verification/live-state reads; order mutations remain single-shot.
+  for (const delayMs of [120, 350]) {
+    if (!driverResult.error && !driverStatus.error && !publicUserResult.error && !documentsResult.error) break;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    [driverResult, driverStatus, publicUserResult, documentsResult] = await Promise.all([
+      supabase
+        .from('drivers')
+        .select('id, is_online, is_available, vehicle_type, rating, total_deliveries, current_lat, current_lng')
+        .eq('id', driverId)
+        .maybeSingle(),
+      supabase
+        .from('driver_status')
+        .select('latitude, longitude, updated_at, is_online, is_on_delivery, current_order_id')
+        .eq('driver_id', driverId)
+        .maybeSingle(),
+      supabase.from('users').select('is_active,is_verified').eq('id', driverId).maybeSingle(),
+      supabase.from('driver_documents').select('document_type,status,uploaded_at').eq('driver_id', driverId),
+    ]);
+  }
+
+  const verificationRequired = !publicUserResult.data?.is_active
+    || !publicUserResult.data?.is_verified
+    || !driverResult.data
+    || !isDriverVerificationComplete(driverResult.data.vehicle_type, documentsResult.data ?? []);
+
+  const sumEarnings = (orders: EarningsOrder[] | null) => {
+    if (!orders) return 0;
+    return orders.reduce(
+      (s, o) => s + computeEarnings(o).total,
+      0,
+    );
+  };
+
+  const todayEarnings = sumEarnings(todayDelivered.data);
+  const weekEarnings = sumEarnings(weekDelivered.data);
+  const monthEarnings = sumEarnings(monthDelivered.data);
+
+  const driverLatitude = driverStatus.data?.latitude ?? driverResult.data?.current_lat ?? null;
+  const driverLongitude = driverStatus.data?.longitude ?? driverResult.data?.current_lng ?? null;
+  const rankedAvailableOrders = (verificationRequired ? [] : (availableOrders.data || []))
+    .filter((order: { driver_id?: string | null }) => !order.driver_id)
+    .map((order) => ({
+      ...order,
+      driver_offer: createDriverOfferQuote({ ...order, driver_latitude: driverLatitude, driver_longitude: driverLongitude }),
+    }))
+    .filter((order) => order.driver_offer.eligible)
+    .sort((left, right) => left.driver_offer.score - right.driver_offer.score);
+
+  let activeOrder = activeOrderResult.data as (typeof activeOrderResult.data & {
+    delivery_preferences?: ReturnType<typeof sanitizeDeliveryPreferences>;
+    arrived_pickup_at?: string | null;
+    arrived_dropoff_at?: string | null;
+  });
+  if (activeOrder?.id) {
+    const [{ data: arrivalEvents }, { data: deliveryPreferenceRow }] = await Promise.all([
+      supabase
+        .from('order_tracking_events')
+        .select('event_type, created_at')
+        .eq('order_id', activeOrder.id)
+        .in('event_type', ['driver_arrived_pickup', 'driver_arrived_dropoff'])
+        .order('created_at', { ascending: false }),
+      supabase
+        .from('order_delivery_preferences')
+        .select('preferences')
+        .eq('order_id', activeOrder.id)
+        .maybeSingle(),
+    ]);
+    activeOrder = {
+      ...activeOrder,
+      delivery_preferences: sanitizeDeliveryPreferences(deliveryPreferenceRow?.preferences),
+      arrived_pickup_at: arrivalEvents?.find((event) => event.event_type === 'driver_arrived_pickup')?.created_at ?? null,
+      arrived_dropoff_at: arrivalEvents?.find((event) => event.event_type === 'driver_arrived_dropoff')?.created_at ?? null,
+    };
   }
 
   return {
-    driverId,
-    driverName,
-    isOnline,
-    onlineSince: meta.online_since ?? null,
-    availableCount,
-    rating,
-    todayEarnings,
-    todayDeliveries,
-    weekEarnings,
-    monthEarnings,
-    totalDeliveries,
+    driver: driverResult.data ? {
+      ...driverResult.data,
+      // driver_status is the authoritative live dispatch state. The profile
+      // value remains a compatibility mirror for reports and legacy screens.
+      is_online: verificationRequired ? false : Boolean(driverStatus.data?.is_online),
+      is_available: verificationRequired
+        ? false
+        : Boolean(driverStatus.data?.is_online && !driverStatus.data?.is_on_delivery && !driverStatus.data?.current_order_id),
+      current_lat: driverLatitude,
+      current_lng: driverLongitude,
+      // Online duration is derived from location pings until a dedicated
+      // shift ledger is introduced; the removed legacy DB column never
+      // existed in the canonical schema.
+      working_hours_today: 0,
+    } : null,
     activeOrder,
-    recentOrders: (delivered ?? []).slice(0, 8),
-    acceptanceRate,
-    completionRate,
-    workingHours,
-    weekTrendPct,
+    stats: {
+      today: { earnings: todayEarnings, deliveries: todayDelivered.data?.length || 0 },
+      week: { earnings: weekEarnings, deliveries: weekDelivered.data?.length || 0 },
+      month: { earnings: monthEarnings, deliveries: monthDelivered.data?.length || 0 },
+    },
+    availableOrders: rankedAvailableOrders,
+    pingsCount: todayMinutes.data?.length || 0,
+    verificationRequired,
   };
 }
 
 export default async function DriverDashboardPage() {
-  const { id: driverId } = await requireRole('driver');
-  const { locale } = await getServerTranslations();
-  let data;
-  try {
-    data = await getDashboardData(driverId);
-  } catch (e) {
-    console.error('[driver-dashboard] getDashboardData failed:', e);
-    // Fallback to empty data so the page still renders
-    data = {
-      driverId,
-      driverName: 'Driver',
-      isOnline: false,
-      onlineSince: null,
-      availableCount: 0,
-      todayEarnings: 0,
-      todayDeliveries: 0,
-      weekEarnings: 0,
-      monthEarnings: 0,
-      totalDeliveries: 0,
-      rating: 5,
-      acceptanceRate: 100,
-      completionRate: 100,
-      workingHours: [],
-      weekTrendPct: 0,
-      activeOrder: null,
-      recentOrders: [],
-    } as any;
-  }
+  const user = await requireRole(['driver', 'admin', 'super_admin']);
+  const data = await loadDriverData(user.id);
 
-  return (
-    <div className="max-w-2xl mx-auto px-4 sm:px-6 py-5 sm:py-6">
-      <DriverDashboardV2
-        driverId={data.driverId}
-        driverName={data.driverName}
-        isOnline={data.isOnline}
-        initialActiveOrder={data.activeOrder}
-        initialAvailableCount={data.availableCount}
-        initialShiftEarnings={data.todayEarnings}
-        initialShiftDeliveries={data.todayDeliveries}
-        onlineSince={data.onlineSince}
-      />
-    </div>
-  );
+  return <DriverDashboardClient initialData={data} userName={user.name || user.email || 'Driver'} />;
 }

@@ -11,14 +11,14 @@ import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { ReferralService } from '@/lib/services/referral-service';
-import { ValidationError, AuthenticationError } from '@/lib/errors';
+import { ValidationError } from '@/lib/errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
-    secureRoute('lenient'),
+    secureRoute('lenient', ['customer', 'driver', 'restaurant', 'manager', 'admin', 'super_admin']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (ctx, r) => listReferrals(ctx.auth.user.id, r as NextRequest) as any,
   )(req)) as unknown as NextResponse;
@@ -26,7 +26,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 
 async function listReferrals(userId: string, req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
 
     const url = new URL(req.url);
     const action = url.searchParams.get('action');
@@ -47,7 +47,7 @@ async function listReferrals(userId: string, req: NextRequest): Promise<NextResp
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
-    secureRoute('moderate'),
+    secureRoute('moderate', ['customer', 'driver', 'restaurant', 'manager', 'admin', 'super_admin']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async (ctx, r) => createReferral(ctx.auth.user.id, r as NextRequest) as any,
   )(req)) as unknown as NextResponse;
@@ -55,17 +55,19 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
 async function createReferral(userId: string, req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
 
     const body = await req.json().catch(() => ({}));
     const { referee_email } = body;
-    if (!referee_email) throw new ValidationError('referee_email required');
+    if (typeof referee_email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(referee_email) || referee_email.length > 254) {
+      throw new ValidationError('valid referee_email required');
+    }
     // Get referrer code
     const { data: profile } = await supabase.from('users').select('name, referral_code').eq('id', userId).single();
     const code = await ReferralService.ensureCode(userId, profile?.name ?? 'BKG');
     const referral = await ReferralService.invite({
       referrerId: userId,
-      refereeEmail: referee_email,
+      refereeEmail: referee_email.trim().toLowerCase(),
       code,
     });
     return ok({ referral });

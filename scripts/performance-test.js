@@ -15,8 +15,8 @@ const BASE = process.env.BASE_URL || 'http://localhost:3000';
 const COOKIES = {};
 const ACCOUNTS = {
   customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  driver: { email: 'driver@blinkgo.com', password: 'BlinkGoDriver2026!' },
+  admin: { email: 'admin@blinkgo.com', password: 'BlinkGoAdmin2026!' },
 };
 
 let passed = 0, failed = 0;
@@ -46,7 +46,7 @@ function cookieHeader() {
 }
 
 async function f(path, init = {}, opts = {}) {
-  const headers = { // Use a unique x-forwarded-for so per-IP rate limits don't cascade
+  const headers = { 'x-blinkgo-test-run': 'local-e2e', // Local-suite marker; ignored in production
   'Content-Type': 'application/json', 'Origin': BASE, 'x-forwarded-for': `10.${Math.floor(Math.random()*250)}.${Math.floor(Math.random()*250)}.${Math.floor(Math.random()*250)}`, ...(init.headers || {}) };
   if (Object.keys(COOKIES).length > 0) headers['Cookie'] = cookieHeader();
   const res = await fetch(BASE + path, { ...init, headers });
@@ -54,6 +54,7 @@ async function f(path, init = {}, opts = {}) {
   const text = await res.text();
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { json = { _raw: text?.slice(0, 200) }; }
+  if (json?.ok === true && Object.prototype.hasOwnProperty.call(json, 'data')) json = json.data;
   return { status: res.status, ok: res.ok, json };
 }
 
@@ -62,6 +63,19 @@ function clearCookies() { Object.keys(COOKIES).forEach((k) => delete COOKIES[k])
 async function login(role) {
   clearCookies();
   await f('/api/auth/login', { method: 'POST', body: JSON.stringify(ACCOUNTS[role]) });
+}
+
+function checkoutLine(product, restaurant) {
+  const selectedModifiers = Object.fromEntries((product.modifiers || [])
+    .filter((modifier) => modifier.required && Number(modifier.min_select || 0) > 0)
+    .map((modifier) => [
+      modifier.id,
+      (modifier.options || []).slice(0, Number(modifier.min_select)).map((option) => option.id),
+    ]));
+  const unitPrice = Number(product.discount_price ?? product.price ?? 0);
+  const minimumOrder = Number(restaurant.minimum_order ?? restaurant.min_order_amount ?? 0);
+  const quantity = unitPrice > 0 ? Math.max(1, Math.ceil((minimumOrder + 0.01) / unitPrice)) : 1;
+  return { product_id: product.id, quantity, configuration: { selected_modifiers: selectedModifiers } };
 }
 
 function median(arr) {
@@ -104,18 +118,41 @@ async function run() {
   // ── 3. Order detail latency ──
   console.log('\n► Perf: order detail latency');
   const orderTimes = [];
-  const orders = await f('/api/admin/list-orders');
-  await login('customer');
-  if (orders.json?.orders?.[0]) {
-    const oid = orders.json.orders[0].id;
+  const fixtureSearch = await f('/api/search?sort=recommended');
+  const fixtureRestaurant = fixtureSearch.json?.restaurants?.[0];
+  const fixtureProducts = fixtureRestaurant
+    ? await f(`/api/products/bestsellers?restaurant_id=${fixtureRestaurant.id}`)
+    : null;
+  const fixtureProduct = fixtureProducts?.json?.bestsellers?.[0];
+  const fixtureOrder = fixtureRestaurant && fixtureProduct
+    ? await f('/api/orders', {
+      method: 'POST',
+      body: JSON.stringify({
+        restaurant_id: fixtureRestaurant.id,
+        items: [checkoutLine(fixtureProduct, fixtureRestaurant)],
+        payment_method: 'cash',
+        delivery_address: {
+          address: 'Performance fixture',
+          lat: Number(fixtureRestaurant.latitude ?? 50.7374),
+          lng: Number(fixtureRestaurant.longitude ?? 7.0982),
+        },
+      }),
+    })
+    : null;
+  const fixtureOrderId = fixtureOrder?.json?.data?.order?.id || fixtureOrder?.json?.order?.id;
+  if (fixtureOrderId) {
     for (let i = 0; i < 10; i++) {
       const t0 = Date.now();
-      await f(`/api/orders/track?orderId=${oid}`);
+      const tracked = await f(`/api/orders/track?order_id=${fixtureOrderId}`);
       orderTimes.push(Date.now() - t0);
+      if (!tracked.ok) {
+        orderTimes.length = 0;
+        break;
+      }
     }
-    record('Order track p95 < 1500ms', p95(orderTimes) < 1500, `p95=${p95(orderTimes)}ms`);
+    record('Order track p95 < 1500ms', orderTimes.length === 10 && p95(orderTimes) < 1500, `samples=${orderTimes.length} p95=${orderTimes.length ? p95(orderTimes) : 'n/a'}ms`);
   } else {
-    record('Order track (skipped, no orders)', true);
+    record('Order track p95 < 1500ms', false, `fixture creation failed (status=${fixtureOrder?.status ?? 'missing'})`);
   }
 
   // ── 4. Concurrent logins ──
@@ -188,13 +225,26 @@ async function run() {
   // ── 10. Throughput ──
   console.log('\n► Perf: throughput');
   const N = 50;
+  // Search latency above covers the cold path. Warm immediately before the
+  // throughput clock so this benchmark measures hot-read capacity instead of
+  // randomly including a cache refill after the 60-second TTL expires.
+  const warmSearch = await f('/api/search?sort=recommended');
+  if (!warmSearch.ok) {
+    record('Search throughput > 10 RPS', false, `warm-up failed (${warmSearch.status})`);
+  } else {
   const start = Date.now();
   const reqs = await Promise.all(
     Array.from({ length: N }, () => f('/api/search?sort=recommended'))
   );
   const elapsed = Date.now() - start;
   const rps = Math.round((N / elapsed) * 1000);
-  record('Search throughput > 10 RPS', rps > 10, `${rps} req/s (${N} requests in ${elapsed}ms)`);
+  const successful = reqs.filter((response) => response.ok).length;
+  record(
+    'Search throughput > 10 RPS',
+    successful === N && rps > 10,
+    `${rps} req/s (${successful}/${N} OK in ${elapsed}ms)`,
+  );
+  }
 
   // ── SUMMARY ──
   console.log('\n═══════════════════════════════════════════════════════════');

@@ -14,21 +14,36 @@
  * Auth: CRON_SECRET bearer token. Returns 401 otherwise.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { timingSafeEqual } from 'node:crypto';
 import { createServiceClient } from '@/lib/supabase/service';
 import { logger } from '@/lib/logging';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function authorized(req: NextRequest, expected: string): boolean {
+  const header = req.headers.get('authorization') || '';
+  if (!header.toLowerCase().startsWith('bearer ')) return false;
+  const provided = header.slice(7).trim();
+  if (provided.length !== expected.length) return false;
+  try {
+    return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  } catch {
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const expected = process.env.CRON_SECRET;
-  if (expected) {
-    const provided =
-      req.headers.get('authorization')?.replace(/^Bearer\s+/i, '') ??
-      req.nextUrl.searchParams.get('secret');
-    if (provided !== expected) {
-      return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
-    }
+  if (!expected) {
+    logger.error('cron.scheduled-orders.disabled', { reason: 'CRON_SECRET is not configured' });
+    return NextResponse.json({ ok: false, error: 'Cron is not configured' }, { status: 503 });
+  }
+  if (req.nextUrl.searchParams.size > 0) {
+    return NextResponse.json({ ok: false, error: 'query_parameters_not_allowed' }, { status: 400 });
+  }
+  if (!authorized(req, expected)) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
 
   const svc = createServiceClient();
@@ -40,9 +55,10 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
     }
     dispatched = (data ?? []) as typeof dispatched;
-  } catch (e: any) {
-    logger.error('dispatch_scheduled_orders RPC threw', { error: e?.message });
-    return NextResponse.json({ ok: false, error: e?.message ?? 'RPC failed' }, { status: 500 });
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : 'RPC failed';
+    logger.error('dispatch_scheduled_orders RPC threw', { error: message });
+    return NextResponse.json({ ok: false, error: 'RPC failed' }, { status: 500 });
   }
 
   // Fire notifications + tracking events for each dispatched order.

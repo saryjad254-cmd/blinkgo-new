@@ -4,18 +4,16 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import Truck from 'lucide-react/dist/esm/icons/truck';
 import Store from 'lucide-react/dist/esm/icons/store';
 import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
-import Users from 'lucide-react/dist/esm/icons/users';
 import Filter from 'lucide-react/dist/esm/icons/filter';
 import Search from 'lucide-react/dist/esm/icons/search';
 import X from 'lucide-react/dist/esm/icons/x';
-import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
-import Clock from 'lucide-react/dist/esm/icons/clock';
 import Phone from 'lucide-react/dist/esm/icons/phone';
 import { cn } from '@/lib/cn';
 import { AdminLayout, type AdminUser } from '@/components/admin/AdminLayout';
 import { SmartMap } from '@/components/maps/SmartMap';
+import type { MapMarker } from '@/components/maps/OSMMap';
+import type { LucideIcon } from 'lucide-react';
 import { useRealtime } from '@/lib/realtime/use-realtime';
 // useRealtime is imported from '@/lib/realtime/use-realtime'
 
@@ -138,6 +136,7 @@ interface RestaurantMarker {
 }
 
 type Filter = 'all' | 'drivers' | 'orders' | 'restaurants';
+type DriverStatusFilter = 'all' | 'online' | 'on_delivery' | 'idle';
 
 export function AdminMapClient({
   user,
@@ -155,7 +154,7 @@ export function AdminMapClient({
   } | null>(null);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<Filter>('all');
-  const [driverStatus, setDriverStatus] = useState<'all' | 'online' | 'on_delivery' | 'idle'>('all');
+  const [driverStatus, setDriverStatus] = useState<DriverStatusFilter>('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<
     | { type: 'driver'; data: DriverMarker }
@@ -182,7 +181,9 @@ export function AdminMapClient({
 
   // Initial load
   useEffect(() => {
-    load();
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void load(); });
+    return () => { cancelled = true; };
   }, [load]);
 
   // Smart polling: 8s when there are active drivers, 30s when idle
@@ -207,7 +208,7 @@ export function AdminMapClient({
 
   // Build map markers
   const markers = useMemo(() => {
-    const m: any[] = [];
+    const m: MapMarker[] = [];
     if (filter === 'all' || filter === 'drivers') {
       for (const d of data?.drivers ?? []) {
         if (d.latitude == null || d.longitude == null) continue;
@@ -262,7 +263,7 @@ export function AdminMapClient({
       }
     }
     return m;
-  }, [data, filter, t]);
+  }, [data, filter, driverStatus, t]);
 
   // Map center: midpoint of all visible points
   const center = useMemo(() => {
@@ -343,7 +344,7 @@ export function AdminMapClient({
           {(filter === 'all' || filter === 'drivers') && (
             <select
               value={driverStatus}
-              onChange={(e) => setDriverStatus(e.target.value as any)}
+              onChange={(e) => setDriverStatus(e.target.value as DriverStatusFilter)}
               className="h-9 px-3 rounded-pill bg-ink-800 border border-edge text-xs text-white focus:outline-none focus:border-brand-500"
             >
               <option value="all">{t.driverStatus}: {t.all}</option>
@@ -387,6 +388,7 @@ export function AdminMapClient({
                   <button
                     type="button"
                     onClick={() => setSelected(null)}
+                    aria-label={t.close}
                     className="p-1 -m-1 text-text-muted hover:text-white"
                   >
                     <X className="w-4 h-4" />
@@ -512,7 +514,7 @@ function StatCard({
   value,
   color,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   value: number;
   color: string;
@@ -535,7 +537,7 @@ function FilterPill({
   active: boolean;
   onClick: () => void;
   children: React.ReactNode;
-  icon?: any;
+  icon?: LucideIcon;
 }) {
   return (
     <button
@@ -561,7 +563,7 @@ function LegendItem({
   count,
 }: {
   color: string;
-  icon: any;
+  icon: LucideIcon;
   label: string;
   count: number;
 }) {
@@ -584,7 +586,7 @@ function ListCard({
   onClick,
   emptyText,
 }: {
-  icon: any;
+  icon: LucideIcon;
   title: string;
   count: number;
   items: { id: string; title: string; sub: string; extra?: string }[];

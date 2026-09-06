@@ -14,6 +14,7 @@ export interface Counter {
   name: string;
   help: string;
   values: Map<string, number>; // labels -> value
+  inc: (labels?: Record<string, string>, value?: number) => void;
 }
 
 export interface Gauge {
@@ -21,6 +22,9 @@ export interface Gauge {
   name: string;
   help: string;
   values: Map<string, number>;
+  set: (value: number, labels?: Record<string, string>) => void;
+  inc: (labels?: Record<string, string>, value?: number) => void;
+  dec: (labels?: Record<string, string>, value?: number) => void;
 }
 
 export interface Histogram {
@@ -31,6 +35,7 @@ export interface Histogram {
   counts: Map<string, Map<number, number>>; // labels -> bucket -> count
   sums: Map<string, number>;
   totals: Map<string, number>;
+  observe: (value: number, labels?: Record<string, string>) => void;
 }
 
 export type Metric = Counter | Gauge | Histogram;
@@ -42,14 +47,22 @@ class MetricsRegistry {
 
   counter(name: string, help: string): Counter {
     if (this.metrics.has(name)) return this.metrics.get(name) as Counter;
-    const c: Counter = { type: 'counter', name, help, values: new Map() };
+    const c: Counter = {
+      type: 'counter', name, help, values: new Map(),
+      inc: (labels: Record<string, string> = {}, value = 1) => this.inc(name, labels, value),
+    };
     this.metrics.set(name, c);
     return c;
   }
 
   gauge(name: string, help: string): Gauge {
     if (this.metrics.has(name)) return this.metrics.get(name) as Gauge;
-    const g: Gauge = { type: 'gauge', name, help, values: new Map() };
+    const g: Gauge = {
+      type: 'gauge', name, help, values: new Map(),
+      set: (value: number, labels: Record<string, string> = {}) => this.set(name, value, labels),
+      inc: (labels: Record<string, string> = {}, value = 1) => this.inc(name, labels, value),
+      dec: (labels: Record<string, string> = {}, value = 1) => this.inc(name, labels, -value),
+    };
     this.metrics.set(name, g);
     return g;
   }
@@ -58,6 +71,7 @@ class MetricsRegistry {
     if (this.metrics.has(name)) return this.metrics.get(name) as Histogram;
     const h: Histogram = {
       type: 'histogram', name, help, buckets, counts: new Map(), sums: new Map(), totals: new Map(),
+      observe: (value: number, labels: Record<string, string> = {}) => this.observe(name, value, labels),
     };
     this.metrics.set(name, h);
     return h;
@@ -223,3 +237,57 @@ export const cacheMissesTotal = registry.counter(
   'cache_misses_total',
   'Total cache misses'
 );
+export const processResidentMemoryBytes = registry.gauge(
+  'process_resident_memory_bytes',
+  'Resident memory used by the current application process in bytes',
+);
+export const processHeapUsedBytes = registry.gauge(
+  'process_heap_used_bytes',
+  'Heap memory used by the current application process in bytes',
+);
+export const processStartTimeSeconds = registry.gauge(
+  'process_start_time_seconds',
+  'Unix timestamp when the current application process started',
+);
+
+const PROCESS_STARTED_AT_SECONDS = Math.floor((Date.now() - process.uptime() * 1000) / 1000);
+
+export function refreshProcessMetrics(): void {
+  const memory = process.memoryUsage();
+  processResidentMemoryBytes.set(memory.rss);
+  processHeapUsedBytes.set(memory.heapUsed);
+  processStartTimeSeconds.set(PROCESS_STARTED_AT_SECONDS);
+}
+
+// Patch the histogram returned by registry.histogram() to expose .observe()
+// directly. This is a convenience for callers that already have the histogram
+// reference and don't want to call registry.observe(name, ...).
+const _origHistogramFn = MetricsRegistry.prototype.histogram;
+MetricsRegistry.prototype.histogram = function patchedHistogram(name: string, help: string, buckets?: number[]): Histogram {
+  const h = _origHistogramFn.call(this, name, help, buckets);
+  if (!(h as unknown as { observe?: unknown }).observe) {
+    (h as unknown as { observe: (v: number, l?: Record<string, string>) => void }).observe =
+      (value: number, labels: Record<string, string> = {}) => this.observe(name, value, labels);
+  }
+  return h;
+};
+
+// Same convenience for counters (.inc) and gauges (.set).
+const _origCounterFn = MetricsRegistry.prototype.counter;
+MetricsRegistry.prototype.counter = function patchedCounter(name: string, help: string): Counter {
+  const c = _origCounterFn.call(this, name, help);
+  if (!(c as unknown as { inc?: unknown }).inc) {
+    (c as unknown as { inc: (l?: Record<string, string>, v?: number) => void }).inc =
+      (labels: Record<string, string> = {}, value = 1) => this.inc(name, labels, value);
+  }
+  return c;
+};
+const _origGaugeFn = MetricsRegistry.prototype.gauge;
+MetricsRegistry.prototype.gauge = function patchedGauge(name: string, help: string): Gauge {
+  const g = _origGaugeFn.call(this, name, help);
+  if (!(g as unknown as { set?: unknown }).set) {
+    (g as unknown as { set: (v: number, l?: Record<string, string>) => void }).set =
+      (value: number, labels: Record<string, string> = {}) => this.set(name, value, labels);
+  }
+  return g;
+};

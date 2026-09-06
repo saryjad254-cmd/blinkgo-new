@@ -2,14 +2,13 @@
  * Admin: Manual Order Assignment
  * ───────────────────────────────
  * POST /api/admin/orders/[id]/assign
- * Body: { driver_id: string }
+ * Body: { driver_id: string, reason: string }
  *
  * Manually assign a driver to an order (override auto-dispatch).
  * Admin-only operation.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
@@ -22,10 +21,8 @@ import { logger } from '@/lib/logging';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   return (await withSecurity(
     secureRoute('strict', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -48,11 +45,13 @@ async function assignDriver(
     const body = await req.json().catch(() => ({}));
     const driverId = String(body.driver_id ?? '');
     if (!driverId) throw new ValidationError('driver_id is required');
+    const reason = String(body.reason ?? '').trim().slice(0, 500);
+    if (reason.length < 5) throw new ValidationError('A manual assignment reason of at least 5 characters is required');
 
     const svc = createServiceClient();
     const { data: driver, error: driverErr } = await svc
       .from('driver_status')
-      .select('is_online, last_location_lat, last_location_lng')
+      .select('is_online, is_on_delivery, current_order_id, last_location_lat, last_location_lng')
       .eq('driver_id', driverId)
       .single();
 
@@ -62,6 +61,33 @@ async function assignDriver(
     if (!driver.is_online) {
       throw new ValidationError('Driver is offline and cannot accept orders');
     }
+    if (driver.is_on_delivery && driver.current_order_id !== orderId) {
+      throw new ConflictError('Driver already has an active delivery');
+    }
+
+    const { data: currentOrder, error: currentOrderError } = await svc
+      .from('orders')
+      .select('id, status, driver_id')
+      .eq('id', orderId)
+      .maybeSingle();
+    if (currentOrderError || !currentOrder) throw new NotFoundError('Order not found');
+    if (currentOrder.driver_id === driverId) {
+      return ok({ assigned: true, driver_id: driverId, idempotent: true });
+    }
+    if (currentOrder.driver_id) {
+      throw new ConflictError('Order is already assigned to a different driver', {
+        current_driver_id: currentOrder.driver_id,
+      });
+    }
+    const assignableStatuses = ['pending', 'confirmed', 'preparing', 'ready'];
+    if (!assignableStatuses.includes(currentOrder.status)) {
+      throw new ValidationError(`Cannot assign order in status: ${currentOrder.status}`);
+    }
+    const targetStatus = currentOrder.status === 'pending'
+      ? 'confirmed'
+      : currentOrder.status === 'ready'
+        ? 'assigned'
+        : currentOrder.status;
 
     // v82 BLOCKER fix: collapse the SELECT-then-UPDATE pattern into a
     // single atomic UPDATE with a WHERE clause that enforces both the
@@ -72,13 +98,12 @@ async function assignDriver(
       .from('orders')
       .update({
         driver_id: driverId,
-        accepted_at: new Date().toISOString(),
-        status: 'confirmed',
+        status: targetStatus,
         updated_at: new Date().toISOString(),
       })
       .eq('id', orderId)
       .is('driver_id', null)
-      .in('status', ['pending', 'confirmed'])
+      .eq('status', currentOrder.status)
       .select('id, status, driver_id, order_number')
       .maybeSingle();
 
@@ -114,7 +139,7 @@ async function assignDriver(
         type: 'order_assigned',
         title: 'Neue Bestellung zugewiesen',
         body: `Bestellung #${updated.id.slice(0, 8)} wurde dir manuell zugewiesen`,
-        data: { order_id: updated.id, order_number: updated.order_number, assigned_by_admin: true },
+        data: { order_id: updated.id, order_number: updated.order_number, assigned_by_admin: true, assignment_reason: reason },
       });
     } catch (e) {
       logger.warn('Failed to notify driver of manual assignment', { orderId, driverId, error: (e as Error).message });
@@ -126,7 +151,7 @@ async function assignDriver(
       userRole: user.role,
       resource: 'order',
       resourceId: orderId,
-      metadata: { action: 'manual_assign', driver_id: driverId },
+      metadata: { action: 'manual_assign', driver_id: driverId, reason },
     });
 
     return ok({ assigned: true, driver_id: driverId });

@@ -7,16 +7,17 @@ import { secureRoute } from '@/lib/api/security-helpers';
 import { audit } from '@/lib/services/audit-log';
 import { getApiUserWithRole } from '@/lib/auth-helper';
 import { logger } from '@/lib/logging';
+import { ValidationError } from '@/lib/foundation';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => listPromotions() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function listPromotions(): Promise<NextResponse> {
@@ -29,8 +30,12 @@ async function listPromotions(): Promise<NextResponse> {
       .select('*')
       .order('created_at', { ascending: false });
     if (error) {
+      const backend = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+      if (backend.includes('localhost') || backend.includes('127.0.0.1')) {
+        return ok({ promotions: [] });
+      }
       logger.error('Promotions list failed', {}, error);
-      return ok({ promotions: [] });
+      throw new Error('FETCH_FAILED');
     }
     return ok({ promotions: data ?? [] });
   });
@@ -49,6 +54,7 @@ async function createPromotion(req: NextRequest): Promise<NextResponse> {
     const guard = await requireAdmin();
     if (!guard.ok) return guard.error!;
     const body = await req.json().catch(() => ({}));
+    if (!body.title || typeof body.title !== 'string') throw new ValidationError('Promotion title is required');
     const svc = createServiceClient();
     const { data, error } = await svc
       .from('promotions')
@@ -96,9 +102,13 @@ async function deletePromotion(req: NextRequest): Promise<NextResponse> {
     if (!guard.ok) return guard.error!;
     const url = new URL(req.url);
     const id = url.searchParams.get('id');
-    if (!id) return ok({ deleted: false });
+    if (!id) throw new ValidationError('Promotion id is required');
     const svc = createServiceClient();
-    await svc.from('promotions').delete().eq('id', id);
+    const { error } = await svc.from('promotions').delete().eq('id', id);
+    if (error) {
+      logger.error('Promotion delete failed', { promotionId: id }, error);
+      throw new Error('DELETE_FAILED');
+    }
     const me = await getApiUserWithRole();
     if (me) {
       await audit('ADMIN_CONFIG_CHANGED', {

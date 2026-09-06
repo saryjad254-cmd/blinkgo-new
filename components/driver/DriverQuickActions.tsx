@@ -17,8 +17,6 @@ import Package from 'lucide-react/dist/esm/icons/package';
 import ListChecks from 'lucide-react/dist/esm/icons/list-checks';
 import History from 'lucide-react/dist/esm/icons/history';
 import Wallet from 'lucide-react/dist/esm/icons/wallet';
-import Settings from 'lucide-react/dist/esm/icons/settings';
-import Headphones from 'lucide-react/dist/esm/icons/headphones';
 import { useT } from '@/lib/i18n/I18nProvider';
 import { haptic } from '@/lib/utils/haptics';
 

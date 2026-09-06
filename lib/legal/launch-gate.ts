@@ -32,7 +32,9 @@ export interface LaunchGateResult {
 
 export function checkLegalLaunchGate(): LaunchGateResult {
   const isProduction = process.env.NODE_ENV === 'production';
-  const bypass = process.env.LEGAL_GATE_BYPASS === 'true';
+  // A preview may be bypassed for QA. A real Vercel production deployment
+  // always fails closed when legal evidence is incomplete.
+  const bypass = process.env.LEGAL_GATE_BYPASS === 'true' && process.env.VERCEL_ENV !== 'production';
 
   const configured = isCompanyConfigured();
   const validation = validateForProduction();
@@ -50,22 +52,18 @@ export function checkLegalLaunchGate(): LaunchGateResult {
     warnings.push('Stripe is not wired (no real keys). Card payment is mocked.');
   }
   if (!process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY) {
-    warnings.push('Google Maps API key missing. Map widgets will fail.');
+    warnings.push('Google Maps key missing. Enhanced Google features stay off; the OpenStreetMap fallback remains available.');
   }
 
   const mustBlock = isProduction && !bypass && validation.missing.length > 0;
 
   if (mustBlock) {
-    // eslint-disable-next-line no-console
     console.error('\n[LEGAL_GATE] ❌ Production launch blocked.');
-    // eslint-disable-next-line no-console
     console.error('[LEGAL_GATE] Missing fields:');
     for (const f of validation.missing) {
-      // eslint-disable-next-line no-console
       console.error(`  - ${f}`);
     }
-    // eslint-disable-next-line no-console
-    console.error('[LEGAL_GATE] Set LEGAL_GATE_BYPASS=true to bypass (NOT recommended).\n');
+    console.error('[LEGAL_GATE] Production cannot bypass this gate; complete and document the required reviews.\n');
   }
 
   return {

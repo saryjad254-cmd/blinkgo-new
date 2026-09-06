@@ -7,7 +7,7 @@
  * Returns the same Promise for concurrent calls with the same key.
  */
 
-const inflight = new Map<string, Promise<any>>();
+const inflight = new Map<string, Promise<unknown>>();
 
 /**
  * Run an async function only once for a given key while in flight.

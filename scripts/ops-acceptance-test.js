@@ -26,9 +26,9 @@ const COOKIE_JAR = {};
 
 const DEMO = {
   customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  restaurant: { email: 'restaurant@blinkgo.de', password: 'DemoRestaurant!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  driver: { email: 'driver@blinkgo.com', password: 'BlinkGoDriver2026!' },
+  restaurant: { email: 'wesseling@blinkgo.de', password: 'BlinkGoWesseling2026!' },
+  admin: { email: 'admin@blinkgo.com', password: 'BlinkGoAdmin2026!' },
 };
 
 let passed = 0;
@@ -248,7 +248,7 @@ async function run() {
     if (freeDriver && unassignedOrder) {
       r = await fetchJson('/api/admin/operations/tools', {
         method: 'POST',
-        body: JSON.stringify({ action: 'reassign_order', orderId: unassignedOrder.id, driverId: freeDriver.id }),
+        body: JSON.stringify({ action: 'reassign_order', orderId: unassignedOrder.id, driverId: freeDriver.id, reason: 'Operations acceptance test' }),
       });
       record('Reassign order', r.ok && r.json?.ok, `order ${unassignedOrder.id?.slice(0, 8)} → ${freeDriver.name}`);
     } else {
@@ -298,7 +298,7 @@ async function run() {
 
     // ── 11. Admin: finance endpoint ──
     r = await fetchJson('/api/admin/finance');
-    record('Finance endpoint', r.ok && r.json?.ok && r.json?.series && r.json?.commissionRate);
+    record('Finance endpoint', r.ok && r.json?.ok && Array.isArray(r.json?.series) && r.json?.reconciliation && r.json?.ledger);
 
     // ── 12. Admin: RBAC test (manager can't delete) ──
     // We don't easily have a manager account; skip

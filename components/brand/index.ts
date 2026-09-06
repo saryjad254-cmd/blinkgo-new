@@ -7,7 +7,7 @@
  *  Every page in BlinkGo MUST use these components.
  *  Never invent one-off styles.
  *
- *  Source: derived from the official BlinkGo logo (F5B819 / DC2626 / 0A0A0A)
+ *  Source: official BlinkGo identity (FFC107 / E10600 / 08090B)
  */
 
 export { BlinkLogo } from './BlinkLogo';

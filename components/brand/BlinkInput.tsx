@@ -55,25 +55,20 @@ const sizeStyles: Record<Size, string> = {
 
 const variantStyles: Record<Variant, string> = {
   default:
-    'bg-surface border border-edge ' +
-    'focus:border-brand-red focus:ring-4 focus:ring-brand-red/15 ' +
-    'hover:border-edge-strong',
+    'bg-surface-2 border border-border hover:border-border-strong focus:border-brand focus:ring-4 focus:ring-brand/15',
   filled:
-    'bg-surface-light border border-transparent ' +
-    'focus:bg-surface focus:border-brand-red focus:ring-4 focus:ring-brand-red/15',
+    'bg-surface-3 border border-transparent focus:bg-surface-2 focus:border-brand focus:ring-4 focus:ring-brand/15',
   outlined:
-    'bg-transparent border-2 border-edge-strong ' +
-    'focus:border-brand-red focus:ring-4 focus:ring-brand-red/15',
+    'bg-transparent border-2 border-border-strong focus:border-brand focus:ring-4 focus:ring-brand/15',
   underlined:
-    'bg-transparent border-0 border-b-2 border-edge ' +
-    'rounded-none focus:border-brand-red focus:ring-0',
+    'bg-transparent border-0 border-b-2 border-border rounded-none focus:border-brand focus:ring-0',
 };
 
 const baseInputClasses = cn(
   'w-full rounded-xl text-text-primary placeholder:text-text-muted',
   'outline-none focus:ring-2 focus:ring-brand/40 transition-all duration-150 ease-silk',
   'disabled:opacity-50 disabled:cursor-not-allowed',
-  'read-only:bg-surface-light',
+  'read-only:bg-surface-3',
 );
 
 export const BlinkInput = forwardRef<HTMLInputElement, BlinkInputProps>(function BlinkInput(
@@ -106,7 +101,7 @@ export const BlinkInput = forwardRef<HTMLInputElement, BlinkInputProps>(function
           className="block text-sm font-semibold text-text-primary mb-1.5"
         >
           {label}
-          {required && <span className="text-brand-red ms-1" aria-hidden>*</span>}
+          {required && <span className="text-brand ms-1" aria-hidden>*</span>}
         </label>
       )}
       <div className="relative">
@@ -128,7 +123,7 @@ export const BlinkInput = forwardRef<HTMLInputElement, BlinkInputProps>(function
             baseInputClasses,
             sizeStyles[size as Size],
             variantStyles[hasError ? 'default' : variant] as string,
-            hasError && 'border-brand-red ring-4 ring-brand-red/10 focus:border-brand-red',
+            hasError && 'border-status-error ring-4 ring-status-error/10 focus:border-status-error',
             leftIcon && 'ps-11',
             rightIcon && 'pe-11',
           )}
@@ -148,7 +143,7 @@ export const BlinkInput = forwardRef<HTMLInputElement, BlinkInputProps>(function
           id={`${inputId}-msg`}
           className={cn(
             'mt-1.5 text-xs',
-            hasError ? 'text-brand-red font-medium' : 'text-text-muted',
+            hasError ? 'text-status-error font-medium' : 'text-text-muted',
           )}
           role={hasError ? 'alert' : undefined}
         >
@@ -188,7 +183,7 @@ export const BlinkTextarea = forwardRef<HTMLTextAreaElement, BlinkTextareaProps>
           className="block text-sm font-semibold text-text-primary mb-1.5"
         >
           {label}
-          {required && <span className="text-brand-red ms-1" aria-hidden>*</span>}
+          {required && <span className="text-brand ms-1" aria-hidden>*</span>}
         </label>
       )}
       <textarea
@@ -203,7 +198,7 @@ export const BlinkTextarea = forwardRef<HTMLTextAreaElement, BlinkTextareaProps>
           'py-3',
           size === 'sm' ? 'px-3 text-sm' : size === 'lg' ? 'px-5 text-md' : 'px-4 text-base',
           variantStyles[hasError ? 'default' : variant] as string,
-          hasError && 'border-brand-red ring-4 ring-brand-red/10',
+          hasError && 'border-status-error ring-4 ring-status-error/10',
         )}
         {...rest}
       />
@@ -212,7 +207,7 @@ export const BlinkTextarea = forwardRef<HTMLTextAreaElement, BlinkTextareaProps>
           id={`${inputId}-msg`}
           className={cn(
             'mt-1.5 text-xs',
-            hasError ? 'text-brand-red font-medium' : 'text-text-muted',
+            hasError ? 'text-status-error font-medium' : 'text-text-muted',
           )}
         >
           {error || hint}

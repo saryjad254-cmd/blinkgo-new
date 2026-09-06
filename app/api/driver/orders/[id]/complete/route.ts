@@ -18,19 +18,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
 import { ok, withErrorHandling } from '@/lib/api/response';
-import { AuthorizationError, ConflictError, NotFoundError } from '@/lib/errors';
+import { AuthorizationError, ConflictError, NotFoundError, ValidationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 import { withSecurity, HandlerContext } from '@/lib/api/security';
+import { verifyDeliveryPin } from '@/lib/services/delivery-pin';
+import { sanitizeDeliveryPreferences } from '@/lib/delivery-preferences';
+import { DELIVERY_PROOF_BUCKET, deliveryEvidencePolicy, parseDeliveryPhoto } from '@/lib/driver/delivery-outcome-policy';
+import crypto from 'node:crypto';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ALLOWED_FROM = ['picked_up', 'delivering'];
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: { id: string } },
-): Promise<NextResponse> {
+export async function POST(req: NextRequest, props: { params: Promise<{ id: string }> }): Promise<NextResponse> {
+  const params = await props.params;
   return withErrorHandling(async () => {
     // v81 SECURITY: wrapped in withSecurity so the driver role + JWT
     // signature are verified centrally. The inner authorisation check
@@ -45,9 +47,13 @@ export async function POST(
         //    payload at 100KB to avoid abuse (500KB was overly
         //    generous for a proof-of-delivery image).
         const body = await ctx.req.json().catch(() => ({}));
-        const deliveryPhoto = typeof body.delivery_photo === 'string'
-          ? body.delivery_photo.slice(0, 100_000) // cap at ~100KB
-          : null;
+        const deliveryPin = typeof body.delivery_pin === 'string' ? body.delivery_pin.trim() : '';
+        let deliveryPhoto: ReturnType<typeof parseDeliveryPhoto> = null;
+        try {
+          deliveryPhoto = parseDeliveryPhoto(body.delivery_photo);
+        } catch (photoError) {
+          throw new ValidationError(photoError instanceof Error ? photoError.message : 'DELIVERY_PHOTO_INVALID');
+        }
 
         // 3) Load order
         const { data: order, error } = await supabase
@@ -66,44 +72,48 @@ export async function POST(
         if (!ALLOWED_FROM.includes(order.status)) {
           throw new ConflictError(
             `Cannot complete order in status: ${order.status}`,
-            { current_status: order.status, code: 'INVALID_TRANSITION' },
+            { meta: { current_status: order.status }, code: 'INVALID_TRANSITION' },
           );
         }
 
-        // 6) Atomic update (only if still in expected state)
-        const now = new Date().toISOString();
-        const updates: Record<string, unknown> = {
-          status: 'delivered',
-          delivered_at: now,
-          updated_at: now,
-        };
-        if (deliveryPhoto) updates.delivery_photo = deliveryPhoto;
+        const [{ data: dropoffArrival }, { data: preferenceRow }] = await Promise.all([
+          supabase.from('order_tracking_events').select('id').eq('order_id', orderId).eq('event_type', 'driver_arrived_dropoff').limit(1).maybeSingle(),
+          supabase.from('order_delivery_preferences').select('preferences').eq('order_id', orderId).maybeSingle(),
+        ]);
+        const preferences = sanitizeDeliveryPreferences(preferenceRow?.preferences);
+        const evidencePolicy = deliveryEvidencePolicy(preferences.handoff, Boolean(dropoffArrival));
+        if (!dropoffArrival) throw new ValidationError('Record arrival at the customer before completing delivery');
+        if (evidencePolicy.pinRequired && !verifyDeliveryPin({ orderId, customerId: order.customer_id, createdAt: order.created_at }, deliveryPin)) {
+          throw new ValidationError('Invalid delivery PIN');
+        }
+        if (evidencePolicy.photoRequired && !deliveryPhoto) {
+          throw new ValidationError('A delivery photo is required for leave-at-door orders');
+        }
 
-        const { data: updated, error: updErr } = await supabase
-          .from('orders')
-          .update(updates)
-          .eq('id', orderId)
-          .in('status', ALLOWED_FROM)
-          .select()
+        // 6) Atomic update (only if still in expected state)
+        const proofPath = deliveryPhoto ? `${orderId}/${Date.now()}-${crypto.randomUUID()}.${deliveryPhoto.extension}` : null;
+        if (deliveryPhoto && proofPath) {
+          const { error: uploadError } = await supabase.storage.from(DELIVERY_PROOF_BUCKET).upload(proofPath, deliveryPhoto.bytes, {
+            contentType: deliveryPhoto.mimeType,
+            cacheControl: '0',
+            upsert: false,
+          });
+          if (uploadError) throw new ConflictError('Delivery proof upload failed', { code: 'PROOF_UPLOAD_FAILED' });
+        }
+        const { data: updatedRow, error: updErr } = await supabase
+          .rpc('complete_driver_delivery', {
+            p_order_id: orderId,
+            p_driver_id: ctx.auth.user.id,
+            p_proof_path: proofPath,
+            p_proof_mime_type: deliveryPhoto?.mimeType ?? null,
+            p_proof_byte_size: deliveryPhoto?.bytes.byteLength ?? null,
+          })
           .single();
-        if (updErr || !updated) {
+        if (updErr || !updatedRow) {
+          if (proofPath) await supabase.storage.from(DELIVERY_PROOF_BUCKET).remove([proofPath]).catch(() => undefined);
           throw new ConflictError('Order state changed — please refresh');
         }
-
-        // 7) Free the driver
-        try {
-          await supabase
-            .from('driver_status')
-            .update({
-              is_on_delivery: false,
-              current_order_id: null,
-              updated_at: now,
-            })
-            .eq('driver_id', ctx.auth.user.id)
-            .eq('current_order_id', orderId);
-        } catch (e) {
-          logger.warn('driver_status free-up failed (non-fatal)', { orderId }, e);
-        }
+        const updated = updatedRow as { order_number: string; restaurant_id: string; [key: string]: unknown };
 
         // 8) Log tracking event
         try {
@@ -112,7 +122,7 @@ export async function POST(
             driver_id: ctx.auth.user.id,
             event_type: 'status_change',
             status: 'delivered',
-            metadata: { has_photo: !!deliveryPhoto },
+            metadata: { has_photo: Boolean(deliveryPhoto), delivery_pin_verified: evidencePolicy.pinRequired, handoff: preferences.handoff, proof_retention_days: deliveryPhoto ? 30 : null },
           });
         } catch (e) {
           logger.warn('Tracking event insert failed (non-fatal)', { orderId }, e);

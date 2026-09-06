@@ -36,9 +36,9 @@ const PROJECT_REF = (() => { const u = process.env.NEXT_PUBLIC_SUPABASE_URL || '
 const COOKIES = {};
 const ACCOUNTS = {
   customer: { email: 'demo@blinkgo.de', password: 'DemoCustomer!2024' },
-  driver: { email: 'driver@blinkgo.de', password: 'DemoDriver!2024' },
-  restaurant: { email: 'restaurant@blinkgo.de', password: 'DemoRestaurant!2024' },
-  admin: { email: 'admin@blinkgo.de', password: 'DemoAdmin!2024' },
+  driver: { email: 'driver@blinkgo.com', password: 'BlinkGoDriver2026!' },
+  restaurant: { email: 'wesseling@blinkgo.de', password: 'BlinkGoWesseling2026!' },
+  admin: { email: 'admin@blinkgo.com', password: 'BlinkGoAdmin2026!' },
 };
 
 let passed = 0;
@@ -93,7 +93,7 @@ async function login(role) {
   const { status, ok, json } = await fetchJson('/api/auth/login', {
     method: 'POST',
     body: JSON.stringify(ACCOUNTS[role]),
-  }, { captureCookies: false });
+  });
   if (!ok) throw new Error(`Login ${role} failed: ${status} ${JSON.stringify(json)}`);
   return true;
 }
@@ -118,6 +118,13 @@ async function run() {
   record('Cross-Origin-Opener-Policy', homeRes.headers.get('cross-origin-opener-policy') === 'same-origin');
   record('Cross-Origin-Resource-Policy', homeRes.headers.get('cross-origin-resource-policy') === 'same-origin');
   record('X-Permitted-Cross-Domain-Policies none', homeRes.headers.get('x-permitted-cross-domain-policies') === 'none');
+
+  const publicMetrics = await fetch(BASE + '/api/metrics/prometheus');
+  record('Operational metrics reject public access', publicMetrics.status === 401 || publicMetrics.status === 404, `status=${publicMetrics.status}`);
+  const privateMetrics = await fetch(BASE + '/api/metrics/prometheus', {
+    headers: { Authorization: `Bearer ${process.env.METRICS_TOKEN || 'local-metrics-test-token'}` },
+  });
+  record('Operational metrics accept monitoring token', privateMetrics.ok, `status=${privateMetrics.status}`);
 
   // ── 21. Logout GET returns 405 ──
   console.log('\n► Logout CSRF protection');
@@ -201,6 +208,57 @@ async function run() {
   });
   // Should be reachable (no CSRF block). Will likely 400 because of bad signature, but not 403.
   record('Stripe webhook allows no-Origin (not 403)', webhookRes.status !== 403, `status=${webhookRes.status}`);
+
+  // Server-side webhook destinations must never reach loopback, private or
+  // cloud-metadata addresses, even when requested by a valid administrator.
+  console.log('\n► Outbound webhook SSRF protection');
+  await login('admin');
+  const currentAdmin = await fetchJson('/api/auth/me');
+  const currentAdminId = currentAdmin.json?.data?.user?.id || currentAdmin.json?.user?.id;
+  record(
+    'Authenticated admin identity is available for access-control checks',
+    currentAdmin.ok && typeof currentAdminId === 'string' && currentAdminId.length > 0,
+    `status=${currentAdmin.status}`,
+  );
+  if (currentAdminId) {
+    const selfSuspend = await fetchJson(`/api/admin/users/${currentAdminId}/suspend`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: 'security-regression-test' }),
+    });
+    record(
+      'Administrator cannot suspend their own account',
+      selfSuspend.status === 403,
+      `status=${selfSuspend.status}`,
+    );
+  }
+  const adminOrders = await fetchJson('/api/admin/list-orders');
+  const serializedOrders = JSON.stringify(adminOrders.json || {}).toLowerCase();
+  record(
+    'Admin order list never exposes credentials or joined auth records',
+    adminOrders.ok &&
+      !serializedOrders.includes('password') &&
+      !serializedOrders.includes('access_token') &&
+      !serializedOrders.includes('refresh_token') &&
+      !serializedOrders.includes('permissions'),
+    `status=${adminOrders.status}`,
+  );
+  for (const target of ['http://127.0.0.1:54321/health', 'https://169.254.169.254/latest/meta-data']) {
+    const blocked = await fetchJson('/api/webhooks', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'blocked-target', url: target, secret: 'test-secret-123456', events: ['*'] }),
+    });
+    record(`Webhook blocks private target ${new URL(target).hostname}`, blocked.status === 400, `status=${blocked.status}`);
+  }
+  for (const target of ['http://127.0.0.1:54321/push', 'https://169.254.169.254/latest/meta-data']) {
+    const blocked = await fetchJson('/api/push/subscribe', {
+      method: 'POST',
+      body: JSON.stringify({
+        endpoint: target,
+        keys: { p256dh: 'A'.repeat(88), auth: 'B'.repeat(24) },
+      }),
+    });
+    record(`Push subscription blocks private target ${new URL(target).hostname}`, blocked.status === 400, `status=${blocked.status}`);
+  }
 
   // ── 4. JWT forgery ──
   console.log('\n► JWT forgery resistance');

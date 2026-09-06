@@ -6,7 +6,6 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/service';
-import type { WebhookConfig } from './dispatcher';
 
 export interface StoredWebhook {
   id: string;
@@ -15,7 +14,7 @@ export interface StoredWebhook {
   secret: string;
   events: string[];
   enabled: boolean;
-  description?: string;
+  description?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -53,13 +52,18 @@ export class WebhookManager {
     }
   }
 
-  async update(id: string, updates: Partial<StoredWebhook>): Promise<boolean> {
+  async update(id: string, updates: Partial<StoredWebhook>): Promise<StoredWebhook | null> {
     try {
       const db = createServiceClient();
-      const { error } = await db.from('webhooks').update({ ...updates, updated_at: new Date().toISOString() }).eq('id', id);
-      return !error;
+      const { data, error } = await db
+        .from('webhooks')
+        .update({ ...updates, updated_at: new Date().toISOString() })
+        .eq('id', id)
+        .select('*')
+        .single();
+      return error || !data ? null : data as StoredWebhook;
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -83,9 +87,11 @@ export class WebhookManager {
     const dispatcher = getWebhookDispatcher();
     const result = await dispatcher.send(
       {
+        id: wh.id,
         url: wh.url,
         secret: wh.secret,
-        events: wh.events,
+        // A manual health check must not depend on the business-event filter.
+        events: ['*'],
         enabled: true,
       },
       'test.ping',

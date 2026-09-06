@@ -1,207 +1,169 @@
-import Link from 'next/link';
-import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
-import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import Star from 'lucide-react/dist/esm/icons/star';
-import Bell from 'lucide-react/dist/esm/icons/bell';
-import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
+/**
+ * Restaurant Dashboard — Production rebuild
+ * ─────────────────────────────────────────
+ * Modern restaurant dashboard inspired by Wolt / Uber Eats merchant.
+ * Shows:
+ *   - Open/Closed toggle (big, primary action)
+ *   - Busy mode control
+ *   - Today's revenue + week
+ *   - Active + pending orders
+ *   - Menu item count + rating
+ *   - Recent orders
+ */
 import { requireRestaurantId } from '@/lib/rbac';
-import { createServerClient } from '@/lib/supabase/server';
-import { PageHeader } from '@/components/shared/PageHeader';
-import { Card } from '@/components/ui/Card';
-import { ToggleOnlineButton } from '@/components/restaurant/ToggleOnlineButton';
-import { RestaurantLiveDashboardV2 } from '@/components/restaurant/RestaurantLiveDashboardV2';
-import { isUserDemo } from '@/lib/demo-guard';
-import { cookies } from 'next/headers';
-import de from '@/lib/i18n/locales/de';
-import ar from '@/lib/i18n/locales/ar';
-import en from '@/lib/i18n/locales/en';
-import type { Locale } from '@/lib/i18n/server-translations';
+import { createServiceClient } from '@/lib/supabase/service';
+import { RestaurantDashboardClient } from '@/components/restaurant/RestaurantDashboardClient';
+import { extractPreparationPlan } from '@/lib/restaurant/preparation-policy';
 
-const T: Record<Locale, typeof de> = { de, ar: ar as unknown as typeof de, en: en as unknown as typeof de };
-
-function detectLocale(): Locale {
-  const c = cookies().get('blinkgo-locale')?.value;
-  if (c === 'ar') return 'ar';
-  if (c === 'en') return 'en';
-  return 'de';
-}
-
-// Cache for 30s to reduce Supabase load
-export const revalidate = 30;
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
-async function getDashboardData(restaurantId: string) {
-  const supabase = createServerClient();
+type RevenueOrder = {
+  status?: string | null;
+  total?: number | null;
+  accepted_at?: string | null;
+  prepared_at?: string | null;
+};
+
+type OrderItem = {
+  order_id: string;
+  product_name?: string | null;
+  quantity?: number | null;
+  subtotal?: number | null;
+};
+
+type ActiveOrderRow = {
+  id: string;
+  order_number?: string | null;
+  status: 'pending' | 'confirmed' | 'preparing' | 'ready';
+  total?: number | null;
+  created_at: string;
+  accepted_at?: string | null;
+  prepared_at?: string | null;
+  delivery_address?: unknown;
+  customer?: { name?: string | null; phone?: string | null } | Array<{ name?: string | null; phone?: string | null }> | null;
+};
+
+async function loadRestaurantData(restaurantId: string) {
+  const supabase = createServiceClient();
   const now = new Date();
-  const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0);
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+  const startOfWeek = new Date(now);
+  startOfWeek.setHours(0, 0, 0, 0);
+  startOfWeek.setDate(startOfWeek.getDate() - 7);
 
-  const [restaurantRes, activeOrdersRes, todayOrdersRes] = await Promise.all([
+  const [
+    restaurant,
+    todayOrders,
+    weekOrders,
+    activeOrders,
+    pendingCount,
+    menuCount,
+    recentOrders,
+  ] = await Promise.all([
     supabase
       .from('restaurants')
-      .select('id, name, is_active, is_paused, busy_mode, busy_mode_until, address, phone, rating, review_count')
+      .select('id, name, is_active, is_paused, busy_mode, busy_mode_until, rating, review_count, address, phone, opening_hours, delivery_fee, min_order')
       .eq('id', restaurantId)
       .maybeSingle(),
     supabase
       .from('orders')
-      .select('id, order_number, status, created_at, delivery_address, total, accepted_at, prepared_at, customer_id')
+      .select('id, total, status, created_at, accepted_at, prepared_at')
+      .eq('restaurant_id', restaurantId)
+      .gte('created_at', startOfDay.toISOString()),
+    supabase
+      .from('orders')
+      .select('id, total, status, created_at')
+      .eq('restaurant_id', restaurantId)
+      .gte('created_at', startOfWeek.toISOString()),
+    supabase
+      .from('orders')
+      .select(`
+        id, order_number, status, total, created_at, accepted_at, prepared_at,
+        delivery_address, customer:customer_id(name, phone)
+      `)
       .eq('restaurant_id', restaurantId)
       .in('status', ['pending', 'confirmed', 'preparing', 'ready'])
       .order('created_at', { ascending: true })
       .limit(20),
     supabase
       .from('orders')
-      .select('id, total, status, created_at')
+      .select('id', { count: 'exact', head: true })
       .eq('restaurant_id', restaurantId)
-      .gte('created_at', startOfDay.toISOString()),
+      .eq('status', 'pending'),
+    supabase
+      .from('products')
+      .select('id', { count: 'exact', head: true })
+      .eq('restaurant_id', restaurantId),
+    supabase
+      .from('orders')
+      .select(`
+        id, order_number, status, total, created_at, delivered_at,
+        customer:customer_id(name)
+      `)
+      .eq('restaurant_id', restaurantId)
+      .order('created_at', { ascending: false })
+      .limit(10),
   ]);
 
-  const todayOrders = todayOrdersRes.data ?? [];
-  const todayCount = todayOrders.length;
-  const todayRevenue = todayOrders
-    .filter((o: any) => o.status === 'delivered')
-    .reduce((s: number, o: any) => s + Number(o.total ?? 0), 0);
-  const activeNow = (activeOrdersRes.data ?? []).length;
-  const pendingCount = (activeOrdersRes.data ?? []).filter((o: any) => o.status === 'pending').length;
-
-  const customerIds = Array.from(
-    new Set((activeOrdersRes.data ?? []).map((o: any) => o.customer_id).filter(Boolean))
-  );
-  let customerMap = new Map<string, string>();
-  if (customerIds.length > 0) {
-    const { data: customers } = await supabase
-      .from('users')
-      .select('id, name')
-      .in('id', customerIds);
-    for (const c of customers ?? []) {
-      customerMap.set(c.id, c.name ?? '');
-    }
+  const activeRows = (activeOrders.data ?? []) as ActiveOrderRow[];
+  const activeIds = activeRows.map((order) => order.id);
+  const itemsResult = activeIds.length > 0
+    ? await supabase.from('order_items').select('order_id, product_name, quantity, subtotal').in('order_id', activeIds)
+    : { data: [] as OrderItem[] };
+  const itemsByOrder = new Map<string, OrderItem[]>();
+  for (const item of (itemsResult.data ?? []) as OrderItem[]) {
+    const list = itemsByOrder.get(item.order_id) ?? [];
+    list.push(item);
+    itemsByOrder.set(item.order_id, list);
   }
+  const { data: preparationEvents } = activeIds.length > 0
+    ? await supabase.from('order_tracking_events').select('order_id, metadata, created_at').in('order_id', activeIds).eq('event_type', 'status_change').order('created_at', { ascending: false })
+    : { data: [] as Array<{ order_id: string; metadata?: unknown; created_at?: string }> };
+  const preparationByOrder = new Map(activeIds.map((orderId) => [orderId, extractPreparationPlan((preparationEvents ?? []).filter((event) => event.order_id === orderId))]));
 
-  const activeOrders = (activeOrdersRes.data ?? []).map((o: any) => ({
-    id: o.id,
-    order_number: o.order_number ?? o.id.slice(0, 8),
-    status: o.status,
-    total: Number(o.total ?? 0),
-    created_at: o.created_at,
-    delivery_address: o.delivery_address,
-    accepted_at: o.accepted_at,
-    prepared_at: o.prepared_at,
-    customer_name: customerMap.get(o.customer_id) ?? '',
-    estimated_prep_minutes: 20,
-  }));
+  const sumRevenue = (orders: RevenueOrder[] | null) => {
+    if (!orders) return 0;
+    return orders
+      .filter((order) => order.status === 'delivered')
+      .reduce((sum, order) => sum + Number(order.total || 0), 0);
+  };
 
-  const r = restaurantRes.data as any;
+  const prepSamples = (todayOrders.data ?? [])
+    .filter((order: RevenueOrder) => order.accepted_at && order.prepared_at)
+    .map((order: RevenueOrder) => (new Date(order.prepared_at as string).getTime() - new Date(order.accepted_at as string).getTime()) / 60_000)
+    .filter((minutes: number) => Number.isFinite(minutes) && minutes >= 0 && minutes <= 180);
+
   return {
-    restaurantId,
-    restaurant: r,
-    restaurantName: r?.name ?? 'Restaurant',
-    isOnline: !!r?.is_active,
-    isPaused: !!r?.is_paused,
-    busyMode: !!r?.busy_mode,
-    avgPrepMin: 15,
-    maxConcurrentOrders: 8,
-    activeOrders,
-    todayCount,
-    todayRevenue,
-    activeNow,
-    pendingCount,
+    restaurant: restaurant.data,
+    today: {
+      orders: todayOrders.data?.length || 0,
+      revenue: sumRevenue(todayOrders.data),
+      averagePrepMinutes: prepSamples.length > 0 ? prepSamples.reduce((sum: number, minutes: number) => sum + minutes, 0) / prepSamples.length : null,
+    },
+    week: {
+      orders: weekOrders.data?.length || 0,
+      revenue: sumRevenue(weekOrders.data),
+    },
+    activeOrders: activeRows.map((order) => {
+      const preparation = preparationByOrder.get(order.id);
+      return { ...order, items: itemsByOrder.get(order.id) ?? [], estimated_prep_minutes: preparation?.estimatedPrepMinutes ?? null, estimated_ready_at: preparation?.estimatedReadyAt ?? null };
+    }),
+    pendingCount: pendingCount.count || 0,
+    menuCount: menuCount.count || 0,
+    recentOrders: recentOrders.data || [],
   };
 }
 
 export default async function RestaurantDashboardPage() {
-  const { user, restaurantId } = await requireRestaurantId();
-  const data = await getDashboardData(restaurantId);
-  const isDemo = await isUserDemo(user.email);
-  const locale = detectLocale();
-  const t = T[locale];
-  const tOps = (t as any).restaurantOps;
-  const dir = locale === 'ar' ? 'rtl' : 'ltr';
-
-  const labels = {
-    statusHeader: locale === 'ar' ? 'حالة المطعم' : locale === 'de' ? 'Restaurant-Status' : 'Restaurant status',
-    online: (t as any).common?.online ?? 'Online',
-    offline: (t as any).common?.offline ?? 'Offline',
-    onlineDesc: (t as any).common?.onlineDesc ?? (locale === 'ar' ? 'يستقبل طلبات' : locale === 'de' ? 'Empfängt Bestellungen' : 'Accepting orders'),
-    offlineDesc: (t as any).common?.offlineDesc ?? (locale === 'ar' ? 'لا يستقبل طلبات' : locale === 'de' ? 'Empfängt keine Bestellungen' : 'Not accepting orders'),
-    activeTitle: tOps?.liveOrders ?? (locale === 'ar' ? 'طلبات نشطة' : locale === 'de' ? 'Aktive Bestellungen' : 'Active orders'),
-    pendingApproval: tOps?.pendingApproval ?? (locale === 'ar' ? 'في انتظار الموافقة' : locale === 'de' ? 'Wartet auf Bestätigung' : 'Pending approval'),
-    settingsLink: tOps?.settingsLink ?? (locale === 'ar' ? 'الإعدادات' : locale === 'de' ? 'Einstellungen' : 'Settings'),
-    demoNote: (t as any).common?.demoNote ?? (locale === 'ar' ? 'حساب تجريبي' : locale === 'de' ? 'Demo-Konto' : 'Demo account'),
-    rating: (t as any).common?.rating ?? (locale === 'ar' ? 'التقييم' : locale === 'de' ? 'Bewertung' : 'Rating'),
-  };
+  const { restaurantId } = await requireRestaurantId();
+  const data = await loadRestaurantData(restaurantId);
 
   return (
-    <>
-      <PageHeader title={data.restaurant?.name ?? t.restaurant.dashboard} subtitle={data.restaurant?.address ?? ''} />
-      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6" dir={dir}>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Card className="animate-slide-up">
-            <div className="flex items-center gap-3 mb-4">
-              <div className={`w-12 h-12 rounded-xl flex items-center justify-center shadow-md ${
-                data.restaurant?.is_active
-                  ? 'bg-gradient-to-br from-emerald-500 to-green-600'
-                  : 'bg-surface-elevated'
-              }`}>
-                <ShoppingBag className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <p className="text-xs text-text-muted uppercase tracking-wider">{labels.statusHeader}</p>
-                <p className={`text-base font-extrabold ${data.restaurant?.is_active ? 'text-emerald-500' : 'text-text-secondary'}`}>
-                  ● {data.restaurant?.is_active ? labels.online : labels.offline}
-                </p>
-                <p className="text-xs text-text-secondary mt-0.5">
-                  {data.restaurant?.is_active ? labels.onlineDesc : labels.offlineDesc}
-                </p>
-              </div>
-            </div>
-            <ToggleOnlineButton
-              restaurantId={restaurantId}
-              initialActive={data.restaurant?.is_active ?? false}
-            />
-          </Card>
-
-          <Card className="animate-slide-up" style={{ animationDelay: '100ms' }}>
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-bold text-white">
-                <Star className="w-4 h-4 inline-block me-1 text-brand-yellow-400" />
-                {Number(data.restaurant?.rating ?? 0).toFixed(1)} · {data.restaurant?.review_count ?? 0} {labels.rating}
-              </p>
-              <Link href="/restaurant/settings" className="text-xs text-text-muted hover:text-white">
-                {labels.settingsLink}
-              </Link>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Link href="/restaurant/orders" className="rounded-xl bg-surface-tertiary p-3 text-center hover:bg-surface-elevated transition">
-                <p className="text-2xl font-extrabold text-white tabular-nums">{data.activeNow}</p>
-                <p className="text-[10px] text-text-muted mt-1">{labels.activeTitle}</p>
-              </Link>
-              <Link href="/restaurant/orders?status=pending" className="rounded-xl bg-surface-tertiary p-3 text-center hover:bg-surface-elevated transition">
-                <p className={`text-2xl font-extrabold tabular-nums ${data.pendingCount > 0 ? 'text-brand-500' : 'text-white'}`}>{data.pendingCount}</p>
-                <p className="text-[10px] text-text-muted mt-1">{labels.pendingApproval}</p>
-              </Link>
-            </div>
-            {isDemo && (
-              <p className="text-[10px] text-text-muted mt-3 flex items-center gap-1">
-                <span>🛡️</span>
-                <span>{labels.demoNote}</span>
-              </p>
-            )}
-          </Card>
-        </div>
-
-        <RestaurantLiveDashboardV2
-        restaurantId={data.restaurantId}
-        restaurantName={data.restaurantName}
-        initialActiveOrders={data.activeOrders as any}
-        initialTodayCount={data.todayCount}
-        initialTodayRevenue={data.todayRevenue}
-        initialAvgPrepMin={data.avgPrepMin}
-        isOnline={data.isOnline}
-        isPaused={data.isPaused}
-        busyMode={data.busyMode}
-        maxConcurrentOrders={data.maxConcurrentOrders ?? 8}
-      />
-      </div>
-    </>
+    <RestaurantDashboardClient
+      key={`${data.restaurant?.is_active}-${data.restaurant?.is_paused}-${data.restaurant?.busy_mode}-${data.today.orders}-${data.today.revenue}-${data.activeOrders.map((order) => `${order.id}:${order.status}`).join('|')}`}
+      initialData={data}
+    />
   );
 }

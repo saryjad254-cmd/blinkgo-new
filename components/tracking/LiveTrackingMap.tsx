@@ -1,11 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
-import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import Navigation2 from 'lucide-react/dist/esm/icons/navigation-2';
-import X from 'lucide-react/dist/esm/icons/x';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { SmartMap } from '@/components/maps/SmartMap';
+import type { MapMarker } from '@/components/maps/OSMMap';
 
 interface LatLng {
   lat: number;
@@ -31,8 +28,11 @@ interface Props {
   route: 'to_restaurant' | 'to_customer' | 'idle';
   /** Force map height */
   height?: string;
-  /** Optional callback when the map is ready */
-  onReady?: () => void;
+  labels?: {
+    restaurant: string;
+    customer: string;
+    driver: string;
+  };
 }
 
 /**
@@ -52,13 +52,13 @@ export function LiveTrackingMap({
   driver,
   route,
   height = '100%',
-  onReady,
+  labels = { restaurant: 'Restaurant', customer: 'Delivery address', driver: 'Driver' },
 }: Props) {
   const [smoothed, setSmoothed] = useState<LatLng | null>(
     driver ? { lat: driver.lat, lng: driver.lng } : null
   );
   const [rotation, setRotation] = useState<number>(0);
-  const [autoCenter, setAutoCenter] = useState<boolean>(true);
+  const autoCenter = true;
   const lastDriverRef = useRef<LatLng | null>(null);
   const lastTimeRef = useRef<number>(0);
   const animFrameRef = useRef<number | null>(null);
@@ -108,14 +108,14 @@ export function LiveTrackingMap({
 
   // Build markers
   const markers = useMemo(() => {
-    const m: any[] = [];
+    const m: MapMarker[] = [];
     if (restaurant) {
       m.push({
         id: 'restaurant',
         lat: restaurant.lat,
         lng: restaurant.lng,
         type: 'restaurant',
-        title: 'Restaurant',
+        title: labels.restaurant,
       });
     }
     if (customer) {
@@ -124,7 +124,7 @@ export function LiveTrackingMap({
         lat: customer.lat,
         lng: customer.lng,
         type: 'customer',
-        title: 'Lieferadresse',
+        title: labels.customer,
       });
     }
     if (smoothed) {
@@ -133,14 +133,14 @@ export function LiveTrackingMap({
         lat: smoothed.lat,
         lng: smoothed.lng,
         type: 'driver',
-        title: 'Fahrer',
+        title: labels.driver,
         rotation,
         speed: driver?.speed,
         accuracy: driver?.accuracy,
       });
     }
     return m;
-  }, [restaurant, customer, smoothed, rotation, driver?.speed, driver?.accuracy]);
+  }, [restaurant, customer, smoothed, rotation, driver?.speed, driver?.accuracy, labels.customer, labels.driver, labels.restaurant]);
 
   // Map center: between driver and customer when both are known
   const center = useMemo<LatLng>(() => {
@@ -156,11 +156,12 @@ export function LiveTrackingMap({
     return { lat: 50.7374, lng: 7.0982 };
   }, [smoothed, customer, restaurant]);
 
-  // Directions: driver → customer (during delivery) or restaurant → customer (idle)
+  // Directions use the latest raw GPS fix, not the per-frame smoothed marker.
+  // Otherwise every animation frame would trigger a billable route request.
   const directions = useMemo(() => {
-    if (route === 'to_customer' && smoothed && customer) {
+    if (route === 'to_customer' && driver && customer) {
       return {
-        origin: { lat: smoothed.lat, lng: smoothed.lng },
+        origin: { lat: driver.lat, lng: driver.lng },
         destination: { lat: customer.lat, lng: customer.lng },
       };
     }
@@ -171,7 +172,7 @@ export function LiveTrackingMap({
       };
     }
     return undefined;
-  }, [route, smoothed, customer, restaurant]);
+  }, [route, driver, customer, restaurant]);
 
   // Zoom: tighter when both points are close
   const zoom = useMemo(() => {

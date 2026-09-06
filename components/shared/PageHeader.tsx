@@ -2,8 +2,8 @@
 
 import type { ReactNode } from 'react';
 import { BackButton } from './BackButton';
-import { BlinkButton } from '@/components/brand/BlinkButton';
 import { cn } from '@/lib/cn';
+import { BlinkLogo } from '@/components/brand/BlinkLogo';
 
 interface Props {
   title: string;
@@ -38,6 +38,7 @@ export function PageHeader({
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center gap-3 min-h-[56px]">
         {back && <BackButton fallback={backHref} />}
+        <BlinkLogo variant="horizontal" size="xs" priority />
         <div className="flex-1 min-w-0">
           <h1 className="text-base sm:text-lg font-extrabold text-text-primary truncate leading-tight">{title}</h1>
           {subtitle && (

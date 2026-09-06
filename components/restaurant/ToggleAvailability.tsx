@@ -3,6 +3,7 @@
 import { useState, useTransition } from 'react';
 import { toggleProductAvailability } from '@/lib/restaurant-actions';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 
 export function ToggleAvailability({
   productId,
@@ -13,6 +14,9 @@ export function ToggleAvailability({
 }) {
   const [isAvailable, setIsAvailable] = useState(initial);
   const [pending, startTransition] = useTransition();
+  const { locale } = useI18n();
+  const availableLabel = locale === 'ar' ? 'متاح' : locale === 'en' ? 'Available' : 'Verfügbar';
+  const unavailableLabel = locale === 'ar' ? 'غير متاح' : locale === 'en' ? 'Unavailable' : 'Nicht verfügbar';
 
   function toggle() {
     const next = !isAvailable;
@@ -30,7 +34,8 @@ export function ToggleAvailability({
       className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
         isAvailable ? 'bg-green-500' : 'bg-gray-300'
       } ${pending ? 'opacity-50' : ''}`}
-      aria-label={isAvailable ? 'متاح' : 'غير متاح'}
+      aria-label={isAvailable ? availableLabel : unavailableLabel}
+      aria-pressed={isAvailable}
     >
       {pending && (
         <span className="absolute inset-0 flex items-center justify-center">

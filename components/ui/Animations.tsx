@@ -109,3 +109,6 @@ export function PulseDot({
 export function Shimmer({ className }: { className?: string }) {
   return <div className={cn('skeleton', className)} />;
 }
+
+// ── Re-export Framer Motion primitives for convenience ──
+export { motion, AnimatePresence } from 'framer-motion';

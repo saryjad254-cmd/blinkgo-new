@@ -1,561 +1,181 @@
 'use client';
 
-import { BlinkLogo, BlinkButton, BlinkCard, BlinkInput, BlinkTextarea, BlinkBadge, BlinkStatusBadge, BlinkAvatar, BlinkMapMarker, BlinkStat } from '@/components/brand';
-import Search from 'lucide-react/dist/esm/icons/search';
-import Heart from 'lucide-react/dist/esm/icons/heart';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import Store from 'lucide-react/dist/esm/icons/store';
-import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
-import Truck from 'lucide-react/dist/esm/icons/truck';
-import Star from 'lucide-react/dist/esm/icons/star';
-import Bell from 'lucide-react/dist/esm/icons/bell';
-import Plus from 'lucide-react/dist/esm/icons/plus';
+import Image from 'next/image';
 import ArrowRight from 'lucide-react/dist/esm/icons/arrow-right';
+import Bell from 'lucide-react/dist/esm/icons/bell';
+import Check from 'lucide-react/dist/esm/icons/check';
+import CircleAlert from 'lucide-react/dist/esm/icons/circle-alert';
+import Clock3 from 'lucide-react/dist/esm/icons/clock-3';
 import Mail from 'lucide-react/dist/esm/icons/mail';
-import Lock from 'lucide-react/dist/esm/icons/lock';
-import User from 'lucide-react/dist/esm/icons/user';
-import Phone from 'lucide-react/dist/esm/icons/phone';
-import Calendar from 'lucide-react/dist/esm/icons/calendar';
-import Zap from 'lucide-react/dist/esm/icons/zap';
-import Shield from 'lucide-react/dist/esm/icons/shield';
-import Clock from 'lucide-react/dist/esm/icons/clock';
-import CreditCard from 'lucide-react/dist/esm/icons/credit-card';
+import MapPin from 'lucide-react/dist/esm/icons/map-pin';
+import Search from 'lucide-react/dist/esm/icons/search';
+import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check';
+import ShoppingBag from 'lucide-react/dist/esm/icons/shopping-bag';
+import Store from 'lucide-react/dist/esm/icons/store';
+import Truck from 'lucide-react/dist/esm/icons/truck';
+import Users from 'lucide-react/dist/esm/icons/users';
+import { BlinkButton, BlinkCard, BlinkInput, BlinkLogo } from '@/components/brand';
+
+const roles = [
+  { title: 'Customer', description: 'Discover, order and track', icon: Users },
+  { title: 'Driver', description: 'Deliver safely and earn', icon: Truck },
+  { title: 'Restaurant', description: 'Manage orders and menu', icon: Store },
+  { title: 'Admin', description: 'Operate the whole platform', icon: ShieldCheck },
+];
+
+const colors = [
+  { name: 'Jet Black', value: '#08090B', className: 'bg-canvas', light: false },
+  { name: 'Vivid Red', value: '#E10600', className: 'bg-brand', light: false },
+  { name: 'Golden Yellow', value: '#FFC107', className: 'bg-brand-yellow', light: true },
+  { name: 'Warm White', value: '#F7F7F5', className: 'bg-ink', light: true },
+];
 
 export default function BrandShowcasePage() {
   return (
-    <div className="min-h-screen bg-bg text-text-primary">
-      {/* ═══════ HERO ═══════ */}
-      <section className="relative overflow-hidden bg-gradient-to-br from-brand-yellow via-brand-yellow-hover to-brand-yellow-active">
-        {/* Speed lines decoration */}
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute top-[20%] -left-10 w-[120%] h-1 bg-gradient-to-r from-transparent via-brand-red/30 to-brand-red/50 rotate-12" />
-          <div className="absolute top-1/2 -left-10 w-[120%] h-1 bg-gradient-to-r from-transparent via-brand-red/25 to-brand-red/45 rotate-12" />
-          <div className="absolute top-[80%] -left-10 w-[120%] h-1 bg-gradient-to-r from-transparent via-brand-red/20 to-brand-red/40 rotate-12" />
-        </div>
-
-        <div className="relative max-w-7xl mx-auto px-6 py-20 sm:py-28 text-center">
-          <div className="flex justify-center mb-6">
-            <BlinkLogo size="2xl" variant="mark" />
+    <main dir="ltr" className="min-h-screen overflow-hidden bg-canvas text-text-primary">
+      <section className="relative border-b border-border">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_80%_10%,rgba(225,6,0,.25),transparent_34%),radial-gradient(circle_at_10%_55%,rgba(255,193,7,.12),transparent_28%)]" />
+        <div className="relative mx-auto grid max-w-7xl gap-10 px-5 py-12 sm:px-8 lg:grid-cols-[1.05fr_.95fr] lg:items-center lg:py-20">
+          <div>
+            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-2 text-xs font-extrabold uppercase tracking-[.18em] text-brand-hover">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-brand" />
+              BlinkGo Design System 4.0
+            </div>
+            <h1 className="max-w-3xl text-5xl font-black italic leading-[.94] tracking-[-.06em] sm:text-7xl">
+              Built for speed.<br />
+              <span className="text-brand">Designed for trust.</span>
+            </h1>
+            <p className="mt-6 max-w-xl text-base leading-7 text-text-secondary sm:text-lg">
+              The shared visual language for every BlinkGo customer, driver, restaurant and admin experience.
+            </p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <BlinkButton size="lg" iconRight={<ArrowRight className="h-5 w-5" />}>Explore components</BlinkButton>
+              <BlinkButton size="lg" variant="outlined">Accessibility: AA</BlinkButton>
+            </div>
           </div>
-
-          <h1 className="text-5xl sm:text-7xl font-black italic tracking-tighter text-brand-black">
-            Blink<span className="text-brand-red">Go</span>
-          </h1>
-          <p className="mt-4 text-base sm:text-lg font-bold tracking-[0.25em] text-brand-black/80 uppercase">
-            Schnell. Zuverlässig. Für Dich.
-          </p>
-          <p className="mt-8 text-lg sm:text-xl max-w-2xl mx-auto text-brand-black/70">
-            The official BlinkGo Design System — premium, fast, modern, reliable.
-            Every component in this page is the source of truth for the entire application.
-          </p>
-
-          <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
-            <BlinkButton variant="primary" size="lg" icon={<Zap className="w-5 h-5" />}>
-              Get Started
-            </BlinkButton>
-            <BlinkButton variant="outlined" size="lg" icon={<ArrowRight className="w-5 h-5" />}>
-              View Tokens
-            </BlinkButton>
+          <div className="relative min-h-[340px] overflow-hidden rounded-[2rem] border border-border bg-surface-1 shadow-2xl sm:min-h-[460px]">
+            <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-brand via-brand-yellow to-brand" />
+            <Image src="/brand/blinkgo-discovery-hero-v2.webp" alt="BlinkGo courier riding through a modern German city" fill priority className="object-cover object-center" sizes="(min-width: 1024px) 45vw, 100vw" />
+            <div className="absolute inset-0 bg-gradient-to-t from-black via-black/15 to-transparent" />
+            <div className="absolute inset-x-5 bottom-5 rounded-2xl border border-white/15 bg-black/55 p-4 backdrop-blur-md sm:inset-x-7 sm:bottom-7">
+              <BlinkLogo variant="horizontal" size="lg" />
+              <p className="mt-2 text-sm font-semibold text-white/75">Schnell. Zuverlässig. Für dich.</p>
+            </div>
           </div>
         </div>
       </section>
 
-      {/* ═══════ OFFICIAL COLORS ═══════ */}
-      <Section title="01 — Official Colors" subtitle="Extracted directly from the logo">
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
-          <ColorSwatch
-            name="Brand Yellow"
-            hex="#F5B819"
-            cssVar="--brand-yellow"
-            description="Primary background of the logo. Used for highlights, accents, and the brand mark background."
-            variant="yellow"
-          />
-          <ColorSwatch
-            name="Brand Red"
-            hex="#DC2626"
-            cssVar="--brand-red"
-            description="Primary CTA, 'Go' text, 'B' mark accent. Energy, urgency, action."
-            variant="red"
-          />
-          <ColorSwatch
-            name="Brand Black"
-            hex="#0A0A0A"
-            cssVar="--brand-black"
-            description="'Blink' text, premium dark surfaces, primary text. Professionalism, depth."
-            variant="black"
-          />
-        </div>
-
-        <h3 className="text-lg font-extrabold text-text-primary mt-12 mb-4">Semantic Colors</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          <ColorChip name="Success" hex="#10B981" />
-          <ColorChip name="Warning" hex="#F5B819" />
-          <ColorChip name="Info"    hex="#3B82F6" />
-          <ColorChip name="Danger"  hex="#DC2626" />
-        </div>
-      </Section>
-
-      {/* ═══════ TYPOGRAPHY ═══════ */}
-      <Section title="02 — Typography" subtitle="Inter (DE/EN) + Cairo (AR). One scale, 13 sizes.">
-        <div className="space-y-6">
-          <TypeRow label="Display · 72px / 900" className="text-7xl font-black italic tracking-tighter">
-            Blink<span className="text-brand-red">Go</span>
-          </TypeRow>
-          <TypeRow label="H1 · 36px / 800" className="text-4xl font-extrabold tracking-tight">Schnelle Lieferung</TypeRow>
-          <TypeRow label="H2 · 30px / 800" className="text-3xl font-extrabold tracking-tight">Premium Quality</TypeRow>
-          <TypeRow label="H3 · 24px / 700" className="text-2xl font-bold tracking-tight">Best Restaurants</TypeRow>
-          <TypeRow label="Body · 16px / 400" className="text-base font-normal">The quick brown fox jumps over the lazy dog.</TypeRow>
-          <TypeRow label="Caption · 12px / 600 uppercase" className="text-xs font-semibold uppercase tracking-wider text-text-muted">
-            Tagline · SCHNELL. ZUVERLÄSSIG. FÜR DICH.
-          </TypeRow>
-        </div>
-      </Section>
-
-      {/* ═══════ SPACING ═══════ */}
-      <Section title="03 — Spacing" subtitle="8pt grid. Every padding, margin, and gap uses these values.">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[1, 2, 3, 4, 5, 6, 8, 10, 12, 16].map((n) => (
-            <div key={n} className="bg-surface border border-edge rounded-xl p-3">
-              <div className="text-xs font-bold text-text-muted mb-2">spacing-{n} · {n * 4}px</div>
-              <div className="h-2 rounded bg-gradient-to-r from-brand-red to-brand-yellow" style={{ width: `${n * 4}px` }} />
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* ═══════ RADIUS ═══════ */}
-      <Section title="04 — Border Radius" subtitle="From subtle to bold. Used consistently across components.">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            { name: 'sm', size: 'rounded-md',  value: '8px'  },
-            { name: 'md', size: 'rounded-xl',  value: '12px' },
-            { name: 'lg', size: 'rounded-2xl', value: '16px' },
-            { name: 'xl', size: 'rounded-3xl', value: '24px' },
-          ].map((r) => (
-            <div key={r.name} className="bg-surface border border-edge p-4 text-center">
-              <div className={`w-16 h-16 mx-auto mb-2 ${r.size} bg-brand-red`} />
-              <div className="text-xs font-bold text-text-primary">rounded-{r.name}</div>
-              <div className="text-xs text-text-muted">{r.value}</div>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* ═══════ BUTTONS ═══════ */}
-      <Section title="05 — Buttons" subtitle="8 variants. Always branded. Always tactile.">
-        <div className="space-y-6">
-          <ComponentRow label="Primary (Red CTA)">
-            <BlinkButton variant="primary" icon={<Zap />}>Bestellen</BlinkButton>
-            <BlinkButton variant="primary" loading>Senden</BlinkButton>
-            <BlinkButton variant="primary" disabled>Disabled</BlinkButton>
-            <BlinkButton variant="primary" size="sm" icon={<Plus />}>Add</BlinkButton>
-            <BlinkButton variant="primary" size="lg" iconRight={<ArrowRight />}>Continue</BlinkButton>
-          </ComponentRow>
-
-          <ComponentRow label="Secondary (Black)">
-            <BlinkButton variant="secondary">Speichern</BlinkButton>
-            <BlinkButton variant="secondary" icon={<Heart />}>Favorit</BlinkButton>
-          </ComponentRow>
-
-          <ComponentRow label="Accent (Yellow)">
-            <BlinkButton variant="accent">Upgrade</BlinkButton>
-            <BlinkButton variant="accent" icon={<Star />}>Premium</BlinkButton>
-          </ComponentRow>
-
-          <ComponentRow label="Outlined · Ghost">
-            <BlinkButton variant="outlined">Abbrechen</BlinkButton>
-            <BlinkButton variant="ghost">Mehr Info</BlinkButton>
-          </ComponentRow>
-
-          <ComponentRow label="Danger · Success">
-            <BlinkButton variant="danger">Löschen</BlinkButton>
-            <BlinkButton variant="success">Bestätigen</BlinkButton>
-          </ComponentRow>
-
-          <ComponentRow label="Glass (over images)">
-            <div className="p-8 rounded-2xl bg-gradient-to-br from-brand-red to-brand-yellow relative overflow-hidden">
-              <div className="absolute top-1/4 -left-10 w-full h-0.5 bg-white/30 rotate-12" />
-              <div className="absolute top-1/2 -left-10 w-full h-0.5 bg-white/30 rotate-12" />
-              <BlinkButton variant="glass" icon={<Zap />}>Glass Button</BlinkButton>
-            </div>
-          </ComponentRow>
-
-          <ComponentRow label="Sizes">
-            <BlinkButton size="xs">XS</BlinkButton>
-            <BlinkButton size="sm">SM</BlinkButton>
-            <BlinkButton size="md">MD</BlinkButton>
-            <BlinkButton size="lg">LG</BlinkButton>
-            <BlinkButton size="xl">XL</BlinkButton>
-          </ComponentRow>
-        </div>
-      </Section>
-
-      {/* ═══════ CARDS ═══════ */}
-      <Section title="06 — Cards" subtitle="5 variants for every content type">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          <BlinkCard variant="default" hoverable>
-            <h3 className="text-lg font-extrabold mb-1">Default Card</h3>
-            <p className="text-sm text-text-secondary">Subtle border, soft shadow. The workhorse.</p>
-          </BlinkCard>
-          <BlinkCard variant="elevated" hoverable>
-            <h3 className="text-lg font-extrabold mb-1">Elevated</h3>
-            <p className="text-sm text-text-secondary">More depth, no border. Premium feel.</p>
-          </BlinkCard>
-          <BlinkCard variant="brand" brandAccent="red" hoverable>
-            <h3 className="text-lg font-extrabold mb-1">Brand Accent</h3>
-            <p className="text-sm text-text-secondary">Red bar on top. Highlighted content.</p>
-          </BlinkCard>
-          <BlinkCard variant="dark" hoverable>
-            <h3 className="text-lg font-extrabold mb-1 text-white">Dark Premium</h3>
-            <p className="text-sm text-white/70">Black with white text. Hero sections.</p>
-          </BlinkCard>
-          <BlinkCard variant="outline" hoverable>
-            <h3 className="text-lg font-extrabold mb-1">Outline</h3>
-            <p className="text-sm text-text-secondary">Just a border. Low-emphasis.</p>
-          </BlinkCard>
-          <BlinkCard variant="flat" hoverable>
-            <h3 className="text-lg font-extrabold mb-1">Flat</h3>
-            <p className="text-sm text-text-secondary">No border, no shadow. Minimal.</p>
-          </BlinkCard>
-        </div>
-      </Section>
-
-      {/* ═══════ INPUTS ═══════ */}
-      <Section title="07 — Inputs" subtitle="Forms that feel premium. Always validated. Always accessible.">
-        <div className="max-w-2xl space-y-4">
-          <BlinkInput
-            label="Email Address"
-            type="email"
-            placeholder="you@blinkgo.de"
-            leftIcon={<Mail className="w-4 h-4" />}
-            required
-            hint="We'll never share your email"
-          />
-          <BlinkInput
-            label="Password"
-            type="password"
-            placeholder="••••••••"
-            leftIcon={<Lock className="w-4 h-4" />}
-            required
-          />
-          <BlinkInput
-            label="Email"
-            value="invalid@"
-            readOnly
-            error="Please enter a valid email address"
-            leftIcon={<Mail className="w-4 h-4" />}
-          />
-          <BlinkInput
-            label="Search"
-            placeholder="Find restaurants, dishes, drivers…"
-            leftIcon={<Search className="w-4 h-4" />}
-            rightIcon={<button type="button" aria-label="Search"><ArrowRight className="w-4 h-4" /></button>}
-          />
-          <BlinkTextarea
-            label="Delivery Instructions"
-            placeholder="e.g. Ring the doorbell, leave at door…"
-            hint="Helps your driver find you faster"
-          />
-        </div>
-      </Section>
-
-      {/* ═══════ BADGES ═══════ */}
-      <Section title="08 — Badges & Status" subtitle="8 variants. With optional dot for live indicators.">
-        <div className="space-y-4">
-          <ComponentRow label="Static">
-            <BlinkBadge variant="red">Aktion</BlinkBadge>
-            <BlinkBadge variant="yellow">Beliebt</BlinkBadge>
-            <BlinkBadge variant="black">Neu</BlinkBadge>
-            <BlinkBadge variant="success">Verfügbar</BlinkBadge>
-            <BlinkBadge variant="warning">Verspätet</BlinkBadge>
-            <BlinkBadge variant="info">Info</BlinkBadge>
-            <BlinkBadge variant="neutral">Standard</BlinkBadge>
-            <BlinkBadge variant="outline">Outline</BlinkBadge>
-          </ComponentRow>
-          <ComponentRow label="Live (with dot)">
-            <BlinkBadge variant="success" dot>Online</BlinkBadge>
-            <BlinkBadge variant="red" dot>Live</BlinkBadge>
-            <BlinkBadge variant="warning" dot>Pending</BlinkBadge>
-            <BlinkBadge variant="info" dot>Syncing</BlinkBadge>
-          </ComponentRow>
-          <ComponentRow label="Order Status">
-            <BlinkStatusBadge status="preparing" />
-            <BlinkStatusBadge status="ready" />
-            <BlinkStatusBadge status="on-the-way" />
-            <BlinkStatusBadge status="delivered" />
-            <BlinkStatusBadge status="cancelled" />
-            <BlinkStatusBadge status="vip" />
-            <BlinkStatusBadge status="new" />
-          </ComponentRow>
-        </div>
-      </Section>
-
-      {/* ═══════ AVATARS ═══════ */}
-      <Section title="09 — Avatars" subtitle="Always branded. With online status + tier badge.">
-        <div className="flex flex-wrap items-end gap-6">
-          <BlinkAvatar name="Anna Schmidt" size="sm" online tier="gold" />
-          <BlinkAvatar name="Max Mueller" size="md" online tier="silver" />
-          <BlinkAvatar name="Sara Khoury" size="lg" online={false} tier="vip" />
-          <BlinkAvatar name="Karim Berlin" size="xl" online tier="platinum" ring />
-          <BlinkAvatar name="Lina Test" size="2xl" online tier="bronze" />
-          <BlinkAvatar name="Tom B." size="lg" />
-        </div>
-      </Section>
-
-      {/* ═══════ STATS ═══════ */}
-      <Section title="10 — Stats / KPIs" subtitle="Dashboard-ready. With trends, icons, and variants.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <BlinkStat
-            label="Today's Revenue"
-            value="€2,847"
-            icon={<CreditCard className="w-5 h-5" />}
-            change={12.4}
-            changeLabel="vs yesterday"
-          />
-          <BlinkStat
-            label="Active Orders"
-            value={47}
-            icon={<ShoppingBag className="w-5 h-5" />}
-            change={-3.2}
-          />
-          <BlinkStat
-            label="Avg Delivery"
-            value="28"
-            suffix="min"
-            icon={<Clock className="w-5 h-5" />}
-            change={5.1}
-            changeLabel="faster"
-          />
-          <BlinkStat
-            label="Driver Online"
-            value="12/15"
-            icon={<Truck className="w-5 h-5" />}
-          />
-          <BlinkStat
-            label="Premium Card"
-            value="€1,250"
-            icon={<Star className="w-5 h-5" />}
-            variant="brand"
-            change={18.7}
-          />
-          <BlinkStat
-            label="Success Metric"
-            value="98.5"
-            suffix="%"
-            icon={<Shield className="w-5 h-5" />}
-            variant="success"
-          />
-        </div>
-      </Section>
-
-      {/* ═══════ MAP MARKERS ═══════ */}
-      <Section title="11 — Map Markers" subtitle="7 marker types. Pulsing for active. Brand-consistent.">
-        <div className="bg-gradient-to-br from-surface-light to-surface rounded-3xl p-8 border border-edge">
-          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-7 gap-6 items-end justify-items-center">
-            <div className="flex flex-col items-center gap-2">
-              <BlinkMapMarker type="restaurant" isActive label="Burger King" />
-              <span className="text-xs text-text-muted">Restaurant</span>
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <BlinkMapMarker type="market" label="REWE" />
-              <span className="text-xs text-text-muted">Market</span>
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <BlinkMapMarker type="pharmacy" label="Apotheke" />
-              <span className="text-xs text-text-muted">Pharmacy</span>
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <BlinkMapMarker type="customer" isActive label="You" />
-              <span className="text-xs text-text-muted">Customer</span>
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <BlinkMapMarker type="driver" isActive rotation={45} label="Max" />
-              <span className="text-xs text-text-muted">Driver</span>
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <BlinkMapMarker type="pickup" label="Pickup" />
-              <span className="text-xs text-text-muted">Pickup</span>
-            </div>
-            <div className="flex flex-col items-center gap-2">
-              <BlinkMapMarker type="destination" label="Home" />
-              <span className="text-xs text-text-muted">Destination</span>
-            </div>
+      <div className="mx-auto max-w-7xl space-y-16 px-5 py-14 sm:px-8 lg:py-20">
+        <Section eyebrow="01 / Foundations" title="One identity. Four products." subtitle="The official palette is fixed across light, dark and role-based experiences.">
+          <div className="mb-6 grid gap-3 rounded-[2rem] border border-border bg-surface-1 p-5 sm:grid-cols-3 sm:p-7">
+            <div className="flex min-h-32 items-center justify-center rounded-2xl bg-canvas"><BlinkLogo variant="mark" size="xl" /></div>
+            <div className="flex min-h-32 items-center justify-center rounded-2xl bg-canvas"><BlinkLogo variant="wordmark" size="xl" /></div>
+            <div className="flex min-h-32 items-center justify-center rounded-2xl bg-canvas"><BlinkLogo variant="full" size="lg" /></div>
           </div>
-        </div>
-      </Section>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {colors.map((color) => (
+              <div key={color.name} className={`${color.className} min-h-44 rounded-2xl border border-white/10 p-5 ${color.light ? 'text-canvas' : 'text-white'}`}>
+                <p className="font-black">{color.name}</p>
+                <p className={`mt-1 font-mono text-sm ${color.light ? 'text-canvas/65' : 'text-white/65'}`}>{color.value}</p>
+              </div>
+            ))}
+          </div>
+        </Section>
 
-      {/* ═══════ ICONOGRAPHY ═══════ */}
-      <Section title="12 — Iconography" subtitle="Lucide React. Rounded, minimal, elegant. 24×24 base, stroke 2.">
-        <div className="grid grid-cols-4 sm:grid-cols-8 gap-3">
-          {[
-            Search, Heart, MapPin, Store, ShoppingBag, Truck, Star, Bell,
-            Plus, ArrowRight, Mail, Lock, User, Phone, Calendar, Zap,
-            Shield, Clock, CreditCard,
-          ].map((Icon, i) => (
-            <div key={i} className="aspect-square bg-surface border border-edge rounded-xl flex flex-col items-center justify-center gap-1.5 hover:border-brand-red hover:shadow-md transition-all cursor-pointer">
-              <Icon className="w-6 h-6 text-brand-red" />
-              <span className="text-[10px] text-text-muted truncate max-w-full px-1">{Icon.displayName || 'icon'}</span>
-            </div>
-          ))}
-        </div>
-      </Section>
-
-      {/* ═══════ RESTAURANT CARD EXAMPLE ═══════ */}
-      <Section title="13 — Real Component Examples" subtitle="Used in production. Future pages MUST follow these patterns.">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {/* Restaurant card example */}
-          <BlinkCard variant="elevated" padding="none" hoverable className="overflow-hidden">
-            <div className="h-32 bg-gradient-to-br from-brand-red to-brand-red-hover relative">
-              <div className="absolute top-2 right-2">
-                <BlinkBadge variant="yellow" rounded="md" size="sm">⭐ 4.8</BlinkBadge>
-              </div>
-              <div className="absolute top-2 left-2">
-                <BlinkBadge variant="success" dot rounded="md" size="sm">Open</BlinkBadge>
-              </div>
-            </div>
-            <div className="p-4">
-              <div className="flex items-start gap-3">
-                <div className="w-12 h-12 rounded-2xl bg-brand-yellow flex items-center justify-center text-2xl">🍔</div>
-                <div className="flex-1 min-w-0">
-                  <h3 className="font-extrabold text-text-primary truncate">Burger Meister</h3>
-                  <p className="text-xs text-text-secondary truncate">American · $$ · 1.2 km</p>
-                </div>
-              </div>
-              <div className="mt-3 flex items-center gap-2 text-xs text-text-muted">
-                <Clock className="w-3.5 h-3.5" />
-                <span>25-35 min</span>
-                <span>·</span>
-                <span>Free delivery</span>
-              </div>
-              <div className="mt-4 flex gap-2">
-                <BlinkButton variant="primary" size="sm" fullWidth>Bestellen</BlinkButton>
-                <BlinkButton variant="outlined" size="sm" icon={<Heart className="w-4 h-4" />} aria-label="Favorite" />
-              </div>
-            </div>
-          </BlinkCard>
-
-          {/* Order tracking card example */}
-          <BlinkCard variant="brand" brandAccent="red">
-            <div className="flex items-center gap-3 mb-3">
-              <div className="w-10 h-10 rounded-full bg-brand-red flex items-center justify-center">
-                <Truck className="w-5 h-5 text-white" />
-              </div>
+        <Section eyebrow="02 / Components" title="Controls that feel unmistakably BlinkGo" subtitle="Clear hierarchy, 44px minimum targets and visible keyboard focus are built in.">
+          <div className="grid gap-5 lg:grid-cols-2">
+            <BlinkCard padding="lg" className="space-y-5">
               <div>
-                <p className="text-xs text-text-secondary uppercase font-bold tracking-wider">Live Tracking</p>
-                <h3 className="font-extrabold text-text-primary">On the way</h3>
+                <p className="text-xs font-bold uppercase tracking-[.18em] text-brand">Buttons</p>
+                <h3 className="mt-2 text-2xl font-black">Action hierarchy</h3>
               </div>
-            </div>
-            <div className="text-3xl font-black text-text-primary">12 <span className="text-lg font-bold text-text-secondary">min away</span></div>
-            <div className="mt-3 flex items-center gap-2">
-              <BlinkAvatar name="Max M" size="sm" online />
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-bold text-text-primary">Max Mueller</p>
-                <p className="text-xs text-text-secondary">⭐ 4.9 · 247 deliveries</p>
+              <div className="flex flex-wrap gap-3">
+                <BlinkButton>Primary action</BlinkButton>
+                <BlinkButton variant="accent">Highlight</BlinkButton>
+                <BlinkButton variant="outlined">Secondary</BlinkButton>
+                <BlinkButton variant="ghost">Quiet action</BlinkButton>
               </div>
-              <BlinkButton variant="primary" size="sm">Call</BlinkButton>
-            </div>
-          </BlinkCard>
+              <BlinkButton loading fullWidth>Processing</BlinkButton>
+            </BlinkCard>
 
-          {/* Driver earnings example */}
-          <BlinkCard variant="dark">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-xs text-white/70 uppercase tracking-wider font-bold">Today</span>
-              <BlinkBadge variant="success" dot size="sm">Online</BlinkBadge>
-            </div>
-            <div className="text-4xl font-black text-white">€142</div>
-            <div className="text-sm text-white/70 mt-1">8 deliveries</div>
-            <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
-              <div className="bg-white/10 rounded-lg p-2">
-                <p className="text-white/60">This week</p>
-                <p className="font-extrabold text-white">€842</p>
+            <BlinkCard padding="lg" className="space-y-5">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[.18em] text-brand-yellow">Inputs</p>
+                <h3 className="mt-2 text-2xl font-black">Fast and forgiving</h3>
               </div>
-              <div className="bg-white/10 rounded-lg p-2">
-                <p className="text-white/60">Tips</p>
-                <p className="font-extrabold text-white">€28</p>
+              <BlinkInput label="Search" placeholder="Restaurants, dishes, groceries…" leftIcon={<Search className="h-5 w-5" />} />
+              <BlinkInput label="Email address" placeholder="name@example.com" hint="We never share your email." leftIcon={<Mail className="h-5 w-5" />} />
+            </BlinkCard>
+          </div>
+        </Section>
+
+        <Section eyebrow="03 / Product states" title="Every state has a clear next step" subtitle="Success, progress and errors use semantic colour without losing the BlinkGo identity.">
+          <div className="grid gap-4 md:grid-cols-3">
+            <StateCard icon={Check} tone="success" label="Success" title="Order confirmed" text="The restaurant has received the order." />
+            <StateCard icon={Clock3} tone="warning" label="In progress" title="Driver is on the way" text="Live ETA and tracking stay visible." />
+            <StateCard icon={CircleAlert} tone="error" label="Needs attention" title="Payment failed" text="Explain the issue and offer a safe retry." />
+          </div>
+        </Section>
+
+        <Section eyebrow="04 / Product family" title="Shared DNA, role-specific focus" subtitle="Each portal keeps the same navigation, states and interaction rules.">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {roles.map(({ title, description, icon: Icon }) => (
+              <BlinkCard key={title} hoverable padding="lg" className="group">
+                <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-brand/10 text-brand transition-colors group-hover:bg-brand group-hover:text-white"><Icon className="h-6 w-6" /></div>
+                <h3 className="mt-6 text-xl font-black">{title}</h3>
+                <p className="mt-2 text-sm text-text-secondary">{description}</p>
+                <div className="mt-5 flex items-center gap-2 text-sm font-bold text-brand">View pattern <ArrowRight className="h-4 w-4" /></div>
+              </BlinkCard>
+            ))}
+          </div>
+        </Section>
+
+        <Section eyebrow="05 / Installed identity" title="The same BlinkGo before the app even opens" subtitle="Installation, home-screen and notification assets now use the official black-rider identity with safe platform cropping.">
+          <div className="grid gap-4 md:grid-cols-[1fr_1fr_1.25fr]">
+            <BlinkCard padding="lg" className="flex flex-col items-center text-center">
+              <div className="relative size-40 overflow-hidden rounded-[2.2rem] shadow-[0_24px_70px_rgba(0,0,0,.55)] ring-1 ring-white/10">
+                <Image src="/brand/blinkgo-app-icon-512-v2.png" alt="BlinkGo installed app icon" fill sizes="160px" className="object-cover" />
               </div>
+              <h3 className="mt-6 text-xl font-black">Installed app</h3>
+              <p className="mt-2 text-sm text-text-secondary">192px · 512px · maskable safe area</p>
+            </BlinkCard>
+
+            <BlinkCard padding="lg" className="flex flex-col items-center text-center">
+              <div className="grid size-40 place-items-center rounded-[2.2rem] bg-white shadow-[0_24px_70px_rgba(0,0,0,.35)]">
+                <Image src="/brand/blinkgo-notification-badge-96-v2.png" alt="BlinkGo monochrome notification badge" width={96} height={96} className="h-24 w-24 object-contain invert" />
+              </div>
+              <h3 className="mt-6 flex items-center gap-2 text-xl font-black"><Bell className="size-5 text-brand" /> Notification badge</h3>
+              <p className="mt-2 text-sm text-text-secondary">Monochrome B mark for Android status surfaces</p>
+            </BlinkCard>
+
+            <BlinkCard padding="lg" className="flex flex-col justify-center overflow-hidden bg-[radial-gradient(circle_at_70%_25%,rgba(225,6,0,.2),transparent_45%)]">
+              <BlinkLogo variant="horizontal" size="xl" priority />
+              <p className="mt-6 max-w-sm text-sm leading-6 text-text-secondary">One transparent lockup across customer, driver, restaurant, admin, tracking and startup surfaces.</p>
+              <div className="mt-6 h-1 w-full rounded-full bg-gradient-to-r from-brand via-brand-yellow to-transparent" />
+            </BlinkCard>
+          </div>
+        </Section>
+
+        <section className="overflow-hidden rounded-[2rem] border border-brand/30 bg-gradient-to-br from-brand/20 via-surface-2 to-brand-yellow/10 p-6 sm:p-10">
+          <div className="grid gap-8 lg:grid-cols-[1fr_auto] lg:items-center">
+            <div>
+              <div className="flex items-center gap-2 text-brand-yellow"><MapPin className="h-5 w-5" /><span className="text-sm font-black uppercase tracking-widest">Ready for the road</span></div>
+              <h2 className="mt-4 text-3xl font-black sm:text-4xl">Fast. Reliable. Made for you.</h2>
+              <p className="mt-3 max-w-2xl text-text-secondary">This page is now the canonical reference used while upgrading every BlinkGo screen.</p>
             </div>
-          </BlinkCard>
-        </div>
-      </Section>
-
-      {/* ═══════ FOOTER ═══════ */}
-      <footer className="border-t border-edge bg-surface-light py-12 px-6 mt-20">
-        <div className="max-w-7xl mx-auto text-center">
-          <BlinkLogo size="md" variant="horizontal" className="justify-center mb-4" />
-          <p className="text-sm text-text-secondary">
-            BlinkGo Design System v2.0 · Last updated July 2026
-          </p>
-          <p className="text-xs text-text-muted mt-2">
-            Single source of truth for every screen, component, and future page.
-          </p>
-        </div>
-      </footer>
-    </div>
-  );
-}
-
-// ═══════ Helper Components ═══════
-
-function Section({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
-  return (
-    <section className="max-w-7xl mx-auto px-6 py-16 border-b border-edge">
-      <div className="mb-8">
-        <h2 className="text-2xl sm:text-3xl font-extrabold text-text-primary tracking-tight">{title}</h2>
-        <p className="text-text-secondary mt-1">{subtitle}</p>
+            <div className="flex h-20 w-20 items-center justify-center rounded-3xl bg-brand text-white shadow-[0_18px_50px_rgba(225,6,0,.35)]"><ShoppingBag className="h-9 w-9" /></div>
+          </div>
+        </section>
       </div>
-      {children}
-    </section>
+    </main>
   );
 }
 
-function ColorSwatch({ name, hex, cssVar, description, variant }: { name: string; hex: string; cssVar: string; description: string; variant: 'red' | 'yellow' | 'black' }) {
-  return (
-    <div className="bg-surface border border-edge rounded-2xl overflow-hidden shadow-sm">
-      <div
-        className="h-32 flex items-end p-4"
-        style={{ background: variant === 'red' ? 'linear-gradient(135deg, #DC2626, #991B1B)' :
-                          variant === 'yellow' ? 'linear-gradient(135deg, #F5B819, #D97706)' :
-                          'linear-gradient(135deg, #0A0A0A, #404040)' }}
-      >
-        <span className="font-black text-2xl tracking-tight" style={{ color: variant === 'yellow' ? '#0A0A0A' : '#FFFFFF' }}>
-          {name}
-        </span>
-      </div>
-      <div className="p-4 space-y-1">
-        <div className="font-mono text-sm font-bold">{hex}</div>
-        <div className="font-mono text-xs text-text-muted">{cssVar}</div>
-        <p className="text-xs text-text-secondary mt-2 leading-relaxed">{description}</p>
-      </div>
-    </div>
-  );
+function Section({ eyebrow, title, subtitle, children }: { eyebrow: string; title: string; subtitle: string; children: React.ReactNode }) {
+  return <section><p className="text-xs font-black uppercase tracking-[.22em] text-brand">{eyebrow}</p><h2 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">{title}</h2><p className="mb-8 mt-3 max-w-2xl text-text-secondary">{subtitle}</p>{children}</section>;
 }
 
-function ColorChip({ name, hex }: { name: string; hex: string }) {
-  return (
-    <div className="flex items-center gap-3 bg-surface border border-edge rounded-xl p-3">
-      <div className="w-10 h-10 rounded-lg shadow-sm flex-shrink-0" style={{ background: hex }} />
-      <div>
-        <div className="text-sm font-bold text-text-primary">{name}</div>
-        <div className="text-xs font-mono text-text-muted">{hex}</div>
-      </div>
-    </div>
-  );
-}
-
-function TypeRow({ label, className, children }: { label: string; className?: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-baseline border-b border-edge pb-4">
-      <div className="text-xs font-bold text-text-muted uppercase tracking-wider">{label}</div>
-      <div className={`col-span-2 text-text-primary ${className ?? ''}`}>{children}</div>
-    </div>
-  );
-}
-
-function ComponentRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-center">
-      <div className="text-xs font-bold text-text-muted uppercase tracking-wider">{label}</div>
-      <div className="col-span-3 flex flex-wrap items-center gap-3">{children}</div>
-    </div>
-  );
+function StateCard({ icon: Icon, tone, label, title, text }: { icon: typeof Check; tone: 'success' | 'warning' | 'error'; label: string; title: string; text: string }) {
+  const styles = { success: 'bg-status-success/15 text-status-success border-status-success/25', warning: 'bg-status-warning/15 text-status-warning border-status-warning/25', error: 'bg-status-error/15 text-status-error border-status-error/25' }[tone];
+  return <BlinkCard padding="lg"><div className={`flex h-11 w-11 items-center justify-center rounded-2xl border ${styles}`}><Icon className="h-5 w-5" /></div><p className="mt-5 text-xs font-black uppercase tracking-widest text-text-muted">{label}</p><h3 className="mt-2 text-xl font-black">{title}</h3><p className="mt-2 text-sm leading-6 text-text-secondary">{text}</p></BlinkCard>;
 }

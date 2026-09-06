@@ -7,6 +7,7 @@
 
 import type { PushProvider, PushDevice, PushPayload, PushResult, PushProviderName } from './types';
 import { IntegrationError, readProviderConfig } from '../types';
+import { createApnsProviderToken } from './provider-jwt';
 
 export class APNsProvider implements PushProvider {
   public readonly name: PushProviderName = 'apns';
@@ -44,17 +45,12 @@ export class APNsProvider implements PushProvider {
     if (this.cachedToken && this.cachedToken.expires > Date.now() + 60_000) {
       return this.cachedToken.token;
     }
-    const crypto = await import('node:crypto');
     const now = Math.floor(Date.now() / 1000);
-    const header = { alg: 'ES256', kid: this.keyId };
-    const payload = { iss: this.teamId, iat: now };
-    const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
-    const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
-    const data = headerB64 + '.' + payloadB64;
-    const sign = crypto.createSign('SHA256');
-    sign.update(data);
-    const signature = sign.sign(this.privateKey, 'base64url');
-    const token = data + '.' + signature;
+    const token = createApnsProviderToken({
+      keyId: this.keyId,
+      teamId: this.teamId,
+      privateKey: this.privateKey,
+    }, now);
     this.cachedToken = { token, expires: Date.now() + 50 * 60 * 1000 };
     return token;
   }

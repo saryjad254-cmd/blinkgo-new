@@ -5,7 +5,7 @@
  * Validates transition, updates DB with timestamps, logs tracking event, fires notifications.
  *
  * State machine (see ORDER_ALLOWED_TRANSITIONS in @/lib/services/order-service):
- *   pending → confirmed → preparing → ready → picked_up → delivering → delivered
+ *   pending → confirmed → preparing → ready → assigned → picked_up → delivering → delivered
  *   Pre-preparation states may transition to cancelled.
  *   picked_up / delivering may transition to could_not_deliver (driver failure path).
  *   delivered / cancelled / could_not_deliver may transition to refunded (admin only).
@@ -17,17 +17,16 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
-import { notifyOrderEvent } from '@/lib/notifications';
-import { OrderService } from '@/lib/services/order-service';
+import { notifyOrderEvent, type NotificationType } from '@/lib/notifications';
 import { rateLimit } from '@/lib/rate-limit';
 import { ok, fail, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { assertCanReadOrder } from '@/lib/api/ownership';
-import { ValidationError, AuthenticationError, AuthorizationError, NotFoundError, ConflictError } from '@/lib/errors';
+import { ValidationError, AuthorizationError, NotFoundError, ConflictError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
 import { ORDER_ALLOWED_TRANSITIONS } from '@/lib/services/order-service';
+import { createPreparationPlan } from '@/lib/restaurant/preparation-policy';
 // v82: use the canonical transitions graph from OrderService. The previous
 // in-route copy drifted (no delivered→refunded path) which blocked post-
 // delivery refund audits.
@@ -47,12 +46,10 @@ export const dynamic = 'force-dynamic';
 // customer cancel). Admins can either complete the refund manually
 // (then transition to 'cancelled' or 'refunded') or fail-and-revert.
 const VALID_STATUSES = [
-  'pending', 'confirmed', 'preparing', 'ready',
+  'pending', 'confirmed', 'preparing', 'ready', 'assigned',
   'picked_up', 'delivering', 'delivered', 'cancelled',
   'could_not_deliver', 'refunded', 'cancel_refund_pending',
 ] as const;
-
-type OrderStatus = (typeof VALID_STATUSES)[number];
 
 /**
  * Pick the best translation for a transition error based on Accept-Language.
@@ -101,8 +98,17 @@ async function updateStatus(
     // 4) Role-based authorization
     const role = ctx.auth.user.role;
     const isAdmin = role === 'admin' || role === 'super_admin' || role === 'manager';
-    const isDriver = role === 'driver' && (order.driver_id === ctx.auth.user.id || (!order.driver_id && status === 'confirmed'));
-    const isRestaurant = role === 'restaurant';
+    const isDriver = role === 'driver' && order.driver_id === ctx.auth.user.id;
+    let isRestaurant = false;
+    if (role === 'restaurant') {
+      const { data: ownedRestaurant } = await supabase
+        .from('restaurants')
+        .select('id')
+        .eq('owner_id', ctx.auth.user.id)
+        .eq('id', order.restaurant_id)
+        .maybeSingle();
+      isRestaurant = Boolean(ownedRestaurant && ownedRestaurant.id === order.restaurant_id);
+    }
 
     // F10: customers must NOT use this PATCH to cancel
     if (role === 'customer') {
@@ -116,6 +122,21 @@ async function updateStatus(
     }
     if (isDriver && order.driver_id && order.driver_id !== ctx.auth.user.id) {
       throw new AuthorizationError('Not your order');
+    }
+
+    // Drivers never control the restaurant workflow. They can only move their
+    // own assigned order through driver-owned delivery transitions. This runs
+    // before the idempotent branch so kitchen-owned states remain read-only.
+    if (isDriver) {
+      const driverTransitions: Record<string, string[]> = {
+        ready: ['picked_up'],
+        assigned: ['picked_up'],
+        picked_up: ['delivering', 'delivered', 'could_not_deliver'],
+        delivering: ['delivered', 'could_not_deliver'],
+      };
+      if (!driverTransitions[order.status]?.includes(status)) {
+        throw new AuthorizationError('Drivers cannot update restaurant-owned order states');
+      }
     }
 
     // 5) Idempotent same-status transition: just refresh timestamp + return current order.
@@ -136,16 +157,31 @@ async function updateStatus(
     // v82: the canonical transitions graph is now exported by OrderService
     // so this route and any future callers cannot drift.
     const ALLOWED = ORDER_ALLOWED_TRANSITIONS as unknown as Record<string, string[]>;
-    if (!isAdmin && !ALLOWED[order.status]?.includes(status)) {
+    const pickupHandover = isRestaurant && order.fulfillment_type === 'pickup' && order.status === 'ready' && status === 'delivered';
+    if (!isAdmin && !pickupHandover && !ALLOWED[order.status]?.includes(status)) {
       throw new ConflictError(
         localeAwareError(order.status, status, req.headers.get('accept-language')),
-        { from: order.status, to: status, code: 'INVALID_TRANSITION' },
+        { meta: { from: order.status, to: status }, code: 'INVALID_TRANSITION' },
       );
     }
 
     // 7) Build updates
     const now = new Date().toISOString();
     const updates: Record<string, unknown> = { status, updated_at: now };
+    const safeMetadata = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+      ? metadata as Record<string, unknown>
+      : {};
+    const preparationPlan = status === 'confirmed' && (isRestaurant || isAdmin)
+      ? createPreparationPlan(now, safeMetadata.estimated_prep_minutes)
+      : null;
+    const trackingMetadata = preparationPlan
+      ? {
+          ...safeMetadata,
+          estimated_prep_minutes: preparationPlan.estimatedPrepMinutes,
+          estimated_ready_at: preparationPlan.estimatedReadyAt,
+          preparation_source: 'restaurant',
+        }
+      : safeMetadata;
     if (driver_id && (isAdmin || isRestaurant)) updates.driver_id = driver_id;
     if (status === 'confirmed' && !order.accepted_at) updates.accepted_at = now;
     if (status === 'preparing' && !order.prepared_at) updates.prepared_at = now;
@@ -165,10 +201,33 @@ async function updateStatus(
       return fail(new Error('Failed to update order'));
     }
 
-    // 8) AUTO-ASSIGN: When status becomes "ready" and no driver is assigned,
+    // 8) Record the explicit assignment stage. A driver may have been
+    // reserved before the kitchen reached `ready`; once it does, delivery
+    // orders enter the canonical `assigned` state.
+    if (status === 'ready' && updated.fulfillment_type !== 'pickup' && updated.driver_id) {
+      const { data: assignedOrder, error: assignStateError } = await supabase
+        .from('orders')
+        .update({ status: 'assigned', updated_at: new Date().toISOString() })
+        .eq('id', order_id)
+        .eq('status', 'ready')
+        .eq('driver_id', updated.driver_id)
+        .select('status')
+        .maybeSingle();
+      if (assignStateError || !assignedOrder) {
+        logger.warn('Pre-assigned order could not enter assigned state', {
+          order_id,
+          driver_id: updated.driver_id,
+          error: assignStateError?.message,
+        });
+      } else {
+        updated.status = 'assigned';
+      }
+    }
+
+    // 9) AUTO-ASSIGN: When status becomes "ready" and no driver is assigned,
     //    automatically pick the closest available online driver using the
     //    driver_status table (proximity-based + status-aware).
-    if (status === 'ready' && !updated.driver_id) {
+    if (status === 'ready' && updated.fulfillment_type !== 'pickup' && !updated.driver_id) {
       try {
         // Get all online drivers from driver_status
         const { data: onlineDrivers } = await supabase
@@ -185,9 +244,9 @@ async function updateStatus(
           const restLat = updated.restaurant_latitude ?? order.restaurant_latitude;
           const restLng = updated.restaurant_longitude ?? order.restaurant_longitude;
 
-          if (restLat && restLng) {
+          if (Number.isFinite(restLat) && Number.isFinite(restLng)) {
             for (const d of onlineDrivers) {
-              if (!d.latitude || !d.longitude) continue;
+              if (!Number.isFinite(d.latitude) || !Number.isFinite(d.longitude)) continue;
               // Haversine distance (km)
               const R = 6371;
               const dLat = ((d.latitude - restLat) * Math.PI) / 180;
@@ -203,20 +262,38 @@ async function updateStatus(
                 bestDriverId = d.driver_id;
               }
             }
-          } else {
-            // Fallback: first available driver
-            bestDriverId = onlineDrivers[0].driver_id;
           }
+          // Location improves ranking but must never prevent assignment. This
+          // also covers new drivers that have not published their first GPS fix.
+          bestDriverId ??= onlineDrivers[0].driver_id;
 
           if (bestDriverId) {
-            await supabase
+            const { data: assignedOrder, error: assignError } = await supabase
               .from('orders')
-              .update({ driver_id: bestDriverId })
-              .eq('id', order_id);
-            updated.driver_id = bestDriverId;
+              .update({
+                driver_id: bestDriverId,
+                status: 'assigned',
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', order_id)
+              .eq('status', 'ready')
+              .is('driver_id', null)
+              .select('id, driver_id, status')
+              .maybeSingle();
+            if (assignError || !assignedOrder) {
+              logger.warn('Auto-assignment lost race or failed', {
+                order_id,
+                driver_id: bestDriverId,
+                error: assignError?.message,
+              });
+              bestDriverId = null;
+            } else {
+              updated.driver_id = bestDriverId;
+              updated.status = 'assigned';
+            }
 
             // Notify the driver
-            try {
+            if (bestDriverId) try {
               await supabase.from('notifications').insert({
                 user_id: bestDriverId,
                 type: 'driver',
@@ -234,7 +311,7 @@ async function updateStatus(
             }
 
             // Update driver_status to mark them as on a delivery
-            try {
+            if (bestDriverId) try {
               await supabase
                 .from('driver_status')
                 .update({ is_on_delivery: true, current_order_id: order_id })
@@ -256,7 +333,7 @@ async function updateStatus(
         driver_id: updated.driver_id,
         event_type: 'status_change',
         status,
-        metadata: metadata || {},
+        metadata: trackingMetadata,
       });
     } catch {}
 
@@ -278,7 +355,7 @@ async function updateStatus(
     }
 
     // 10) Send notifications
-    const notifMap: Record<string, { type: any; customer?: string; driver?: string; restaurant?: string }> = {
+    const notifMap: Record<string, { type: NotificationType; customer?: string; driver?: string; restaurant?: string }> = {
       confirmed: { type: 'order_accepted', customer: 'Order confirmed', driver: 'New delivery assigned', restaurant: 'New order confirmed' },
       preparing: { type: 'order_accepted', customer: 'Restaurant is preparing your order', restaurant: 'Started preparing' },
       ready: { type: 'order_accepted', customer: 'Order ready for pickup', driver: 'Order ready for pickup' },
@@ -300,7 +377,7 @@ async function updateStatus(
       } catch {}
     }
 
-    return ok({ order: updated });
+    return ok({ order: updated, preparation_plan: preparationPlan });
   });
 }
 

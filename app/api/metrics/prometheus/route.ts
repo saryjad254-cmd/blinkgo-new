@@ -8,14 +8,18 @@
  */
 
 import { NextResponse } from 'next/server';
-import { registry } from '@/lib/observability/metrics';
+import { refreshProcessMetrics, registry } from '@/lib/observability/metrics';
+import { requireMetricsToken } from '@/lib/observability/metrics-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function GET() {
+export async function GET(request: Request) {
+  const denied = requireMetricsToken(request);
+  if (denied) return denied;
   try {
+    refreshProcessMetrics();
     const text = registry.toPrometheus();
     return new NextResponse(text, {
       status: 200,
@@ -24,9 +28,9 @@ export async function GET() {
         'Cache-Control': 'no-store, no-cache, must-revalidate',
       },
     });
-  } catch (e: any) {
+  } catch (e: unknown) {
     return NextResponse.json(
-      { error: 'Failed to export metrics', message: e?.message },
+      { error: 'Failed to export metrics', message: e instanceof Error ? e.message : 'Unknown error' },
       { status: 500 }
     );
   }

@@ -19,6 +19,7 @@ import Truck from 'lucide-react/dist/esm/icons/truck';
 import Wallet from 'lucide-react/dist/esm/icons/wallet';
 import { useT } from '@/lib/i18n/I18nProvider';
 import { formatEUR } from '@/lib/format';
+import { useLiveNow } from '@/lib/hooks/use-live-now';
 
 export interface DriverShiftCardProps {
   online: boolean;
@@ -34,9 +35,10 @@ export interface DriverShiftCardProps {
 
 export function DriverShiftCard({ online, onlineSince, deliveriesThisShift, earningsThisShift, activeOrderId }: DriverShiftCardProps) {
   const t = useT();
+  const nowMs = useLiveNow(30_000);
 
-  const durationMin = onlineSince
-    ? Math.floor((Date.now() - new Date(onlineSince).getTime()) / 60000)
+  const durationMin = onlineSince && nowMs > 0
+    ? Math.floor((nowMs - new Date(onlineSince).getTime()) / 60000)
     : 0;
   const hours = Math.floor(durationMin / 60);
   const mins = durationMin % 60;

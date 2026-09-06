@@ -6,36 +6,43 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { ok, withErrorHandling } from '@/lib/api/response';
-import { withSecurity } from '@/lib/api/security';
-import { secureRoute } from '@/lib/api/security-helpers';
+import type { ApiResponse } from '@/lib/api/response';
+import { withPublicSecurity, type PublicHandlerContext } from '@/lib/api/security';
+import { tier } from '@/lib/api/security-helpers';
 import { ValidationError } from '@/lib/errors';
 import { calculateEta } from '@/lib/maps/route-engine';
 import { haversineDistance, type LatLng } from '@/lib/delivery-zone';
-import { logger } from '@/lib/logging/logger';
+import { validateLocation } from '@/lib/driver/dispatch-policy';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function parseLatLng(s: string): LatLng | null {
   const parts = s.split(',').map((p) => Number(p.trim()));
-  if (parts.length !== 2 || !isFinite(parts[0]) || !isFinite(parts[1])) return null;
-  return { lat: parts[0], lng: parts[1] };
+  if (parts.length !== 2) return null;
+  const result = validateLocation(parts[0], parts[1]);
+  return result.ok ? { lat: result.lat, lng: result.lng } : null;
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
-  return (await withSecurity(
-    secureRoute('open'),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (_ctx, r) => calcEta(r as NextRequest) as any,
-  )(req)) as unknown as NextResponse;
+  return await withPublicSecurity(
+    { rateLimit: tier('open') },
+    async (ctx: PublicHandlerContext, request) => await calcEta(ctx, request) as NextResponse<ApiResponse<unknown>>,
+  )(req) as NextResponse;
 }
 
-async function calcEta(req: NextRequest): Promise<NextResponse> {
+async function calcEta(
+  _ctx: PublicHandlerContext,
+  req: NextRequest,
+): Promise<NextResponse> {
   return withErrorHandling(async () => {
     const url = new URL(req.url);
     const fromStr = url.searchParams.get('from');
     const toStr = url.searchParams.get('to');
-    const profile = (url.searchParams.get('profile') ?? 'driving') as 'driving' | 'walking' | 'cycling';
+    const requestedProfile = url.searchParams.get('profile');
+    const profile: 'driving' | 'walking' | 'cycling' = requestedProfile === 'walking' || requestedProfile === 'cycling'
+      ? requestedProfile
+      : 'driving';
 
     if (!fromStr || !toStr) {
       throw new ValidationError('from and to query params required (lat,lng)');

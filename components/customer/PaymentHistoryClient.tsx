@@ -4,17 +4,53 @@ import { useT } from '@/lib/i18n/I18nProvider';
 import { motion } from 'framer-motion';
 import CreditCard from 'lucide-react/dist/esm/icons/credit-card';
 import ArrowDownToLine from 'lucide-react/dist/esm/icons/arrow-down-to-line';
-import ArrowUpFromLine from 'lucide-react/dist/esm/icons/arrow-up-from-line';
 import Receipt from 'lucide-react/dist/esm/icons/receipt';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import XCircle from 'lucide-react/dist/esm/icons/x-circle';
 import Clock from 'lucide-react/dist/esm/icons/clock';
 import type { Locale } from '@/lib/i18n/server-translations';
+import { BackButton } from '@/components/shared/BackButton';
 
 interface PaymentHistoryClientProps {
-  payments: any[];
-  refunds: any[];
+  payments: PaymentRecord[];
+  refunds: RefundRecord[];
   locale?: Locale;
+}
+
+interface OrderRelation {
+  order_number?: string | null;
+}
+
+interface PaymentRecord {
+  id: string;
+  amount?: number | string | null;
+  status?: string | null;
+  method?: string | null;
+  payment_method?: string | null;
+  created_at: string;
+  orders?: OrderRelation | OrderRelation[] | null;
+}
+
+interface RefundRecord {
+  id: string;
+  amount: number | string;
+  status: string;
+  created_at: string;
+  orders?: OrderRelation | OrderRelation[] | null;
+}
+
+function orderNumber(relation: OrderRelation | OrderRelation[] | null | undefined): string {
+  const order = Array.isArray(relation) ? relation[0] : relation;
+  return order?.order_number?.slice(0, 8) ?? '—';
+}
+
+function formatPaymentDate(value: string, locale: Locale | undefined, includeTime: boolean): string {
+  const dateLocale = locale === 'ar' ? 'ar-DE' : locale === 'en' ? 'en-GB' : 'de-DE';
+  return new Intl.DateTimeFormat(dateLocale, {
+    dateStyle: 'medium',
+    ...(includeTime ? { timeStyle: 'short' as const } : {}),
+    timeZone: 'Europe/Berlin',
+  }).format(new Date(value));
 }
 
 export function PaymentHistoryClient({ payments, refunds, locale }: PaymentHistoryClientProps) {
@@ -23,6 +59,7 @@ export function PaymentHistoryClient({ payments, refunds, locale }: PaymentHisto
   return (
     <div className="mx-auto max-w-3xl px-4 py-6">
       <div className="mb-6 flex items-center gap-2">
+        <BackButton fallback="/home" />
         <Receipt className="h-6 w-6 text-ink-2" />
         <h1 className="text-2xl font-black text-ink-1 dark:text-zinc-100">
           {t.payment.history}
@@ -66,7 +103,7 @@ export function PaymentHistoryClient({ payments, refunds, locale }: PaymentHisto
                       {p.amount ? `${Number(p.amount).toFixed(2)} €` : '—'}
                     </div>
                     <div className="text-xs text-zinc-500">
-                      #{p.orders?.order_number?.slice(0, 8) ?? '—'} · {new Date(p.created_at).toLocaleString(locale === 'ar' ? 'ar' : locale === 'en' ? 'en' : 'de')}
+                      #{orderNumber(p.orders)} · {formatPaymentDate(p.created_at, locale, true)}
                     </div>
                   </div>
                 </div>
@@ -99,7 +136,7 @@ export function PaymentHistoryClient({ payments, refunds, locale }: PaymentHisto
                   <span className="text-xs text-emerald-600">{r.status}</span>
                 </div>
                 <div className="text-xs text-zinc-500">
-                  #{r.orders?.order_number?.slice(0, 8) ?? '—'} · {new Date(r.created_at).toLocaleDateString()}
+                  #{orderNumber(r.orders)} · {formatPaymentDate(r.created_at, locale, false)}
                 </div>
               </div>
             ))}

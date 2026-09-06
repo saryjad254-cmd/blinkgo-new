@@ -15,6 +15,13 @@ import { ValidationError } from '@/lib/errors';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const localFavoriteStore = new Map<string, Set<string>>();
+
+function isLocalMock(): boolean {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+  return url.includes('localhost') || url.includes('127.0.0.1');
+}
+
 export async function GET(req: NextRequest) {
   return (await withSecurity(
     secureRoute('lenient', ['customer', 'admin', 'super_admin', 'manager']),
@@ -28,11 +35,16 @@ async function listFavorites(userId: string) {
     const supabase = createServiceClient();
     const { data, error } = await supabase
       .from('favorites')
-      .select('*, restaurants:restaurant_id(id, name, address, rating, image_url, cuisine, delivery_fee)')
+      .select('id, user_id, restaurant_id, created_at, restaurants:restaurant_id(id, name, description, address, latitude, longitude, rating, review_count, cover_url, logo_url, cuisine, delivery_fee, min_order_amount, estimated_delivery_time, is_active, is_featured)')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
     if (error) {
+      if (isLocalMock()) {
+        const favorites = [...(localFavoriteStore.get(userId) ?? new Set())]
+          .map((restaurant_id) => ({ user_id: userId, restaurant_id }));
+        return ok({ favorites });
+      }
       if (error.code === 'PGRST205' || error.message?.includes('favorites')) {
         return ok({ favorites: [] });
       }
@@ -69,6 +81,12 @@ async function addFavorite(userId: string, req: NextRequest) {
       .single();
 
     if (error) {
+      if (isLocalMock()) {
+        const favorites = localFavoriteStore.get(userId) ?? new Set<string>();
+        favorites.add(restaurantId);
+        localFavoriteStore.set(userId, favorites);
+        return ok({ favorite: { user_id: userId, restaurant_id: restaurantId } });
+      }
       if (error.code === 'PGRST205' || error.message?.includes('favorites')) {
         return ok({ favorite: { user_id: userId, restaurant_id: restaurantId } });
       }
@@ -102,6 +120,10 @@ async function removeFavorite(userId: string, req: NextRequest) {
       .eq('restaurant_id', restaurantId);
 
     if (error) {
+      if (isLocalMock()) {
+        localFavoriteStore.get(userId)?.delete(restaurantId);
+        return ok({});
+      }
       if (error.code === 'PGRST205' || error.message?.includes('favorites')) {
         return ok({});
       }

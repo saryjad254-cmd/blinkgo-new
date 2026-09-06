@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'crypto';
 import { createServiceClient } from '@/lib/supabase/service';
+import { authRateLimiters } from '@/lib/rate-limit';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,7 +25,14 @@ function hashToken(token: string): string {
  */
 export async function POST(req: NextRequest) {
   try {
-    const { token: signedToken, email, password } = await req.json().catch(() => ({}) as any);
+    const limited = authRateLimiters.passwordResetVerify(req);
+    if (limited) return limited;
+
+    const body: unknown = await req.json().catch(() => ({}));
+    const input = body && typeof body === 'object' ? body as Record<string, unknown> : {};
+    const signedToken = input.token;
+    const email = input.email;
+    const password = input.password;
 
     if (
       !signedToken ||
@@ -56,13 +64,26 @@ export async function POST(req: NextRequest) {
       );
     }
     const [token, hmac] = parts;
+    // SECURITY: must use the same RESET_TOKEN_SECRET as the sign side
+    // (reset-password/route.ts). Failing closed if missing prevents an
+    // attacker who knows the service-role key (or guesses the fallback
+    // literal) from forging reset tokens.
+    const secret = process.env.RESET_TOKEN_SECRET;
+    if (!secret) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'MISCONFIGURED', message: 'RESET_TOKEN_SECRET is not configured' } },
+        { status: 500 },
+      );
+    }
     const expectedHmac = crypto
-      .createHmac('sha256', process.env.SUPABASE_SERVICE_ROLE_KEY || 'fallback')
+      .createHmac('sha256', secret)
       .update(`${token}.${email}`)
       .digest('hex')
       .slice(0, 16);
 
-    if (hmac !== expectedHmac) {
+    const suppliedSignature = Buffer.from(hmac, 'utf8');
+    const expectedSignature = Buffer.from(expectedHmac, 'utf8');
+    if (suppliedSignature.length !== expectedSignature.length || !crypto.timingSafeEqual(suppliedSignature, expectedSignature)) {
       return NextResponse.json(
         { ok: false, error: { code: 'INVALID_TOKEN', message: 'Token signature mismatch' } },
         { status: 400 },
@@ -71,34 +92,22 @@ export async function POST(req: NextRequest) {
 
     const supabase = createServiceClient();
     const tokenHash = hashToken(token);
+    const normalizedEmail = email.toLowerCase().trim();
 
     // Look up the token row
     const { data: tokenRow, error: lookupErr } = await supabase
       .from('password_reset_tokens')
       .select('id, email, expires_at, used_at')
       .eq('token_hash', tokenHash)
-      .eq('email', email.toLowerCase().trim())
+      .eq('email', normalizedEmail)
       .maybeSingle();
 
     if (lookupErr) {
-      // Table may be missing on projects without the migration. Try a
-      // graceful fallback: still try to update the password via Supabase,
-      // because the HMAC signature was valid (we verified it above).
-      console.warn('[reset-verify] token lookup failed (table missing?):', lookupErr.message);
-      const { error: updateErr } = await supabase.auth.admin.updateUserById(
-        // Need a user id. The HMAC already authenticated the email, so
-        // we look up the auth user.
-        (await supabase.auth.admin.listUsers({ perPage: 200 }))
-          .data?.users?.find((u) => u.email?.toLowerCase() === email.toLowerCase())?.id || '',
-        { password },
+      console.error('[reset-verify] token lookup failed:', lookupErr.message);
+      return NextResponse.json(
+        { ok: false, error: { code: 'RESET_TOKEN_STORE_UNAVAILABLE', message: 'Password reset is temporarily unavailable' } },
+        { status: 503 },
       );
-      if (updateErr || !email) {
-        return NextResponse.json(
-          { ok: false, error: { code: 'UPDATE_FAILED', message: 'Could not update password' } },
-          { status: 500 },
-        );
-      }
-      return NextResponse.json({ ok: true });
     }
 
     if (!tokenRow) {
@@ -122,10 +131,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Look up the auth user
-    const { data: users } = await supabase.auth.admin.listUsers({ perPage: 200 });
-    const user = users?.users?.find((u) => u.email?.toLowerCase() === email.toLowerCase());
-    if (!user) {
+    // Atomically claim the token before changing the password. A concurrent
+    // replay sees no claimable row and is rejected as already used.
+    const usedAt = new Date().toISOString();
+    const { data: claimedToken, error: claimError } = await supabase
+      .from('password_reset_tokens')
+      .update({ used_at: usedAt })
+      .eq('id', tokenRow.id)
+      .is('used_at', null)
+      .select('id')
+      .maybeSingle();
+    if (claimError) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'RESET_TOKEN_STORE_UNAVAILABLE', message: 'Password reset is temporarily unavailable' } },
+        { status: 503 },
+      );
+    }
+    if (!claimedToken) {
+      return NextResponse.json(
+        { ok: false, error: { code: 'TOKEN_USED', message: 'Token already used' } },
+        { status: 400 },
+      );
+    }
+
+    // Resolve the profile directly by normalized email instead of scanning
+    // only the first 200 Auth users.
+    const { data: user, error: userLookupError } = await supabase
+      .from('users')
+      .select('id')
+      .ilike('email', normalizedEmail)
+      .maybeSingle();
+    if (userLookupError || !user) {
+      await supabase.from('password_reset_tokens').update({ used_at: null }).eq('id', tokenRow.id).eq('used_at', usedAt);
       return NextResponse.json(
         { ok: false, error: { code: 'USER_NOT_FOUND', message: 'Account not found' } },
         { status: 400 },
@@ -135,22 +172,17 @@ export async function POST(req: NextRequest) {
     // Update the password
     const { error: updateErr } = await supabase.auth.admin.updateUserById(user.id, { password });
     if (updateErr) {
+      await supabase.from('password_reset_tokens').update({ used_at: null }).eq('id', tokenRow.id).eq('used_at', usedAt);
       return NextResponse.json(
         { ok: false, error: { code: 'UPDATE_FAILED', message: updateErr.message } },
         { status: 500 },
       );
     }
 
-    // Mark the token as used
-    await supabase
-      .from('password_reset_tokens')
-      .update({ used_at: new Date().toISOString() })
-      .eq('id', tokenRow.id);
-
     return NextResponse.json({ ok: true });
-  } catch (e: any) {
+  } catch (error: unknown) {
     return NextResponse.json(
-      { ok: false, error: { code: 'INTERNAL', message: e?.message || 'Internal error' } },
+      { ok: false, error: { code: 'INTERNAL', message: error instanceof Error ? error.message : 'Internal error' } },
       { status: 500 },
     );
   }

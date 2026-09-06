@@ -2,7 +2,10 @@
 
 import { useEffect, useRef } from 'react';
 import { createBrowserClient } from '@/lib/supabase/client';
-import type { RealtimeChannel } from '@supabase/supabase-js';
+import type { RealtimeChannel, RealtimePostgresChangesPayload } from '@supabase/supabase-js';
+
+type RealtimeRow = Record<string, unknown>;
+type RealtimePayload = RealtimePostgresChangesPayload<RealtimeRow>;
 
 interface UseRealtimeOptions {
   channels: Array<{
@@ -11,7 +14,7 @@ interface UseRealtimeOptions {
     schema?: string;
     event?: 'INSERT' | 'UPDATE' | 'DELETE' | '*';
     filter?: string;
-    onChange: (payload: any) => void;
+    onChange: (payload: RealtimePayload) => void;
   }>;
   /** When false, the hook doesn't subscribe. Default true. */
   enabled?: boolean;
@@ -42,10 +45,14 @@ export function useRealtime({ channels, enabled = true }: UseRealtimeOptions): v
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Hold the latest onChange callbacks in a ref so channel subscriptions
   // can read the freshest version without needing to re-subscribe.
-  const onChangeMap = useRef<Map<string, (payload: any) => void>>(new Map());
-  for (const c of channels) {
-    onChangeMap.current.set(`${c.name}|${c.table}|${c.filter ?? ''}|${c.event ?? '*'}`, c.onChange);
-  }
+  const onChangeMap = useRef<Map<string, (payload: RealtimePayload) => void>>(new Map());
+  useEffect(() => {
+    const next = new Map<string, (payload: RealtimePayload) => void>();
+    for (const c of channels) {
+      next.set(`${c.name}|${c.table}|${c.filter ?? ''}|${c.event ?? '*'}`, c.onChange);
+    }
+    onChangeMap.current = next;
+  }, [channels]);
 
   // Stable signature: keys only, no functions. Re-renders that change
   // only the callback identity will NOT trigger a teardown storm.
@@ -80,14 +87,14 @@ export function useRealtime({ channels, enabled = true }: UseRealtimeOptions): v
         const channel = supabase
           .channel(c.name)
           .on(
-            'postgres_changes' as any,
+            'postgres_changes',
             {
               event: c.event ?? '*',
               schema: c.schema ?? 'public',
               table: c.table,
               ...(c.filter ? { filter: c.filter } : {}),
             },
-            (payload: any) => {
+            (payload) => {
               // Look up the FRESHEST callback each time, so a new arrow
               // function on the parent doesn't require a re-subscribe.
               const handler = onChangeMap.current.get(key);

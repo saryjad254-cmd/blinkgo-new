@@ -1,17 +1,18 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Wallet from 'lucide-react/dist/esm/icons/wallet';
 import CheckCircle2 from 'lucide-react/dist/esm/icons/check-circle-2';
 import Clock from 'lucide-react/dist/esm/icons/clock';
-import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
-import DollarSign from 'lucide-react/dist/esm/icons/dollar-sign';
 import Calendar from 'lucide-react/dist/esm/icons/calendar';
+import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
+import RefreshCw from 'lucide-react/dist/esm/icons/refresh-cw';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { formatEUR } from '@/lib/format';
 import { cn } from '@/lib/cn';
+import { useI18n } from '@/lib/i18n/I18nProvider';
 
 interface Payout {
   id: string;
@@ -46,25 +47,26 @@ const COPY = {
 export default function DriverPayoutsPage() {
   const [payouts, setPayouts] = useState<Payout[]>([]);
   const [loading, setLoading] = useState(true);
-  const [locale, setLocale] = useState<'de' | 'ar' | 'en'>('de');
+  const [loadError, setLoadError] = useState(false);
+  const { locale } = useI18n();
 
-  useEffect(() => {
-    const cookieLocale = document.cookie
-      .split('; ')
-      .find((c) => c.startsWith('blinkgo-locale='))
-      ?.split('=')[1] as 'de' | 'ar' | 'en' | undefined;
-    if (cookieLocale) setLocale(cookieLocale);
-    load();
-  }, []);
-
-  const load = async () => {
+  const load = useCallback(async () => {
+    setLoadError(false);
     try {
       const res = await fetch('/api/driver/payouts');
-      const json = await res.json();
-      if (json.ok) setPayouts(json.data.payouts ?? []);
-    } catch {}
-    setLoading(false);
-  };
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) throw new Error(json.error?.message || 'Failed to load payouts');
+      setPayouts(json.data.payouts ?? []);
+    } catch {
+      setLoadError(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => void load());
+  }, [load]);
 
   const copy = COPY[locale];
 
@@ -75,7 +77,7 @@ export default function DriverPayoutsPage() {
 
   return (
     <>
-      <PageHeader title={copy.title} />
+      <PageHeader title={copy.title} back backHref="/driver/settings" />
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
         {/* Summary */}
@@ -110,6 +112,12 @@ export default function DriverPayoutsPage() {
               <div key={i} className="h-24 rounded-2xl bg-bg-elevated animate-pulse" />
             ))}
           </div>
+        ) : loadError ? (
+          <Card variant="glass" padding="md" className="text-center">
+            <AlertTriangle className="mx-auto mb-2 size-8 text-warning" />
+            <p className="font-bold text-text">{locale === 'de' ? 'Auszahlungen konnten nicht geladen werden' : locale === 'ar' ? 'تعذر تحميل الدفعات' : 'Payouts could not be loaded'}</p>
+            <button type="button" onClick={() => { setLoading(true); void load(); }} className="mt-4 inline-flex min-h-11 items-center gap-2 rounded-xl bg-brand-red px-4 text-sm font-bold text-white"><RefreshCw className="size-4" />{locale === 'de' ? 'Erneut versuchen' : locale === 'ar' ? 'إعادة المحاولة' : 'Try again'}</button>
+          </Card>
         ) : payouts.length === 0 ? (
           <EmptyState
             icon="Wallet"
@@ -137,7 +145,7 @@ export default function DriverPayoutsPage() {
                     </p>
                   </div>
                   <span className={cn('h-6 px-2.5 inline-flex items-center rounded-full text-2xs font-bold border', status?.color)}>
-                    {status?.de}
+                    {status?.[locale]}
                   </span>
                 </div>
 

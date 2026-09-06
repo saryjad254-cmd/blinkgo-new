@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { checkDeliveryZone } from '@/lib/delivery-zone';
+import { createServiceClient } from '@/lib/supabase/service';
+import { resolveConfiguredDeliveryZone, ZoneConfigurationError } from '@/lib/services/delivery-zone-rules';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,20 +18,22 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const lat = Number(body.lat);
     const lng = Number(body.lng);
-    const postalCode = body.postal_code ? String(body.postal_code) : null;
 
-    if (!isFinite(lat) || !isFinite(lng)) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
       return NextResponse.json(
         { ok: false, error: { code: 'INVALID_COORDS', message: 'lat and lng are required' } },
         { status: 400 },
       );
     }
 
-    const result = checkDeliveryZone(lat, lng, postalCode);
+    const result = await resolveConfiguredDeliveryZone(createServiceClient(), lat, lng);
     return NextResponse.json({ ok: true, result });
-  } catch (e: any) {
+  } catch (error: unknown) {
+    if (error instanceof ZoneConfigurationError) {
+      return NextResponse.json({ ok: false, error: { code: 'ZONE_CONFIGURATION_UNAVAILABLE', message: error.message } }, { status: 503 });
+    }
     return NextResponse.json(
-      { ok: false, error: { code: 'INTERNAL', message: e?.message || 'check failed' } },
+      { ok: false, error: { code: 'INTERNAL', message: 'check failed' } },
       { status: 500 },
     );
   }

@@ -40,7 +40,7 @@ import Sparkles from 'lucide-react/dist/esm/icons/sparkles';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
 import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check';
 import CheckCircle from 'lucide-react/dist/esm/icons/check-circle';
-import { useT, useI18n } from '@/lib/i18n/I18nProvider';
+import { useI18n, useTranslations } from '@/lib/i18n/I18nProvider';
 import { cn } from '@/lib/cn';
 import { createBrowserClient } from '@/lib/supabase/client';
 import { buildCanonicalOAuthRedirectTo, validateProductionRedirectTo } from '@/lib/oauth/canonical-callback';
@@ -71,6 +71,10 @@ interface LoginResponse {
   retryAfter?: number;
 }
 
+type ConditionalPublicKeyCredential = typeof PublicKeyCredential & {
+  isConditionalMediationAvailable?: () => Promise<boolean>;
+};
+
 // ============================================================
 // Validation helpers
 // ============================================================
@@ -100,11 +104,9 @@ function validatePassword(value: string): string | undefined {
 export function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
-  const t = useT();
   const { locale } = useI18n();
-  const at = (t as any).auth || {};
-  const nt = (t as any).nav || {};
-  const ct = (key: string, fallback: string) => at[key] ?? fallback;
+  const translate = useTranslations();
+  const ct = useCallback((key: string, fallback: string) => translate(`auth.${key}`, fallback), [translate]);
 
   // Refs
   const emailRef = useRef<HTMLInputElement>(null);
@@ -136,6 +138,9 @@ export function LoginForm() {
   // Also read URL error params (e.g. ?error=invalid_magic_link)
   useEffect(() => {
     if (!params) return;
+    let cancelled = false;
+    queueMicrotask(() => {
+      if (cancelled) return;
 
     const prefillEmail = params.get('email');
     if (prefillEmail) setEmail(prefillEmail);
@@ -156,20 +161,16 @@ export function LoginForm() {
       };
       setErrors({ general: errMap[urlError] || ct('loginFailed', 'Anmeldung fehlgeschlagen') });
     }
+    });
+    return () => { cancelled = true; };
   }, [params, ct]);
 
   // WebAuthn conditional UI (autofill passkey)
   useEffect(() => {
-    if (
-      typeof window !== 'undefined' &&
-      window.PublicKeyCredential &&
-      // @ts-ignore — type may not be in TS lib
-      typeof window.PublicKeyCredential.isConditionalMediationAvailable === 'function'
-    ) {
-      // @ts-ignore
-      window.PublicKeyCredential.isConditionalMediationAvailable?.().then((available: boolean) => {
+    if (typeof window !== 'undefined' && window.PublicKeyCredential) {
+      const credentialApi = window.PublicKeyCredential as ConditionalPublicKeyCredential;
+      credentialApi.isConditionalMediationAvailable?.().then((available) => {
         if (available && emailRef.current) {
-          // @ts-ignore
           emailRef.current.autocomplete = 'username webauthn';
         }
       }).catch(() => {});
@@ -300,9 +301,9 @@ export function LoginForm() {
           router.push('/search');
           router.refresh();
         }
-      } catch (e: any) {
+      } catch (error: unknown) {
         clearTimeout(timer);
-        if (e?.name === 'AbortError') {
+        if (error instanceof Error && error.name === 'AbortError') {
           setErrors({ general: ct('timeout', 'Anfrage hat zu lange gedauert. Bitte erneut versuchen.') });
         } else {
           setErrors({ general: ct('unexpectedResponse', 'Unerwartete Antwort. Bitte erneut versuchen.') });
@@ -346,8 +347,8 @@ export function LoginForm() {
       } else {
         setErrors({ general: ct('magicLinkUnavailable', 'Magic Link Service nicht verfügbar') });
       }
-    } catch (e: any) {
-      if (e?.name === 'AbortError') {
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === 'AbortError') {
         setErrors({ general: ct('timeout', 'Anfrage hat zu lange gedauert') });
       } else {
         setErrors({ general: ct('magicLinkUnavailable', 'Magic Link Service nicht verfügbar') });
@@ -367,19 +368,20 @@ export function LoginForm() {
   const [socialLoading, setSocialLoading] = useState<'google' | 'apple' | null>(null);
   // Supabase browser client — used for OAuth (handles errors before redirect, same as Vercel/Linear)
   // Wrapped in try/catch to prevent component crash if env vars missing
-  let supabase: ReturnType<typeof createBrowserClient> | null = null;
-  try {
-    supabase = createBrowserClient();
-  } catch (e) {
-    // OAuth buttons will show "not configured" error, but password login still works
-    if (typeof window !== 'undefined') {
-      console.warn('[LoginForm] Supabase client init failed - OAuth will be unavailable:', e);
+  const supabase = useMemo<ReturnType<typeof createBrowserClient> | null>(() => {
+    try {
+      return createBrowserClient();
+    } catch (e) {
+      // OAuth buttons will show "not configured" error, but password login still works.
+      if (typeof window !== 'undefined') {
+        console.warn('[LoginForm] Supabase client init failed - OAuth will be unavailable:', e);
+      }
+      return null;
     }
-  }
+  }, []);
 
   const handleSocialLogin = useCallback(async (provider: 'google' | 'apple') => {
     // v78: trace now uses canonical URL (not window.location.origin)
-    // eslint-disable-next-line no-console
     console.error('[BLINKGO_AUTH_TRACE:v78:login_form_oauth] handleSocialLogin_start', JSON.stringify({ provider, locale, currentOrigin: typeof window !== 'undefined' ? window.location.origin : 'no_window' }));
     if (socialLoading) return; // Prevent double-click
     if (!supabase) {
@@ -401,8 +403,7 @@ export function LoginForm() {
       buildCanonicalOAuthRedirectTo(locale as 'de' | 'en' | 'ar', { devOrigin });
 
     // [OAUTH_CANONICAL_REDIRECT] diagnostic — never log tokens/secrets
-    // eslint-disable-next-line no-console
-    console.error(
+      console.error(
       '[OAUTH_CANONICAL_REDIRECT]',
       JSON.stringify({
         currentOrigin: devOrigin ?? null,
@@ -417,7 +418,6 @@ export function LoginForm() {
     // Production safety net: refuse to call Supabase with an unsafe redirectTo.
     const validationError = validateProductionRedirectTo(callbackUrl);
     if (validationError) {
-      // eslint-disable-next-line no-console
       console.error('[OAUTH_CANONICAL_REDIRECT] validation_failed', validationError);
       setErrors({
         general: ct('socialLoginFailed', 'OAuth-Konfiguration ungültig. Bitte mit E-Mail anmelden.'),
@@ -454,11 +454,10 @@ export function LoginForm() {
 
       // Success: Supabase will redirect to provider consent screen
       if (data?.url) {
-        // eslint-disable-next-line no-console
         console.error('[BLINKGO_AUTH_TRACE:v77:login_form_oauth] window_location_href', JSON.stringify({ url: data.url.substring(0, 100) + '...' }));
         window.location.href = data.url;
       }
-    } catch (e: any) {
+    } catch {
       setErrors({ general: ct('socialLoginFailed', 'Anmeldung fehlgeschlagen. Bitte erneut versuchen.') });
       setSocialLoading(null);
     }
@@ -468,8 +467,6 @@ export function LoginForm() {
   const attemptsRemaining = MAX_LOGIN_ATTEMPTS - attempts;
   const showAttemptCounter = attempts > 0 && attempts < MAX_LOGIN_ATTEMPTS;
   const showBlockedWarning = attempts >= MAX_LOGIN_ATTEMPTS;
-  const isFormValid = !errors.email && !errors.password && email.trim() && password;
-
   return (
     <div className="w-full max-w-md mx-auto">
       {/* Header */}

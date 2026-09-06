@@ -6,27 +6,25 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { createServiceClient } from '@/lib/supabase/service';
-import { createServerClient } from '@/lib/supabase/server';
-import { ok, fail, withErrorHandling } from '@/lib/api/response';
+import { ok, withErrorHandling } from '@/lib/api/response';
 import { withSecurity } from '@/lib/api/security';
 import { secureRoute } from '@/lib/api/security-helpers';
 import { requireApiRole } from '@/lib/auth-helper';
 import { audit } from '@/lib/services/audit-log';
-import { AuthenticationError, AuthorizationError, ValidationError } from '@/lib/errors';
+import { AuthenticationError, AuthorizationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
+import { NotificationService } from '@/lib/services/notification-service';
+import { parseAnnouncementInput } from '@/lib/admin/announcement-input';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const VALID_TYPES = ['info', 'warning', 'success', 'maintenance', 'promo'];
-const VALID_AUDIENCES = ['all', 'customers', 'drivers', 'restaurants', 'admins'];
-
-export async function GET(): Promise<NextResponse> {
+export async function GET(req: NextRequest): Promise<NextResponse> {
   return (await withSecurity(
     secureRoute('lenient', ['admin', 'super_admin', 'manager']),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     async () => listAnnouncements() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
+  )(req)) as unknown as NextResponse;
 }
 
 async function listAnnouncements(): Promise<NextResponse> {
@@ -61,30 +59,18 @@ async function createAnnouncement(req: NextRequest): Promise<NextResponse> {
     const user = await requireApiRole(['admin', 'super_admin']);
     if (!user) throw new AuthorizationError('Admin access required');
 
-    // Parse
-    const body = await req.json().catch(() => ({}));
-    const title = String(body.title ?? '').trim().slice(0, 200);
-    const message = String(body.message ?? '').trim().slice(0, 2000);
-    const type = String(body.type ?? 'info');
-    const audience = String(body.audience ?? 'all');
-    const linkUrl = typeof body.link_url === 'string' ? body.link_url.slice(0, 500) : null;
-    const linkLabel = typeof body.link_label === 'string' ? body.link_label.slice(0, 100) : null;
-    const isActive = body.is_active !== false;
-    const startsAt = body.starts_at ? new Date(body.starts_at).toISOString() : new Date().toISOString();
-    const endsAt = body.ends_at ? new Date(body.ends_at).toISOString() : null;
-
-    if (!title || !message) throw new ValidationError('Title and message are required');
-    if (!VALID_TYPES.includes(type)) throw new ValidationError(`Invalid type. Must be: ${VALID_TYPES.join(', ')}`);
-    if (!VALID_AUDIENCES.includes(audience)) throw new ValidationError(`Invalid audience. Must be: ${VALID_AUDIENCES.join(', ')}`);
+    const body = parseAnnouncementInput(await req.json().catch(() => ({})));
+    const { title, message, type, audience, link_url: linkUrl, link_label: linkLabel,
+      is_active: isActive, starts_at: startsAt, ends_at: endsAt } = body;
 
     const svc = createServiceClient();
     const { data, error } = await svc
       .from('system_announcements')
       .insert({
-        title,
-        message,
-        type,
-        audience,
+        title: title!,
+        message: message!,
+        type: type!,
+        audience: audience!,
         link_url: linkUrl,
         link_label: linkLabel,
         is_active: isActive,
@@ -108,6 +94,25 @@ async function createAnnouncement(req: NextRequest): Promise<NextResponse> {
       resourceId: data.id,
       metadata: { title, type, audience },
     });
+
+    const now = Date.now();
+    const startsNow = new Date(startsAt!).getTime() <= now;
+    const notExpired = !endsAt || new Date(endsAt).getTime() > now;
+    if (isActive && startsNow && notExpired) {
+      try {
+        await NotificationService.broadcast({
+          audience: audience!,
+          title: title!,
+          body: message!,
+          type: 'admin_announcement',
+          data: { announcement_id: data.id, url: linkUrl?.startsWith('/') ? linkUrl : '/notifications' },
+        });
+      } catch (notificationError) {
+        // The announcement remains durable even if a downstream push provider
+        // is temporarily unavailable; operators can see the failure in logs.
+        logger.warn('announcement notification fan-out failed', { announcementId: data.id, audience }, notificationError);
+      }
+    }
 
     return ok({ announcement: data });
   });

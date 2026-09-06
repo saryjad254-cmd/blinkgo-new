@@ -8,9 +8,8 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
-import { createServiceClient } from '@/lib/supabase/service';
 import { generateOperationsInsights, type OrderMetrics, type DriverMetrics } from '@/lib/intelligence/operations-insights';
-import { generateInsights, type HourlyVolume, type DailyPattern, type ItemPerformance } from '@/lib/intelligence/restaurant-insights';
+import { generateInsights, type HourlyVolume } from '@/lib/intelligence/restaurant-insights';
 import { ok, withErrorHandling } from '@/lib/api/response';
 import { AuthenticationError, AuthorizationError } from '@/lib/errors';
 import { predictNextHourDemand } from '@/lib/intelligence/operations-insights';
@@ -18,9 +17,61 @@ import { predictNextHourDemand } from '@/lib/intelligence/operations-insights';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+type ServerClient = Awaited<ReturnType<typeof createServerClient>>;
+
+interface NameRelation {
+  name?: string | null;
+}
+
+interface DriverInsightRow {
+  id: string;
+  user_id: string | null;
+  full_name: string | null;
+  is_online: boolean | null;
+  last_active_at: string | null;
+  users: NameRelation | NameRelation[] | null;
+}
+
+interface RestaurantInsightRow {
+  id: string;
+  name: string;
+  is_active: boolean | null;
+  is_online: boolean | null;
+  is_paused: boolean | null;
+  busy_mode: boolean | null;
+  avg_prep_minutes: number | string | null;
+}
+
+interface ActiveOrderRow {
+  id: string;
+  status: string;
+  driver_id: string | null;
+  restaurant_id: string | null;
+  created_at: string;
+  estimated_ready_at: string | null;
+  delivery_address: string | Record<string, unknown> | null;
+}
+
+interface HourlyOrderRow {
+  created_at: string;
+  total?: number | string | null;
+  status: string;
+  cancelled_at?: string | null;
+}
+
+interface RestaurantOrderRow extends HourlyOrderRow {
+  prepared_at: string | null;
+  accepted_at: string | null;
+}
+
+interface DemandOrderRow {
+  created_at: string;
+  status: string;
+}
+
 export async function GET(req: NextRequest): Promise<NextResponse> {
   return withErrorHandling(async () => {
-    const supabase = createServerClient();
+    const supabase = await createServerClient();
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new AuthenticationError();
 
@@ -48,24 +99,23 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
   });
 }
 
-async function getPlatformInsights(supabase: any) {
+async function getPlatformInsights(supabase: ServerClient) {
   const now = new Date();
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
   const [driversRes, restaurantsRes, ordersRes, hourlyRes, pendingRes] = await Promise.all([
     supabase
-      .from('users')
-      .select('id, name, online_status, current_order_id, last_delivery_at')
-      .eq('role', 'driver')
+      .from('drivers')
+      .select('id, user_id, full_name, is_online, is_active, last_active_at, users(name)')
       .eq('is_active', true),
     supabase
       .from('restaurants')
-      .select('id, name, is_active, is_paused, busy_mode, today_orders_count, pending_orders, avg_prep_min')
+      .select('id, name, is_active, is_online, is_paused, busy_mode, avg_prep_minutes')
       .eq('is_active', true),
     supabase
       .from('orders')
-      .select('id, status, created_at, estimated_ready_at, delivery_address, restaurant:restaurant_id(name)')
-      .in('status', ['pending', 'confirmed', 'preparing', 'ready', 'picked_up']),
+      .select('id, status, driver_id, restaurant_id, created_at, estimated_ready_at, delivery_address, restaurant:restaurant_id(name)')
+      .in('status', ['pending', 'confirmed', 'preparing', 'ready', 'assigned', 'picked_up']),
     supabase
       .from('orders')
       .select('created_at, total, status, cancelled_at')
@@ -77,47 +127,58 @@ async function getPlatformInsights(supabase: any) {
   ]);
 
   // Build driver metrics
-  const drivers: DriverMetrics[] = (driversRes.data ?? []).map((d: any) => ({
-    id: d.id,
-    name: d.name ?? 'Driver',
-    status: !d.online_status ? 'offline' : d.current_order_id ? 'on_delivery' : 'idle',
-    activeOrderCount: d.current_order_id ? 1 : 0,
-    lastDeliveryMinutes: d.last_delivery_at
-      ? Math.floor((Date.now() - new Date(d.last_delivery_at).getTime()) / 60_000)
+  const activeOrders = ordersRes.data as ActiveOrderRow[] | null ?? [];
+  const activeOrdersByDriver = new Map<string, number>();
+  const activeOrdersByRestaurant = new Map<string, number>();
+  const pendingByRestaurant = new Map<string, number>();
+  for (const order of activeOrders) {
+    if (order.driver_id) activeOrdersByDriver.set(order.driver_id, (activeOrdersByDriver.get(order.driver_id) ?? 0) + 1);
+    if (order.restaurant_id) {
+      activeOrdersByRestaurant.set(order.restaurant_id, (activeOrdersByRestaurant.get(order.restaurant_id) ?? 0) + 1);
+      if (order.status === 'pending') pendingByRestaurant.set(order.restaurant_id, (pendingByRestaurant.get(order.restaurant_id) ?? 0) + 1);
+    }
+  }
+  const drivers: DriverMetrics[] = (driversRes.data as DriverInsightRow[] | null ?? []).map((driver) => ({
+    id: driver.user_id ?? driver.id,
+    name: driver.full_name ?? (Array.isArray(driver.users) ? driver.users[0]?.name : driver.users?.name) ?? 'Driver',
+    status: !driver.is_online ? 'offline' : activeOrdersByDriver.has(driver.user_id ?? driver.id) ? 'on_delivery' : 'idle',
+    activeOrderCount: activeOrdersByDriver.get(driver.user_id ?? driver.id) ?? 0,
+    lastDeliveryMinutes: driver.last_active_at
+      ? Math.floor((Date.now() - new Date(driver.last_active_at).getTime()) / 60_000)
       : 999,
   }));
 
   // Build restaurant metrics
-  const restaurants = (restaurantsRes.data ?? []).map((r: any) => ({
-    id: r.id,
-    name: r.name,
-    isOnline: !!r.is_active,
-    isPaused: !!r.is_paused,
-    busyMode: !!r.busy_mode,
-    activeOrders: r.today_orders_count ?? 0,
-    pendingOrders: r.pending_orders ?? 0,
-    avgPrepMin: r.avg_prep_min ?? 20,
+  const restaurants = (restaurantsRes.data as RestaurantInsightRow[] | null ?? []).map((restaurant) => ({
+    id: restaurant.id,
+    name: restaurant.name,
+    isOnline: !!restaurant.is_active && restaurant.is_online !== false,
+    isPaused: !!restaurant.is_paused,
+    busyMode: !!restaurant.busy_mode,
+    activeOrders: activeOrdersByRestaurant.get(restaurant.id) ?? 0,
+    pendingOrders: pendingByRestaurant.get(restaurant.id) ?? 0,
+    avgPrepMin: Number(restaurant.avg_prep_minutes ?? 20),
   }));
 
   // Order metrics with ETA
-  const orders = (ordersRes.data ?? []).map((o: any) => ({
-    id: o.id,
-    status: o.status,
-    createdAt: new Date(o.created_at),
-    estimatedReadyAt: o.estimated_ready_at
-      ? new Date(o.estimated_ready_at)
-      : new Date(new Date(o.created_at).getTime() + 45 * 60 * 1000),
-    customerAddress: o.delivery_address ?? '',
+  const orders = activeOrders.map((order) => ({
+    id: order.id,
+    status: order.status,
+    createdAt: new Date(order.created_at),
+    estimatedReadyAt: order.estimated_ready_at
+      ? new Date(order.estimated_ready_at)
+      : new Date(new Date(order.created_at).getTime() + 45 * 60 * 1000),
+    customerAddress: typeof order.delivery_address === 'string' ? order.delivery_address : '',
   }));
 
   // Build hourly metrics
   const hourlyMap: Record<number, { count: number; cancelled: number; delivered: number; total: number }> = {};
   for (let h = 0; h < 24; h++) hourlyMap[h] = { count: 0, cancelled: 0, delivered: 0, total: 0 };
-  for (const o of hourlyRes.data ?? []) {
+  for (const o of hourlyRes.data as HourlyOrderRow[] | null ?? []) {
     const h = new Date(o.created_at).getHours();
     if (hourlyMap[h]) {
       hourlyMap[h].count += 1;
-      hourlyMap[h].total += o.total ?? 0;
+      hourlyMap[h].total += Number(o.total ?? 0);
       if (o.status === 'cancelled' || o.cancelled_at) hourlyMap[h].cancelled += 1;
       if (o.status === 'delivered') hourlyMap[h].delivered += 1;
     }
@@ -142,7 +203,7 @@ async function getPlatformInsights(supabase: any) {
   return insights;
 }
 
-async function getRestaurantInsights(supabase: any, restaurantId: string) {
+async function getRestaurantInsights(supabase: ServerClient, restaurantId: string) {
   const now = new Date();
   const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
 
@@ -156,11 +217,11 @@ async function getRestaurantInsights(supabase: any, restaurantId: string) {
   // Build hourly stats
   const hourlyMap: Record<number, { count: number; totalPrep: number; prepCount: number; total: number }> = {};
   for (let h = 0; h < 24; h++) hourlyMap[h] = { count: 0, totalPrep: 0, prepCount: 0, total: 0 };
-  for (const o of orders ?? []) {
+  for (const o of orders as RestaurantOrderRow[] | null ?? []) {
     const h = new Date(o.created_at).getHours();
     if (hourlyMap[h]) {
       hourlyMap[h].count += 1;
-      hourlyMap[h].total += o.total ?? 0;
+      hourlyMap[h].total += Number(o.total ?? 0);
       if (o.accepted_at && o.prepared_at) {
         const prepMin = (new Date(o.prepared_at).getTime() - new Date(o.accepted_at).getTime()) / 60_000;
         if (prepMin > 0 && prepMin < 120) {
@@ -194,7 +255,7 @@ async function getRestaurantInsights(supabase: any, restaurantId: string) {
   });
 }
 
-async function getDemandForecast(supabase: any) {
+async function getDemandForecast(supabase: ServerClient) {
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
   const { data: orders } = await supabase
     .from('orders')
@@ -203,7 +264,7 @@ async function getDemandForecast(supabase: any) {
 
   const hourlyMap: Record<number, { count: number; cancelled: number; delivered: number; total: number }> = {};
   for (let h = 0; h < 24; h++) hourlyMap[h] = { count: 0, cancelled: 0, delivered: 0, total: 0 };
-  for (const o of orders ?? []) {
+  for (const o of orders as DemandOrderRow[] | null ?? []) {
     const h = new Date(o.created_at).getHours();
     if (hourlyMap[h]) {
       hourlyMap[h].count += 1;

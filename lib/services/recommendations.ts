@@ -10,24 +10,30 @@
  *  - Recency (haven't ordered in a while)
  */
 
-interface Order {
+export interface RecommendationOrderItem {
+  product_id: string;
+  name?: string | null;
+  category?: string | null;
+}
+
+export interface RecommendationOrder {
   id: string;
   created_at: string;
   restaurant_id: string;
-  items: any[];  // Flexible for various order item structures
+  items: RecommendationOrderItem[];
 }
 
-interface Product {
+export interface RecommendationProduct {
   id: string;
   name: string;
-  description: string;
+  description: string | null;
   price: number;
-  image_urls: string[];
-  category: string;
+  image_urls: string[] | null;
+  category: string | null;
   restaurant_id: string;
   sold_count: number;
   is_featured: boolean;
-  restaurants?: { name: string; rating: number; cover_url: string };
+  restaurants?: { name: string; rating: number; cover_url: string | null } | null;
 }
 
 const MEAL_CATEGORIES: Record<string, string[]> = {
@@ -37,7 +43,7 @@ const MEAL_CATEGORIES: Record<string, string[]> = {
   lateNight: ['snack', 'burger', 'pizza', 'dessert', 'nachspeise', 'حلوى'],
 };
 
-export interface ScoredProduct extends Product {
+export interface ScoredProduct extends RecommendationProduct {
   score: number;
   reason: string;
 }
@@ -48,8 +54,8 @@ export interface ScoredProduct extends Product {
  * Score = popularity + meal_match + preference_match + novelty_bonus
  */
 export function recommendProducts(
-  userOrders: Order[],
-  candidates: Product[],
+  userOrders: RecommendationOrder[],
+  candidates: RecommendationProduct[],
   limit = 10,
 ): ScoredProduct[] {
   if (candidates.length === 0) return [];
@@ -58,13 +64,11 @@ export function recommendProducts(
   const categoryCount: Record<string, number> = {};
   const restaurantCount: Record<string, number> = {};
   const productCount: Record<string, number> = {};
-  let totalOrders = 0;
 
   for (const order of userOrders) {
-    totalOrders++;
     restaurantCount[order.restaurant_id] = (restaurantCount[order.restaurant_id] ?? 0) + 1;
     for (const item of order.items) {
-      categoryCount[item.category] = (categoryCount[item.category] ?? 0) + 1;
+      if (item.category) categoryCount[item.category] = (categoryCount[item.category] ?? 0) + 1;
       productCount[item.product_id] = (productCount[item.product_id] ?? 0) + 1;
     }
   }
@@ -83,9 +87,6 @@ export function recommendProducts(
     .sort((a, b) => b[1] - a[1])
     .slice(0, 5)
     .map(([cat]) => cat);
-
-  const now = Date.now();
-  const RECENT_ORDER_DAYS = 30;
 
   return candidates
     .map((p) => {
@@ -112,7 +113,7 @@ export function recommendProducts(
       }
 
       // 4. User preference match (category)
-      if (topCategories.includes(p.category)) {
+      if (p.category && topCategories.includes(p.category)) {
         score += 3;
         reasons.push('based on your history');
       }
@@ -148,11 +149,11 @@ export function recommendProducts(
  * "Order again" recommendations — most recent restaurant.
  */
 export function getOrderAgainSuggestions(
-  userOrders: Order[],
+  userOrders: RecommendationOrder[],
   limit = 5,
-): { restaurantId: string; lastOrderId: string; lastItems: any[]; lastOrderAt: string }[] {
+): { restaurantId: string; lastOrderId: string; lastItems: RecommendationOrderItem[]; lastOrderAt: string }[] {
   const seen = new Set<string>();
-  const suggestions: { restaurantId: string; lastOrderId: string; lastItems: any[]; lastOrderAt: string }[] = [];
+  const suggestions: { restaurantId: string; lastOrderId: string; lastItems: RecommendationOrderItem[]; lastOrderAt: string }[] = [];
 
   // Sort by most recent
   const sorted = [...userOrders].sort(
@@ -178,8 +179,8 @@ export function getOrderAgainSuggestions(
  * Trending products — based on recent orders across all users.
  */
 export function getTrendingProducts(
-  recentOrders: Order[],
-  candidates: Product[],
+  recentOrders: RecommendationOrder[],
+  candidates: RecommendationProduct[],
   limit = 10,
 ): ScoredProduct[] {
   const productCount: Record<string, number> = {};

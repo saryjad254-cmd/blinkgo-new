@@ -3,138 +3,86 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Check from 'lucide-react/dist/esm/icons/check';
-import X from 'lucide-react/dist/esm/icons/x';
 import ChefHat from 'lucide-react/dist/esm/icons/chef-hat';
-import PackageCheck from 'lucide-react/dist/esm/icons/package-check';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
-import { createBrowserClient } from '@/lib/supabase/client';
-import { useT } from '@/lib/i18n/I18nProvider';
+import PackageCheck from 'lucide-react/dist/esm/icons/package-check';
+import WifiOff from 'lucide-react/dist/esm/icons/wifi-off';
+import X from 'lucide-react/dist/esm/icons/x';
 import type { OrderStatus } from '@/lib/types';
+import { useOnlineStatus } from '@/lib/hooks/useOnlineStatus';
+import { useToast } from '@/components/ui/Toast';
+import { haptic } from '@/lib/utils/haptics';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 interface Props {
   orderId: string;
   currentStatus: OrderStatus;
   locale?: 'ar' | 'de' | 'en';
+  fulfillmentType?: 'delivery' | 'pickup';
 }
 
-interface ActionInfo {
-  next: OrderStatus;
-  className: string;
-  icon: typeof Check;
-}
-
-const ACTION_MAP: Partial<Record<OrderStatus, ActionInfo>> = {
-  pending:   { next: 'confirmed', icon: Check,        className: 'bg-success text-white' },
-  confirmed: { next: 'preparing', icon: ChefHat,      className: 'bg-brand text-white' },
-  preparing: { next: 'ready',     icon: PackageCheck, className: 'bg-info text-white' },
+const ACTION_MAP: Partial<Record<OrderStatus, { next: OrderStatus; Icon: typeof Check }>> = {
+  pending: { next: 'confirmed', Icon: Check },
+  confirmed: { next: 'preparing', Icon: ChefHat },
+  preparing: { next: 'ready', Icon: PackageCheck },
 };
 
-export function RestaurantOrderActions({ orderId, currentStatus, locale }: Props) {
+const COPY = {
+  de: { decline: 'Bestellung ablehnen', confirm: 'Bestellung annehmen', prepare: 'Zubereitung starten', ready: 'Abholbereit melden', failed: 'Status konnte nicht aktualisiert werden.', updating: 'Wird aktualisiert…', confirmDecline: 'Diese Bestellung wirklich ablehnen?', updated: 'Bestellstatus aktualisiert.', offline: 'Offline – Aktionen sind gesperrt.' },
+  ar: { decline: 'رفض الطلب', confirm: 'قبول الطلب', prepare: 'بدء التحضير', ready: 'جاهز للاستلام', failed: 'تعذر تحديث حالة الطلب.', updating: 'جارٍ التحديث…', confirmDecline: 'هل تريد رفض هذا الطلب؟', updated: 'تم تحديث حالة الطلب.', offline: 'لا يوجد اتصال — الإجراءات متوقفة.' },
+  en: { decline: 'Decline order', confirm: 'Accept order', prepare: 'Start preparation', ready: 'Mark ready', failed: 'Order status could not be updated.', updating: 'Updating…', confirmDecline: 'Decline this order?', updated: 'Order status updated.', offline: 'Offline – actions are locked.' },
+} as const;
+
+export function RestaurantOrderActions({ orderId, currentStatus, locale = 'de', fulfillmentType = 'delivery' }: Props) {
   const router = useRouter();
-  const t = useT();
-  const detectedLocale = (locale ?? (t as any)?.common?.loading ? 'de' : 'de') as 'ar' | 'de' | 'en';
-  // Use the I18nProvider locale if prop wasn't passed
-  const loc = (locale ?? 'de') as 'ar' | 'de' | 'en';
-
+  const network = useOnlineStatus();
+  const { success, error: toastError } = useToast();
   const [loading, setLoading] = useState<'next' | 'cancel' | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const action = currentStatus === 'ready' && fulfillmentType === 'pickup'
+    ? { next: 'delivered' as OrderStatus, Icon: PackageCheck }
+    : ACTION_MAP[currentStatus];
+  const copy = COPY[locale];
 
-  const next = ACTION_MAP[currentStatus];
-
-  // Localized labels
-  const labels = {
-    cancel:         loc === 'ar' ? 'رفض'        : loc === 'en' ? 'Decline'         : 'Ablehnen',
-    confirmOrder:   loc === 'ar' ? 'تأكيد الطلب' : loc === 'en' ? 'Confirm order'   : 'Bestellung bestätigen',
-    startPreparing: loc === 'ar' ? 'بدء التحضير' : loc === 'en' ? 'Start preparing' : 'Zubereitung starten',
-    markReady:      loc === 'ar' ? 'جاهز للاستلام' : loc === 'en' ? 'Mark ready'    : 'Als abholbereit markieren',
-    updateFailed:   loc === 'ar' ? 'فشل التحديث' : loc === 'en' ? 'Update failed'   : 'Update fehlgeschlagen',
-    updating:       loc === 'ar' ? 'جارٍ التحديث...' : loc === 'en' ? 'Updating...'  : 'Wird aktualisiert...',
-  };
-
-  const labelFor = (status: OrderStatus | undefined): string => {
-    if (status === 'confirmed') return labels.confirmOrder;
-    if (status === 'preparing') return labels.startPreparing;
-    if (status === 'ready') return labels.markReady;
-    return '';
-  };
+  const labelFor = (status: OrderStatus) => status === 'confirmed' ? copy.confirm : status === 'preparing' ? copy.prepare : status === 'ready' ? copy.ready : status === 'delivered' ? (locale === 'ar' ? 'تأكيد تسليم الطلب للزبون' : locale === 'en' ? 'Confirm customer pickup' : 'Abholung bestätigen') : '';
 
   async function updateStatus(nextStatus: OrderStatus | 'cancelled') {
-    const key = nextStatus === 'cancelled' ? 'cancel' : 'next';
-    setLoading(key);
-    setError(null);
-
+    if (!network.isOnline || loading) return;
+    if (nextStatus === 'cancelled' && !window.confirm(copy.confirmDecline)) return;
+    setLoading(nextStatus === 'cancelled' ? 'cancel' : 'next');
     try {
-      const supabase = createBrowserClient();
-      const updates: Record<string, unknown> = { status: nextStatus };
-      if (nextStatus === 'cancelled') updates.cancelled_at = new Date().toISOString();
-      if (nextStatus === 'preparing') updates.prepared_at = new Date().toISOString();
-
-      const { error: updateError } = await supabase
-        .from('orders')
-        .update(updates)
-        .eq('id', orderId);
-
-      if (updateError) throw updateError;
+      const response = await fetch('/api/orders/status', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Accept-Language': locale },
+        body: JSON.stringify({ order_id: orderId, status: nextStatus, metadata: nextStatus === 'cancelled' ? { reason: 'restaurant_declined' } : {} }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok === false) throw new Error(extractErrorMessage(payload, copy.failed));
+      haptic('success');
+      success(copy.updated);
       router.refresh();
-    } catch (err: any) {
-      setError(err.message ?? labels.updateFailed);
+    } catch (cause) {
+      toastError(cause instanceof Error ? cause.message : copy.failed);
     } finally {
       setLoading(null);
     }
   }
 
-  // Terminal states (ready, delivering, delivered, cancelled) get no main "next" button
-  const showNext = !!next;
   const showCancel = currentStatus === 'pending' || currentStatus === 'confirmed';
+  if (!action && !showCancel) return null;
 
   return (
-    <div className="space-y-3">
-      {error && (
-        <div className="p-3 rounded-xl bg-danger/15 border border-danger/30 text-sm text-danger flex items-start gap-2">
-          <X className="w-4 h-4 mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {showNext && next && (
-        <button
-          onClick={() => updateStatus(next.next)}
-          disabled={loading !== null}
-          className={`w-full py-4 rounded-2xl font-extrabold text-base flex items-center justify-center gap-2 active:scale-95 disabled:opacity-60 transition-all ${next.className}`}
-        >
-          {loading === 'next' ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              {labels.updating}
-            </>
-          ) : (
-            <>
-              <next.icon className="w-5 h-5" />
-              {labelFor(next.next)}
-            </>
-          )}
+    <div data-testid="restaurant-order-actions" className="space-y-3">
+      {!network.isOnline ? <div role="alert" className="flex items-center gap-2 rounded-xl border border-red-400/30 bg-red-400/10 p-3 text-sm font-bold text-red-200"><WifiOff className="h-4 w-4" />{copy.offline}</div> : null}
+      {action ? (
+        <button type="button" onClick={() => updateStatus(action.next)} disabled={!network.isOnline || loading !== null} data-testid={`restaurant-detail-order-${action.next}`} className="inline-flex min-h-14 w-full items-center justify-center gap-2 rounded-2xl bg-gradient-to-r from-[#e10600] to-[#ff2c22] px-5 text-base font-black text-white shadow-lg shadow-red-950/30 hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45">
+          {loading === 'next' ? <><Loader2 className="h-5 w-5 animate-spin" />{copy.updating}</> : <><action.Icon className="h-5 w-5" />{labelFor(action.next)}</>}
         </button>
-      )}
-
-      {showCancel && (
-        <button
-          onClick={() => updateStatus('cancelled')}
-          disabled={loading !== null}
-          className="w-full py-4 rounded-2xl font-extrabold text-base flex items-center justify-center gap-2 active:scale-95 disabled:opacity-60 transition-all bg-danger text-white"
-        >
-          {loading === 'cancel' ? (
-            <>
-              <Loader2 className="w-5 h-5 animate-spin" />
-              {labels.updating}
-            </>
-          ) : (
-            <>
-              <X className="w-5 h-5" />
-              {labels.cancel}
-            </>
-          )}
+      ) : null}
+      {showCancel ? (
+        <button type="button" onClick={() => updateStatus('cancelled')} disabled={!network.isOnline || loading !== null} data-testid="restaurant-detail-order-cancel" className="inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl border border-red-400/30 bg-red-400/[0.06] px-5 text-sm font-black text-red-300 hover:bg-red-400/10 disabled:opacity-45">
+          {loading === 'cancel' ? <><Loader2 className="h-5 w-5 animate-spin" />{copy.updating}</> : <><X className="h-5 w-5" />{copy.decline}</>}
         </button>
-      )}
+      ) : null}
     </div>
   );
 }

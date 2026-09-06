@@ -4,6 +4,44 @@ import { AccountDashboard } from '@/components/account/AccountDashboard';
 
 export const dynamic = 'force-dynamic';
 
+interface RecentOrderRow {
+  id: string;
+  order_number: string | null;
+  total: number | string | null;
+  status: string;
+  created_at: string;
+}
+
+interface CouponRow {
+  id: string;
+  code: string;
+  description: string | null;
+  discount_type: string;
+  discount_value: number | string;
+  valid_until: string;
+  min_order_amount: number | string | null;
+}
+
+interface AddressRow {
+  id: string;
+  label: string;
+  address: string;
+  latitude: number | null;
+  longitude: number | null;
+  details: unknown;
+  is_default: boolean;
+}
+
+interface PaymentMethodRow {
+  id: string;
+  type: string;
+  last4: string | null;
+  brand: string | null;
+  exp_month: number | null;
+  exp_year: number | null;
+  is_default: boolean;
+}
+
 /**
  * Account / profile page — server-side fetch, client-side interactions.
  *
@@ -17,7 +55,7 @@ export const dynamic = 'force-dynamic';
  */
 export default async function AccountPage() {
   const user = await requireRole('customer');
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
 
   // 1) Profile
   const { data: profile } = await supabase
@@ -42,7 +80,7 @@ export default async function AccountPage() {
   // 3) Loyalty points
   const { data: loyalty } = await supabase
     .from('loyalty_points')
-    .select('points, lifetime_points, tier')
+    .select('balance, total_earned, tier')
     .eq('user_id', user.id)
     .maybeSingle();
 
@@ -56,16 +94,16 @@ export default async function AccountPage() {
   // 5) Active coupons
   const { data: activeCoupons } = await supabase
     .from('coupons')
-    .select('id, code, description, discount_type, discount_value, expires_at, min_order_amount')
+    .select('id, code, description, discount_type, discount_value, valid_until, min_order_amount')
     .eq('is_active', true)
-    .gte('expires_at', new Date().toISOString())
+    .gte('valid_until', new Date().toISOString())
     .limit(10);
 
   // 6) Addresses
   const { data: addresses } = await supabase
     .from('customer_addresses')
-    .select('id, label, street, city, postal_code, country, is_default')
-    .eq('user_id', user.id)
+    .select('id, label, address, latitude, longitude, details, is_default')
+    .eq('customer_id', user.id)
     .order('is_default', { ascending: false })
     .limit(10);
 
@@ -83,13 +121,23 @@ export default async function AccountPage() {
       profile={profile || null}
       stats={{
         orderCount: orderCount || 0,
-        recentOrders: (recentOrders || []) as any[],
-        loyalty: (loyalty as any) || { points: 0, lifetime_points: 0, tier: 'bronze' },
-        wallet: (wallet as any) || { balance: 0, currency: 'EUR' },
+        recentOrders: ((recentOrders ?? []) as RecentOrderRow[]).map((order) => ({
+          ...order,
+          total: Number(order.total || 0),
+        })),
+        loyalty: loyalty
+          ? { points: loyalty.balance ?? 0, lifetime_points: loyalty.total_earned ?? 0, tier: loyalty.tier }
+          : { points: 0, lifetime_points: 0, tier: 'bronze' },
+        wallet: wallet
+          ? { balance: Number(wallet.balance || 0), currency: wallet.currency || 'EUR' }
+          : { balance: 0, currency: 'EUR' },
       }}
-      coupons={(activeCoupons || []) as any[]}
-      addresses={(addresses || []) as any[]}
-      paymentMethods={(paymentMethods || []) as any[]}
+      coupons={((activeCoupons ?? []) as CouponRow[]).map((coupon) => ({ ...coupon, expires_at: coupon.valid_until }))}
+      addresses={((addresses ?? []) as AddressRow[]).map((address) => ({
+        ...address,
+        postal_code: typeof address.address === 'string' ? address.address.match(/\b\d{5}\b/)?.[0] ?? null : null,
+      }))}
+      paymentMethods={(paymentMethods ?? []) as PaymentMethodRow[]}
     />
   );
 }

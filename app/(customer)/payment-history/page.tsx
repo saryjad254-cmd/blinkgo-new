@@ -8,48 +8,47 @@ import { CustomerNav } from '@/components/customer/CustomerNav';
 
 export const dynamic = 'force-dynamic';
 
+interface RefundRow {
+  id: string;
+  order_id: string;
+  requested_amount_cents: number | null;
+  refunded_amount_cents: number | null;
+  currency: string | null;
+  status: string;
+  reason: string | null;
+  created_at: string;
+  orders: { order_number: string } | Array<{ order_number: string }> | null;
+}
+
 export default async function PaymentHistoryPage() {
   const user = await requireRole('customer');
   const supabase = createServiceClient();
-  const { data: profile } = await supabase.from('users').select('name, email, role').eq('id', user.id).single();
   const { data: payments } = await supabase
     .from('payments')
-    .select('*, orders(order_number, total, status)')
-    .eq('user_id', user.id)
+    .select('id, order_id, amount, currency, method, status, paid_at, failed_reason, metadata, created_at, orders(order_number, total, status)')
+    .eq('customer_id', user.id)
     .order('created_at', { ascending: false })
     .limit(50);
-  // v84: refund REQUEST workflow now lives in the `payments` table
-  // (status='refund_requested'). The legacy `refunds` table from
-  // migration-22 was never deployed to production. Wrap in try/catch
-  // and fall back to the new path so the page never crashes.
-  let refunds: any[] = [];
-  try {
-    const { data: refundRows } = await supabase
-      .from('refunds')
-      .select('*, orders(order_number)')
-      .order('created_at', { ascending: false })
-      .limit(50);
-    refunds = (refundRows ?? []) as any[];
-  } catch {
-    // refunds table not in production — read from payments
-    const { data: refundRows } = await supabase
-      .from('payments')
-      .select('id, order_id, amount_cents, currency, status, metadata, created_at, orders(order_number)')
-      .in('status', ['refund_requested', 'refund_processing', 'refund_succeeded', 'refund_failed'])
-      .order('created_at', { ascending: false })
-      .limit(50);
-    refunds = (refundRows ?? []).map((r: any) => ({
-      id: r.id,
-      order_id: r.order_id,
-      amount: (r.amount_cents ?? 0) / 100,
-      currency: r.currency ?? 'EUR',
-      status: r.status,
-      reason: r.metadata?.refund_reason ?? null,
-      created_at: r.created_at,
-      orders: r.orders,
-    }));
-  }
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
+  // Refund operations are stored separately from charge payments. Keeping
+  // them separate prevents refund requests from being counted as payments.
+  const { data: refundRows } = await supabase
+    .from('payment_refunds')
+    .select('id, order_id, requested_amount_cents, refunded_amount_cents, currency, status, reason, created_at, orders(order_number)')
+    .eq('customer_id', user.id)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  const refunds = (refundRows as RefundRow[] | null ?? []).map((r) => ({
+    id: r.id,
+    order_id: r.order_id,
+    amount: (r.requested_amount_cents ?? 0) / 100,
+    refunded_amount: (r.refunded_amount_cents ?? 0) / 100,
+    currency: r.currency ?? 'EUR',
+    status: r.status,
+    reason: r.reason ?? null,
+    created_at: r.created_at,
+    orders: r.orders,
+  }));
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale: Locale = getServerLocale(cookieHeader);
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">

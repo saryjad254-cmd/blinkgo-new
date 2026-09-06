@@ -9,8 +9,7 @@
  */
 'use client';
 
-import { useState, useRef, useEffect, useMemo, useCallback, memo } from 'react';
-import { useIntersectionObserver } from '@/lib/hooks/use-intersection';
+import { useState, useRef, useMemo, useCallback, memo } from 'react';
 
 export interface VirtualListProps<T> {
   items: T[];

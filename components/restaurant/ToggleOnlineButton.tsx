@@ -5,6 +5,7 @@ import Power from 'lucide-react/dist/esm/icons/power';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { toggleRestaurantOnline } from '@/lib/restaurant-actions';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 /**
  * ToggleOnlineButton — restaurant "go online / offline" switch.
@@ -41,7 +42,7 @@ export function ToggleOnlineButton({
     startTransition(async () => {
       const result = await toggleRestaurantOnline(next);
       if (!result.ok) {
-        setError(result.error);
+        setError(extractErrorMessage(result, 'Status konnte nicht aktualisiert werden'));
         setActive(!next);
       }
     });
@@ -50,6 +51,7 @@ export function ToggleOnlineButton({
   return (
     <div>
       <button
+        data-restaurant-id={restaurantId}
         onClick={handleToggle}
         disabled={pending}
         className={`w-full py-3 rounded-xl font-bold text-sm transition-all flex items-center justify-center gap-2 ${

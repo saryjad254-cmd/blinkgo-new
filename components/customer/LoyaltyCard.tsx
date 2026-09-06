@@ -1,12 +1,11 @@
 'use client';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 
 import { useState, useEffect } from 'react';
 import { useT } from '@/lib/i18n/I18nProvider';
 
 import Award from 'lucide-react/dist/esm/icons/award';
 import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
-import Gift from 'lucide-react/dist/esm/icons/gift';
 import Star from 'lucide-react/dist/esm/icons/star';
 import Crown from 'lucide-react/dist/esm/icons/crown';
 import Sparkles from 'lucide-react/dist/esm/icons/sparkles';

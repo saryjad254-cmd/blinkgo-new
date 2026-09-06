@@ -8,7 +8,6 @@
  * when battery is low (≤20%) or critical (≤10%) and they're online.
  */
 
-import Battery from 'lucide-react/dist/esm/icons/battery';
 import BatteryLow from 'lucide-react/dist/esm/icons/battery-low';
 import BatteryWarning from 'lucide-react/dist/esm/icons/battery-warning';
 import Plug from 'lucide-react/dist/esm/icons/plug';

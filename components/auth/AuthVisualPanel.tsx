@@ -3,11 +3,9 @@
 import { motion } from 'framer-motion';
 import Zap from 'lucide-react/dist/esm/icons/zap';
 import MapPin from 'lucide-react/dist/esm/icons/map-pin';
-import Clock from 'lucide-react/dist/esm/icons/clock';
-import Heart from 'lucide-react/dist/esm/icons/heart';
 import Star from 'lucide-react/dist/esm/icons/star';
-import Truck from 'lucide-react/dist/esm/icons/truck';
 import Shield from 'lucide-react/dist/esm/icons/shield';
+import type { LucideIcon } from 'lucide-react';
 import { Logo } from '@/components/ui/Logo';
 import type { Locale } from '@/lib/i18n/server-translations';
 
@@ -18,7 +16,7 @@ interface AuthVisualPanelProps {
 const COPY: Record<Locale, {
   hero: string;
   subtitle: string;
-  features: { icon: any; title: string; desc: string }[];
+  features: { icon: LucideIcon; title: string; desc: string }[];
 }> = {
   de: {
     hero: 'Lieferung in Minuten, nicht Stunden',

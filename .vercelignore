@@ -7,6 +7,7 @@
 
 # Build artifacts
 .next
+.next-*
 out
 build
 dist
@@ -17,6 +18,11 @@ node_modules
 # Test files (not needed for build)
 coverage
 .nyc_output
+artifacts
+screenshots
+*.zip
+.tmp-*
+.mock-*
 *.test.ts
 *.test.tsx
 *.spec.ts

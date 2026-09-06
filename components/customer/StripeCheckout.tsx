@@ -5,6 +5,7 @@ import { useI18n } from '@/lib/i18n/I18nProvider';
 import CreditCard from 'lucide-react/dist/esm/icons/credit-card';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import AlertTriangle from 'lucide-react/dist/esm/icons/alert-triangle';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 interface Props {
   orderId: string;
@@ -132,7 +133,7 @@ export function StripeCheckout({ orderId, amount, onSuccess }: Props) {
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        throw new Error(data.error || E.paymentStartFailed);
+        throw new Error(extractErrorMessage(data, E.paymentStartFailed));
       }
 
       const publishableKey = process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY;
@@ -157,8 +158,8 @@ export function StripeCheckout({ orderId, amount, onSuccess }: Props) {
       }
       onSuccess?.();
       setError(null);
-    } catch (e: any) {
-      const msg = (e?.message as string) || E.unknown;
+    } catch (error: unknown) {
+      const msg = extractErrorMessage(error, E.unknown);
       setError(msg);
       // Auto-retry transient errors with exponential backoff.
       if (isTransientError(msg) && attempt < MAX_RETRIES - 1) {

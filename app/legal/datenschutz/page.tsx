@@ -23,6 +23,7 @@ import { getDisplayCompanyInfo } from '@/lib/legal/company-info';
 import { LegalBanner } from '@/components/legal/LegalBanner';
 import { getServerLocale } from '@/lib/i18n/server-translations';
 import { cookies } from 'next/headers';
+import Link from 'next/link';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,8 +84,8 @@ const SECTION_TITLES = {
   },
 } as const;
 
-export default function DatenschutzPage() {
-  const cookieHeader = cookies().getAll().map((c) => `${c.name}=${c.value}`).join('; ');
+export default async function DatenschutzPage() {
+  const cookieHeader = (await cookies()).getAll().map((c) => `${c.name}=${c.value}`).join('; ');
   const locale = getServerLocale(cookieHeader) as 'de' | 'ar' | 'en';
   const c = getDisplayCompanyInfo();
   const t = SECTION_TITLES[locale] || SECTION_TITLES.de;
@@ -202,9 +203,9 @@ export default function DatenschutzPage() {
         </p>
         <p className="text-sm mt-2">
           {locale === 'ar' ? 'لممارسة حقوقك' : locale === 'en' ? 'To exercise your rights' : 'Zur Ausübung deiner Rechte'}:{' '}
-          <a href="/legal/data-request" className="text-brand-red underline">
+          <Link href="/legal/data-request" className="text-brand-red underline">
             {locale === 'ar' ? 'نموذج طلب البيانات' : locale === 'en' ? 'Data Subject Request form' : 'Antrag auf Auskunft / Löschung'}
-          </a>
+          </Link>
         </p>
       </Section>
 

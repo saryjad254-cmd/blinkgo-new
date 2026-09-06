@@ -4,7 +4,8 @@ import { ShareOrderView } from '@/components/orders/ShareOrderView';
 
 export const dynamic = 'force-dynamic';
 
-export default async function SharePage({ params }: { params: { token: string } }) {
+export default async function SharePage(props: { params: Promise<{ token: string }> }) {
+  const params = await props.params;
   const supabase = createServiceClient();
   const { data: link } = await supabase
     .from('share_links')

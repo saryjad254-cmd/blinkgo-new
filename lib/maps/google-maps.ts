@@ -6,10 +6,13 @@
  */
 
 export const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || '';
+export const GOOGLE_MAPS_MAP_ID = process.env.NEXT_PUBLIC_GOOGLE_MAPS_MAP_ID
+  || (process.env.NODE_ENV !== 'production' ? 'DEMO_MAP_ID' : '');
 
-export const GOOGLE_MAPS_LIBRARIES: ('places' | 'geometry' | 'drawing' | 'visualization')[] = [
+export const GOOGLE_MAPS_LIBRARIES: ('places' | 'geometry' | 'drawing' | 'visualization' | 'marker')[] = [
   'places',
   'geometry',
+  'marker',
 ];
 
 export const DEFAULT_MAP_OPTIONS: google.maps.MapOptions = {
@@ -19,7 +22,8 @@ export const DEFAULT_MAP_OPTIONS: google.maps.MapOptions = {
   streetViewControl: false,
   fullscreenControl: true,
   gestureHandling: 'greedy',
-  styles: [
+  mapId: GOOGLE_MAPS_MAP_ID || undefined,
+  styles: GOOGLE_MAPS_MAP_ID ? undefined : [
     { elementType: 'geometry', stylers: [{ color: '#1a1a2e' }] },
     { elementType: 'labels.text.stroke', stylers: [{ color: '#0a0a0f' }] },
     { elementType: 'labels.text.fill', stylers: [{ color: '#746855' }] },
@@ -40,14 +44,87 @@ export const DEFAULT_MAP_OPTIONS: google.maps.MapOptions = {
   ],
 };
 
-let loadingPromise: Promise<typeof google> | null = null;
-let scriptLoaded = false;
+export type GoogleMarkerInstance = google.maps.marker.AdvancedMarkerElement | google.maps.Marker;
 
+interface GoogleMarkerOptions {
+  map: google.maps.Map;
+  position: google.maps.LatLngLiteral;
+  title?: string;
+  zIndex?: number;
+  legacyIcon?: string | google.maps.Icon | google.maps.Symbol | null;
+  content?: Node;
+  clickable?: boolean;
+}
+
+export function createGoogleMarker(options: GoogleMarkerOptions): GoogleMarkerInstance {
+  if (GOOGLE_MAPS_MAP_ID && google.maps.marker?.AdvancedMarkerElement) {
+    const marker = new google.maps.marker.AdvancedMarkerElement({
+      map: options.map,
+      position: options.position,
+      title: options.title,
+      zIndex: options.zIndex,
+      gmpClickable: Boolean(options.clickable),
+    });
+    if (options.content) marker.append(options.content);
+    return marker;
+  }
+  return new google.maps.Marker({
+    map: options.map,
+    position: options.position,
+    title: options.title,
+    zIndex: options.zIndex,
+    icon: options.legacyIcon || undefined,
+  });
+}
+
+export function removeGoogleMarker(marker: GoogleMarkerInstance): void {
+  if ('setMap' in marker) marker.setMap(null);
+  else marker.map = null;
+}
+
+export function updateGoogleMarker(
+  marker: GoogleMarkerInstance,
+  position: google.maps.LatLngLiteral,
+  title?: string,
+): void {
+  if ('setPosition' in marker) {
+    marker.setPosition(position);
+    if (title) marker.setTitle(title);
+    return;
+  }
+  marker.position = position;
+  if (title) marker.title = title;
+}
+
+export function createGoogleMarkerVisual(
+  label: string,
+  options: { background?: string; color?: string; size?: number; radius?: string } = {},
+): HTMLDivElement {
+  const element = document.createElement('div');
+  const size = options.size ?? 38;
+  element.textContent = label;
+  element.setAttribute('aria-hidden', 'true');
+  Object.assign(element.style, {
+    width: `${size}px`,
+    height: `${size}px`,
+    display: 'grid',
+    placeItems: 'center',
+    borderRadius: options.radius ?? '50%',
+    background: options.background ?? '#111318',
+    color: options.color ?? '#ffffff',
+    border: '2px solid #ffffff',
+    boxShadow: '0 4px 14px rgba(0,0,0,.38)',
+    fontSize: `${Math.round(size * 0.5)}px`,
+    lineHeight: '1',
+  });
+  return element;
+}
+
+let loadingPromise: Promise<typeof google> | null = null;
 export function isGoogleMapsLoaded(): boolean {
-  return typeof window !== 'undefined' && 
-         typeof google !== 'undefined' && 
-         !!google.maps && 
-         !!(google.maps as any).Map;
+  return typeof window !== 'undefined'
+    && typeof google !== 'undefined'
+    && Boolean(google.maps?.Map);
 }
 
 /**
@@ -76,19 +153,34 @@ export function loadGoogleMaps(): Promise<typeof google> {
 
   loadingPromise = new Promise<typeof google>((resolve, reject) => {
     const TIMEOUT_MS = 12000;
+    let settled = false;
+
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(checkInterval);
+      clearTimeout(timeout);
+      // Google may expose `google.maps.Map` a few microtasks before invoking
+      // the URL callback. Keep a harmless callback in place after polling
+      // resolves so the late invocation cannot throw `InvalidValueError`.
+      (window as typeof window & { __googleMapsReady?: () => void }).__googleMapsReady = () => {};
+      if (error) {
+        loadingPromise = null;
+        reject(error);
+        return;
+      }
+      resolve(google);
+    };
 
     // Timeout safety net
     const timeout = setTimeout(() => {
-      loadingPromise = null;
-      reject(new Error(`Google Maps failed to load within ${TIMEOUT_MS}ms`));
+      finish(new Error(`Google Maps failed to load within ${TIMEOUT_MS}ms`));
     }, TIMEOUT_MS);
 
     // Poll for the Map class to become available
     const checkInterval = setInterval(() => {
       if (isGoogleMapsLoaded()) {
-        clearInterval(checkInterval);
-        clearTimeout(timeout);
-        resolve(google);
+        finish();
       }
     }, 100);
 
@@ -103,16 +195,13 @@ export function loadGoogleMaps(): Promise<typeof google> {
       script.defer = true;
       
       script.onerror = () => {
-        clearInterval(checkInterval);
-        clearTimeout(timeout);
-        loadingPromise = null;
-        reject(new Error('Failed to load Google Maps script (network or API key issue)'));
+        script?.remove();
+        finish(new Error('Failed to load Google Maps script (network or API key issue)'));
       };
 
       // Set up callback that gets invoked when the script is ready
-      (window as any).__googleMapsReady = () => {
-        scriptLoaded = true;
-        // Don't resolve here - the polling will detect Map class
+      (window as typeof window & { __googleMapsReady?: () => void }).__googleMapsReady = () => {
+        if (isGoogleMapsLoaded()) finish();
       };
 
       document.head.appendChild(script);

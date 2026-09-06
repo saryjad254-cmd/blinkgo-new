@@ -10,6 +10,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { safeErrorMessage } from '@/lib/api/safe-error';
 import { createServiceClient } from '@/lib/supabase/service';
 import { requireAdminRole } from '@/lib/rbac';
+import { isDriverWithinWorkingHours, normalizeDriverWorkingHours } from '@/lib/driver/working-hours';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +39,7 @@ export async function GET(req: NextRequest) {
 
     const { data: users } = await supabase.auth.admin.listUsers({ page: 1, perPage: 100 });
     const drivers = (users?.users || [])
-      .filter((u) => u.user_metadata?.role === 'driver')
+      .filter((u) => u.app_metadata?.app_role === 'driver')
       .map((u) => ({
         id: u.id,
         email: u.email,
@@ -51,7 +52,7 @@ export async function GET(req: NextRequest) {
     const { data: allHours } = await supabase.from('driver_working_hours').select('*');
 
     return NextResponse.json({ ok: true, drivers, hours: allHours || [] });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json({ ok: false, error: safeErrorMessage(err) }, { status: 500 });
   }
 }
@@ -62,20 +63,24 @@ export async function POST(req: NextRequest) {
     if (guard instanceof NextResponse) return guard;
 
     const supabase = createServiceClient();
-    const body = await req.json();
-    const { driver_id, hours } = body;
+    const rawBody: unknown = await req.json();
+    const body = rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)
+      ? rawBody as Record<string, unknown>
+      : {};
+    const driverId = typeof body.driver_id === 'string' ? body.driver_id : '';
+    const hours = normalizeDriverWorkingHours(body.hours);
 
-    if (!driver_id || !Array.isArray(hours)) {
-      return NextResponse.json({ ok: false, error: 'driver_id and hours array required' }, { status: 400 });
+    if (!driverId || !hours) {
+      return NextResponse.json({ ok: false, error: 'A driver_id and a valid seven-day hours schedule are required' }, { status: 400 });
     }
 
     // Save to table AND metadata
     let tableSuccess = false;
-    let tableError: any = null;
+    let tableError: unknown = null;
     try {
-      await supabase.from('driver_working_hours').delete().eq('driver_id', driver_id);
-      const rows = hours.map((h: any) => ({
-        driver_id,
+      await supabase.from('driver_working_hours').delete().eq('driver_id', driverId);
+      const rows = hours.map((h) => ({
+        driver_id: driverId,
         day_of_week: h.day_of_week,
         start_time: h.start_time,
         end_time: h.end_time,
@@ -84,29 +89,20 @@ export async function POST(req: NextRequest) {
       const { error } = await supabase.from('driver_working_hours').insert(rows);
       if (error) throw error;
       tableSuccess = true;
-    } catch (e: any) {
+    } catch (e: unknown) {
       tableError = e;
     }
 
     // Get current state
-    const { data: userData } = await supabase.auth.admin.getUserById(driver_id);
-    const existingMeta = userData?.user?.user_metadata || {};
+    const { data: userData } = await supabase.auth.admin.getUserById(driverId);
+    const existingMeta = (userData?.user?.user_metadata || {}) as Record<string, unknown>;
     const wasOnline = !!existingMeta.is_online;
 
     // Check if new hours put driver out of range
-    const now = new Date();
-    const day = now.getDay();
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const todayHours = hours.find((h: any) => h.day_of_week === day);
-    let inHours = false;
-    if (todayHours && todayHours.is_enabled) {
-      const [sh, sm] = todayHours.start_time.split(':').map(Number);
-      const [eh, em] = todayHours.end_time.split(':').map(Number);
-      inHours = currentMinutes >= sh * 60 + sm && currentMinutes <= eh * 60 + em;
-    }
+    const inHours = isDriverWithinWorkingHours(hours);
 
     // Update metadata
-    const newMeta: any = {
+    const newMeta: Record<string, unknown> = {
       ...existingMeta,
       working_hours: hours,
       working_hours_updated_at: new Date().toISOString(),
@@ -120,7 +116,7 @@ export async function POST(req: NextRequest) {
       forceOffline = true;
     }
 
-    await supabase.auth.admin.updateUserById(driver_id, {
+    await supabase.auth.admin.updateUserById(driverId, {
       user_metadata: newMeta,
     });
 
@@ -128,7 +124,7 @@ export async function POST(req: NextRequest) {
     if (forceOffline) {
       try {
         await supabase.from('notifications').insert({
-          user_id: driver_id,
+          user_id: driverId,
           type: 'driver',
           title: 'Schicht beendet',
           body: 'Der Administrator hat deine Arbeitszeiten geändert. Du wurdest offline geschaltet.',
@@ -145,10 +141,10 @@ export async function POST(req: NextRequest) {
       message: 'Working hours updated',
       count: hours.length,
       storage: tableSuccess ? 'database+metadata' : 'metadata_only',
-      table_error: tableError?.message || null,
+      table_error: tableError ? safeErrorMessage(tableError) : null,
       force_offline: forceOffline,
     });
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json({ ok: false, error: safeErrorMessage(err) }, { status: 500 });
   }
 }

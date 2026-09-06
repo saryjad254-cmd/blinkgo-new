@@ -19,7 +19,12 @@ export function BackButton({ fallback = '/', label, className = '' }: Props) {
   return (
     <button
       onClick={() => {
-        if (window.history.length > 1) {
+        // A supplied destination is the canonical parent page. Prefer it over
+        // browser history, which may contain duplicate entries after refreshes
+        // or checkout redirects and can otherwise appear to do nothing.
+        if (fallback && fallback !== '/') {
+          router.push(fallback);
+        } else if (window.history.length > 1) {
           router.back();
         } else {
           router.push(fallback);

@@ -6,6 +6,7 @@ import Check from 'lucide-react/dist/esm/icons/check';
 import Loader2 from 'lucide-react/dist/esm/icons/loader-2';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { useToast } from '@/components/ui/Toast';
+import { extractErrorMessage } from '@/lib/foundation/error-helper';
 
 export function AcceptOrderButton({ orderId }: { orderId: string }) {
   const router = useRouter();
@@ -42,19 +43,19 @@ export function AcceptOrderButton({ orderId }: { orderId: string }) {
       clearTimeout(timeout);
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) {
-        const msg = json?.error?.message || json?.error || (
+        const msg = extractErrorMessage(json, (
           res.status === 409
             ? (locale === 'ar' ? 'تم قبول الطلب من سائق آخر' : locale === 'en' ? 'Order already taken' : 'Bereits von einem anderen Fahrer angenommen')
             : (locale === 'ar' ? 'فشل قبول الطلب' : locale === 'en' ? 'Could not accept order' : 'Annahme fehlgeschlagen')
-        );
+        ));
         throw new Error(msg);
       }
       router.push(`/driver/orders/${orderId}`);
       router.refresh();
-    } catch (err: any) {
+    } catch (error: unknown) {
       // v82: always use the app toast — never block the driver with a
       // native alert() in the middle of an accept action.
-      toastError(err?.message ?? (locale === 'ar' ? 'فشل قبول الطلب' : 'Failed to accept order'));
+      toastError(extractErrorMessage(error, locale === 'ar' ? 'فشل قبول الطلب' : 'Failed to accept order'));
       setLoading(false);
       inFlightRef.current = false;
     }

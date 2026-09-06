@@ -71,7 +71,7 @@ export async function getLiveKPIs(): Promise<LiveKPIs> {
     recentOrdersRes,
   ] = await Promise.all([
     svc.from('orders').select('id', { count: 'exact', head: true })
-      .in('status', ['confirmed', 'preparing', 'ready', 'picked_up', 'delivering']),
+      .in('status', ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivering']),
     svc.from('driver_status').select('driver_id', { count: 'exact', head: true }).eq('is_online', true),
     svc.from('restaurants').select('id', { count: 'exact', head: true }).eq('is_active', true),
     svc.from('orders').select('id', { count: 'exact', head: true }).eq('status', 'pending'),

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Globe from 'lucide-react/dist/esm/icons/globe';
 import Bell from 'lucide-react/dist/esm/icons/bell';
@@ -12,27 +12,22 @@ import Moon from 'lucide-react/dist/esm/icons/moon';
 import Sun from 'lucide-react/dist/esm/icons/sun';
 import Monitor from 'lucide-react/dist/esm/icons/monitor';
 import HelpCircle from 'lucide-react/dist/esm/icons/help-circle';
-import Phone from 'lucide-react/dist/esm/icons/phone';
 import FileText from 'lucide-react/dist/esm/icons/file-text';
 import Shield from 'lucide-react/dist/esm/icons/shield';
 import LogOut from 'lucide-react/dist/esm/icons/log-out';
 import ChevronRight from 'lucide-react/dist/esm/icons/chevron-right';
-import ArrowLeft from 'lucide-react/dist/esm/icons/arrow-left';
-import Battery from 'lucide-react/dist/esm/icons/battery';
 import AlertCircle from 'lucide-react/dist/esm/icons/alert-circle';
 import Mail from 'lucide-react/dist/esm/icons/mail';
 import Smartphone from 'lucide-react/dist/esm/icons/smartphone';
-import MapPin from 'lucide-react/dist/esm/icons/map-pin';
 import Check from 'lucide-react/dist/esm/icons/check';
-import Car from 'lucide-react/dist/esm/icons/car';
 import Wallet from 'lucide-react/dist/esm/icons/wallet';
+import type { LucideIcon } from 'lucide-react';
 import Link from 'next/link';
 import { cn } from '@/lib/cn';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { useI18n } from '@/lib/i18n/I18nProvider';
 import { useToast } from '@/components/ui/Toast';
-import { createBrowserClient } from '@/lib/supabase/client';
-import { EmergencyCallButton } from '@/components/driver/EmergencyCallButton';
+import { useTheme } from '@/components/theme/ThemeProvider';
 
 /**
  * Driver Settings
@@ -46,7 +41,6 @@ import { EmergencyCallButton } from '@/components/driver/EmergencyCallButton';
 const SETTINGS_KEYS = {
   language: 'blinkgo-driver-language',
   navProvider: 'blinkgo-driver-nav-provider',
-  darkMode: 'blinkgo-driver-dark-mode',
   push: 'blinkgo-driver-push',
   sounds: 'blinkgo-driver-sounds',
   emergencyContact: 'blinkgo-driver-emergency',
@@ -58,13 +52,14 @@ type DarkMode = 'auto' | 'light' | 'dark';
 export default function DriverSettingsPage() {
   const { t, locale, setLocale } = useI18n();
   const { toast } = useToast();
+  const { theme, setTheme } = useTheme();
   const router = useRouter();
 
   const [navProvider, setNavProvider] = useState<NavProvider>('google');
-  const [darkMode, setDarkMode] = useState<DarkMode>('dark');
   const [pushEnabled, setPushEnabled] = useState(true);
   const [soundsEnabled, setSoundsEnabled] = useState(true);
   const [emergencyContact, setEmergencyContact] = useState('');
+  const [emergencyDraft, setEmergencyDraft] = useState('');
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showEmergencyModal, setShowEmergencyModal] = useState(false);
   const [user, setUser] = useState<{ id: string; name: string; email: string; phone: string | null } | null>(null);
@@ -72,23 +67,37 @@ export default function DriverSettingsPage() {
   // Load from localStorage on mount
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    setNavProvider((localStorage.getItem(SETTINGS_KEYS.navProvider) as NavProvider) || 'google');
-    setDarkMode((localStorage.getItem(SETTINGS_KEYS.darkMode) as DarkMode) || 'dark');
-    setPushEnabled(localStorage.getItem(SETTINGS_KEYS.push) !== 'false');
-    setSoundsEnabled(localStorage.getItem(SETTINGS_KEYS.sounds) !== 'false');
-    setEmergencyContact(localStorage.getItem(SETTINGS_KEYS.emergencyContact) || '');
-    // Fetch user info
-    const sb = createBrowserClient();
-    sb.auth.getUser().then(async ({ data }) => {
-      if (data.user) {
-        const { data: u } = await sb
-          .from('users')
-          .select('id, name, email, phone')
-          .eq('id', data.user.id)
-          .single();
-        if (u) setUser(u as any);
-      }
+    queueMicrotask(() => {
+      setNavProvider((localStorage.getItem(SETTINGS_KEYS.navProvider) as NavProvider) || 'google');
+      setPushEnabled(false);
+      setSoundsEnabled(localStorage.getItem(SETTINGS_KEYS.sounds) !== 'false');
+      setEmergencyContact(localStorage.getItem(SETTINGS_KEYS.emergencyContact) || '');
     });
+    // Load the authenticated profile through the server-scoped API. This keeps
+    // profile access consistent with the rest of the app and avoids direct
+    // browser database queries.
+    fetch('/api/auth/me', { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((payload) => {
+        const profile = payload?.data?.profile;
+        const authUser = payload?.data?.user;
+        if (authUser?.id) {
+          setUser({
+            id: authUser.id,
+            name: profile?.name || authUser.email?.split('@')[0] || 'Driver',
+            email: profile?.email || authUser.email || '',
+            phone: profile?.phone || null,
+          });
+        }
+      })
+      .catch(() => undefined);
+
+    if ('serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window) {
+      navigator.serviceWorker.getRegistration()
+        .then((registration) => registration?.pushManager.getSubscription())
+        .then((subscription) => setPushEnabled(Boolean(subscription && Notification.permission === 'granted')))
+        .catch(() => setPushEnabled(false));
+    }
   }, []);
 
   // Persist on change
@@ -107,19 +116,52 @@ export default function DriverSettingsPage() {
   };
 
   const handleDarkModeChange = (d: DarkMode) => {
-    setDarkMode(d);
-    persist(SETTINGS_KEYS.darkMode, d);
-    if (typeof document !== 'undefined') {
-      if (d === 'light') document.documentElement.classList.remove('dark');
-      else if (d === 'dark') document.documentElement.classList.add('dark');
-      // 'auto' = use system preference
-    }
+    setTheme(d === 'auto' ? 'system' : d);
   };
 
-  const handlePushToggle = () => {
-    const next = !pushEnabled;
-    setPushEnabled(next);
-    persist(SETTINGS_KEYS.push, String(next));
+  const handlePushToggle = async () => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) {
+      toast({ type: 'warning', message: locale === 'de' ? 'Push-Benachrichtigungen werden auf diesem Gerät nicht unterstützt' : locale === 'ar' ? 'هذا الجهاز لا يدعم الإشعارات' : 'Push notifications are not supported on this device' });
+      return;
+    }
+
+    try {
+      const registration = await navigator.serviceWorker.getRegistration() || await navigator.serviceWorker.register('/sw.js');
+      const existing = await registration.pushManager.getSubscription();
+      if (pushEnabled) {
+        if (existing) {
+          await fetch('/api/push/subscribe', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: existing.endpoint }) });
+          await existing.unsubscribe();
+        }
+        setPushEnabled(false);
+        persist(SETTINGS_KEYS.push, 'false');
+        return;
+      }
+
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        throw new Error(locale === 'de' ? 'Benachrichtigungen wurden nicht erlaubt' : locale === 'ar' ? 'لم يتم السماح بالإشعارات' : 'Notification permission was not granted');
+      }
+      const vapidKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+      if (!vapidKey) {
+        throw new Error(locale === 'de' ? 'Push-Dienst ist noch nicht konfiguriert' : locale === 'ar' ? 'خدمة الإشعارات غير مهيأة بعد' : 'Push service is not configured yet');
+      }
+      const padding = '='.repeat((4 - (vapidKey.length % 4)) % 4);
+      const raw = window.atob((vapidKey + padding).replace(/-/g, '+').replace(/_/g, '/'));
+      const applicationServerKey = Uint8Array.from(raw, (character) => character.charCodeAt(0));
+      const subscription = existing || await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey });
+      const serialized = subscription.toJSON();
+      const response = await fetch('/api/push/subscribe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: serialized.endpoint, keys: serialized.keys }),
+      });
+      if (!response.ok) throw new Error(locale === 'de' ? 'Push-Abo konnte nicht gespeichert werden' : locale === 'ar' ? 'تعذر حفظ اشتراك الإشعارات' : 'Could not save push subscription');
+      setPushEnabled(true);
+      persist(SETTINGS_KEYS.push, 'true');
+    } catch (error) {
+      toast({ type: 'error', message: error instanceof Error ? error.message : 'Push setup failed' });
+    }
   };
 
   const handleSoundsToggle = () => {
@@ -129,8 +171,15 @@ export default function DriverSettingsPage() {
   };
 
   const handleSaveEmergency = () => {
-    persist(SETTINGS_KEYS.emergencyContact, emergencyContact);
+    const normalized = emergencyDraft.replace(/[\s()-]/g, '');
+    if (normalized && !/^\+?[0-9]{7,15}$/.test(normalized)) {
+      toast({ type: 'error', message: locale === 'de' ? 'Bitte eine gültige Telefonnummer eingeben' : locale === 'ar' ? 'يرجى إدخال رقم هاتف صحيح' : 'Enter a valid phone number' });
+      return false;
+    }
+    setEmergencyContact(normalized);
+    persist(SETTINGS_KEYS.emergencyContact, normalized);
     toast({ type: 'success', message: locale === 'ar' ? 'تم الحفظ' : locale === 'en' ? 'Saved' : 'Gespeichert' });
+    return true;
   };
 
   const handleLogout = async () => {
@@ -141,16 +190,12 @@ export default function DriverSettingsPage() {
     } catch (e) {
       console.error('Logout API failed:', e);
     }
-    try {
-      const sb = createBrowserClient();
-      await sb.auth.signOut();
-    } catch {
-      // ignore
-    }
-    window.location.href = '/login';
+    router.replace('/login');
+    router.refresh();
   };
 
   const isRtl = locale === 'ar';
+  const darkMode: DarkMode = theme === 'system' ? 'auto' : theme;
 
   return (
     <div className="min-h-screen bg-bg pb-24" dir={isRtl ? 'rtl' : 'ltr'}>
@@ -178,7 +223,10 @@ export default function DriverSettingsPage() {
         {/* Emergency contact (prominent for safety) */}
         <button
           type="button"
-          onClick={() => setShowEmergencyModal(true)}
+          onClick={() => {
+            setEmergencyDraft(emergencyContact);
+            setShowEmergencyModal(true);
+          }}
           className="w-full rounded-2xl bg-red-500/10 border-2 border-red-500/40 hover:border-red-500/60 p-4 flex items-center gap-3 transition-all"
         >
           <div className="w-12 h-12 rounded-full bg-red-500/20 text-red-400 flex items-center justify-center flex-shrink-0">
@@ -271,6 +319,7 @@ export default function DriverSettingsPage() {
                 key={l}
                 type="button"
                 onClick={() => handleLanguageChange(l)}
+                aria-pressed={locale === l}
                 className={cn(
                   'h-11 rounded-xl text-sm font-extrabold transition-all',
                   locale === l
@@ -326,7 +375,7 @@ export default function DriverSettingsPage() {
           <ThemeRow
             mode="light"
             icon={Sun}
-            label={t.driver?.darkMode === 'Dark mode' ? (locale === 'ar' ? 'فاتح' : locale === 'en' ? 'Light' : 'Hell') : (t.driver?.darkMode || 'Dark mode')}
+            label={locale === 'ar' ? 'الوضع الفاتح' : locale === 'en' ? 'Light mode' : 'Heller Modus'}
             current={darkMode}
             onClick={() => handleDarkModeChange('light')}
           />
@@ -347,11 +396,11 @@ export default function DriverSettingsPage() {
         </SettingsGroup>
 
         <SettingsGroup title={t.driver?.support || 'Help & support'}>
-          <LinkRow icon={HelpCircle} label={t.driver?.helpCenter || 'Help center'} href="/help" />
-          <LinkRow icon={Mail} label={t.driver?.contactSupport || 'Contact support'} href="mailto:drivers@blinkgo.de" />
-          <LinkRow icon={FileText} label={t.driver?.termsOfService || 'Terms of service'} href="/legal/terms" />
-          <LinkRow icon={Shield} label={t.driver?.privacyPolicy || 'Privacy policy'} href="/legal/privacy" />
-          <LinkRow icon={Smartphone} label={t.driver?.aboutApp || 'About app'} href="/about" />
+          <LinkRow icon={HelpCircle} label={t.driver?.helpCenter || 'Help center'} href="/driver/support" />
+          <LinkRow icon={Mail} label={t.driver?.contactSupport || 'Contact support'} href="/driver/support" />
+          <LinkRow icon={FileText} label={t.driver?.termsOfService || 'Terms of service'} href="/legal/driver-terms" />
+          <LinkRow icon={Shield} label={t.driver?.privacyPolicy || 'Privacy policy'} href="/legal/datenschutz" />
+          <LinkRow icon={Smartphone} label={t.driver?.aboutApp || 'About app'} href="/brand" />
         </SettingsGroup>
 
         <div className="rounded-2xl border border-edge overflow-hidden">
@@ -372,12 +421,15 @@ export default function DriverSettingsPage() {
 
       {/* Logout confirm modal */}
       {showLogoutConfirm && (
-        <Modal onClose={() => setShowLogoutConfirm(false)}>
+        <Modal
+          label={t.driver?.logoutConfirmTitle || 'Log out?'}
+          onClose={() => setShowLogoutConfirm(false)}
+        >
           <div className="p-6 text-center">
             <div className="w-16 h-16 mx-auto rounded-full bg-red-500/15 text-red-400 flex items-center justify-center mb-4">
               <LogOut className="w-8 h-8" />
             </div>
-            <h2 className="text-lg font-extrabold text-white mb-2">{t.driver?.logoutConfirmTitle || 'Log out?'}</h2>
+            <h2 className="text-lg font-extrabold text-text mb-2">{t.driver?.logoutConfirmTitle || 'Log out?'}</h2>
             <p className="text-sm text-text-muted mb-6">
               {t.driver?.logoutConfirmDesc || 'You can sign back in anytime.'}
             </p>
@@ -403,9 +455,13 @@ export default function DriverSettingsPage() {
 
       {/* Emergency contact modal */}
       {showEmergencyModal && (
-        <Modal onClose={() => setShowEmergencyModal(false)}>
+        <Modal
+          label={t.driver?.emergency || 'Emergency contact'}
+          initialFocus="input"
+          onClose={() => setShowEmergencyModal(false)}
+        >
           <div className="p-6">
-            <h2 className="text-lg font-extrabold text-white mb-1">
+            <h2 className="text-lg font-extrabold text-text mb-1">
               {t.driver?.emergency || 'Emergency contact'}
             </h2>
             <p className="text-xs text-text-muted mb-4">
@@ -417,8 +473,10 @@ export default function DriverSettingsPage() {
             </p>
             <input
               type="tel"
-              value={emergencyContact}
-              onChange={(e) => setEmergencyContact(e.target.value)}
+              aria-label={locale === 'ar' ? 'رقم هاتف جهة اتصال الطوارئ' : locale === 'en' ? 'Emergency contact phone number' : 'Telefonnummer des Notfallkontakts'}
+              autoComplete="tel"
+              value={emergencyDraft}
+              onChange={(e) => setEmergencyDraft(e.target.value)}
               placeholder="+49 1577 1234567"
               className="w-full h-12 px-4 rounded-xl bg-ink-700 border border-edge text-white text-base tabular-nums"
               dir="ltr"
@@ -434,8 +492,7 @@ export default function DriverSettingsPage() {
               <button
                 type="button"
                 onClick={() => {
-                  handleSaveEmergency();
-                  setShowEmergencyModal(false);
+                  if (handleSaveEmergency()) setShowEmergencyModal(false);
                 }}
                 className="flex-1 h-12 rounded-xl bg-red-500 text-white font-bold"
               >
@@ -471,7 +528,7 @@ function SettingsRow({
   label,
   value,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   value?: string;
 }) {
@@ -481,7 +538,7 @@ function SettingsRow({
         <Icon className="w-5 h-5" />
       </div>
       <div className="flex-1 min-w-0">
-        <p className="text-sm font-extrabold text-white">{label}</p>
+        <p className="text-sm font-extrabold text-text">{label}</p>
         {value && <p className="text-xs text-text-muted truncate">{value}</p>}
       </div>
     </div>
@@ -495,7 +552,7 @@ function ToggleRow({
   value,
   onChange,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   description?: string;
   value: boolean;
@@ -504,6 +561,8 @@ function ToggleRow({
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={value}
       onClick={onChange}
       className="w-full p-4 flex items-center gap-3 hover:bg-ink-700/30 transition-colors"
     >
@@ -514,7 +573,7 @@ function ToggleRow({
         <Icon className="w-5 h-5" />
       </div>
       <div className="flex-1 min-w-0 text-start">
-        <p className="text-sm font-extrabold text-white">{label}</p>
+        <p className="text-sm font-extrabold text-text">{label}</p>
         {description && <p className="text-xs text-text-muted truncate">{description}</p>}
       </div>
       <div
@@ -540,7 +599,7 @@ function PickerRow({
   selected,
   onClick,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   selected: boolean;
   onClick: () => void;
@@ -548,6 +607,7 @@ function PickerRow({
   return (
     <button
       type="button"
+      aria-pressed={selected}
       onClick={onClick}
       className={cn(
         'w-full p-4 flex items-center gap-3 transition-colors',
@@ -560,7 +620,7 @@ function PickerRow({
       )}>
         <Icon className="w-5 h-5" />
       </div>
-      <span className="flex-1 text-start text-sm font-extrabold text-white">{label}</span>
+      <span className="flex-1 text-start text-sm font-extrabold text-text">{label}</span>
       {selected && <Check className="w-5 h-5 text-brand-red-500" />}
     </button>
   );
@@ -574,7 +634,7 @@ function ThemeRow({
   onClick,
 }: {
   mode: DarkMode;
-  icon: any;
+  icon: LucideIcon;
   label: string;
   current: DarkMode;
   onClick: () => void;
@@ -583,6 +643,7 @@ function ThemeRow({
   return (
     <button
       type="button"
+      aria-pressed={selected}
       onClick={onClick}
       className={cn(
         'w-full p-4 flex items-center gap-3 transition-colors',
@@ -595,7 +656,7 @@ function ThemeRow({
       )}>
         <Icon className="w-5 h-5" />
       </div>
-      <span className="flex-1 text-start text-sm font-extrabold text-white">{label}</span>
+      <span className="flex-1 text-start text-sm font-extrabold text-text">{label}</span>
       {selected && <Check className="w-5 h-5 text-brand-red-500" />}
     </button>
   );
@@ -606,7 +667,7 @@ function LinkRow({
   label,
   href,
 }: {
-  icon: any;
+  icon: LucideIcon;
   label: string;
   href: string;
 }) {
@@ -620,7 +681,7 @@ function LinkRow({
         <div className="w-10 h-10 rounded-xl bg-ink-700 text-text-secondary flex items-center justify-center flex-shrink-0">
           <Icon className="w-5 h-5" />
         </div>
-        <span className="flex-1 text-start text-sm font-extrabold text-white">{label}</span>
+        <span className="flex-1 text-start text-sm font-extrabold text-text">{label}</span>
         <ChevronRight className="w-4 h-4 text-text-muted rtl:rotate-180" />
       </a>
     );
@@ -633,7 +694,7 @@ function LinkRow({
       <div className="w-10 h-10 rounded-xl bg-ink-700 text-text-secondary flex items-center justify-center flex-shrink-0">
         <Icon className="w-5 h-5" />
       </div>
-      <span className="flex-1 text-start text-sm font-extrabold text-white">{label}</span>
+      <span className="flex-1 text-start text-sm font-extrabold text-text">{label}</span>
       <ChevronRight className="w-4 h-4 text-text-muted rtl:rotate-180" />
     </Link>
   );
@@ -642,16 +703,57 @@ function LinkRow({
 function Modal({
   children,
   onClose,
+  label,
+  initialFocus = 'button, input, select, textarea, [href], [tabindex]:not([tabindex="-1"])',
 }: {
   children: React.ReactNode;
   onClose: () => void;
+  label: string;
+  initialFocus?: string;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    const focusable = dialog?.querySelector<HTMLElement>(initialFocus);
+    focusable?.focus();
+    return () => previouslyFocused?.focus();
+  }, [initialFocus]);
+
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+    if (event.key !== 'Tab') return;
+    const focusable = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+    ) || []).filter((element) => !element.hasAttribute('hidden'));
+    if (focusable.length === 0) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
     <div
       className="fixed inset-0 z-modal flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={label}
+        onKeyDown={handleDialogKeyDown}
         className="w-full max-w-sm rounded-2xl bg-bg-elevated border border-edge shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >

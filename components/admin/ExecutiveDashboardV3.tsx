@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import TrendingUp from 'lucide-react/dist/esm/icons/trending-up';
 import TrendingDown from 'lucide-react/dist/esm/icons/trending-down';
 import Users from 'lucide-react/dist/esm/icons/users';
@@ -126,12 +126,7 @@ export default function ExecutiveDashboardV3() {
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('30d');
 
-  useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [period]);
-
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch('/api/analytics/executive?period=' + period);
@@ -142,7 +137,13 @@ export default function ExecutiveDashboardV3() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [period]);
+
+  useEffect(() => {
+    let cancelled = false;
+    queueMicrotask(() => { if (!cancelled) void load(); });
+    return () => { cancelled = true; };
+  }, [load]);
 
   if (loading || !data) {
     return <div className="p-8 text-center text-gray-500">Loading…</div>;

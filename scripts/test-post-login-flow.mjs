@@ -60,7 +60,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 const PORT = 17440;
 const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ0ZXN0Iiwic3ViIjoiYW5vbiJ9.test-anon';
-const SERVICE_KEY = 'sb_secret_test_service_key_xxxxxxxxxxxxxxxxxxxxx';
+const SERVICE_KEY = 'test-service-role-key-xxxxxxxxxxxxxxxxxxxxxxxx';
 
 const STORAGE = { authUsers: [], publicUsers: [], publicDrivers: [], publicRestaurants: [] };
 
@@ -90,7 +90,7 @@ function encodeJwt(payload) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   const path = url.pathname;
-  const isService = (req.headers['apikey'] || '').startsWith('sb_secret_');
+  const isService = req.headers['apikey'] === SERVICE_KEY;
   const token = (req.headers['authorization'] || '').replace(/^Bearer /, '');
 
   if (path === '/auth/v1/token' && req.method === 'POST') {
@@ -147,34 +147,49 @@ const server = http.createServer(async (req, res) => {
 
 // Seed
 for (const op of OPERATORS) {
-  STORAGE.authUsers.push({ id: op.id, email: op.email, password: op.password, email_confirmed_at: new Date().toISOString(), user_metadata: {} });
+  STORAGE.authUsers.push({ id: op.id, email: op.email, password: op.password, email_confirmed_at: new Date().toISOString(), user_metadata: { role: op.role } });
   STORAGE.publicUsers.push({ id: op.id, email: op.email, role: op.role, is_active: true, is_verified: true });
 }
 STORAGE.publicRestaurants.push({ id: RESTAURANT_ID, owner_id: '00000000-0000-0000-0000-000000000020', name: 'Wesseling' });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Simulate the FIXED requireRole
+// Simulate the FIXED requireRole (v87 architectural fix)
 // ─────────────────────────────────────────────────────────────────────────────
 
-async function requireRoleFixed(supabase, allowed, user) {
-  // The v86 fix: use the SERVICE ROLE client to read public.users.
-  // In production, the service role is the one passed via
-  // `createServiceClient()` from `lib/supabase/service.ts`. The
-  // mock here uses the same SERVICE_KEY to identify the service
-  // role, so the PostgREST call returns ALL public.users rows
-  // (RLS bypassed).
-  const { data: profile } = await supabase
-    .from('users')
-    .select('id, role, is_active')
-    .eq('id', user.id)
-    .maybeSingle();
-  if (!profile) return { redirect: '/login?error=require_role_no_profile' };
-  if (profile.is_active === false) return { redirect: '/login?error=account_disabled' };
+async function requireRoleFixed(serviceClient, allowed, user) {
+  // v87 architectural fix: read the role from the JWT FIRST. The
+  // pre-v86 auto-create path silently wrote a `customer` row for any
+  // authenticated user whose email did NOT already have a public.users
+  // row. When the canonical UUID and the auth.users UUID diverged, the
+  // service-role query `WHERE id = auth.users.id` returned the
+  // auto-created `customer` row, masking the canonical `admin` row and
+  // causing the role check to fail with `?error=insufficient_permissions`.
+  //
+  // Reading the role from the JWT (set ONCE at user creation by the
+  // Admin API and cryptographically signed) makes the check immune to
+  // this entire class of failures. The public.users DB query is only
+  // used as a fallback for OAuth users whose role is not in the JWT.
+  const jwtUserRole = typeof user.user_metadata?.role === 'string'
+    ? user.user_metadata.role : null;
+  const jwtAppRole = typeof user.app_metadata?.role === 'string'
+    ? user.app_metadata.role : null;
+  let role = jwtUserRole ?? jwtAppRole;
+  let profile = null;
+  if (!role) {
+    const { data: p } = await serviceClient
+      .from('users')
+      .select('id, role, is_active')
+      .eq('id', user.id)
+      .maybeSingle();
+    profile = p;
+    role = p?.role ?? null;
+  }
+  if (!role) return { redirect: '/login?error=require_role_no_profile' };
   const allowedRoles = Array.isArray(allowed) ? allowed : [allowed];
-  if (!allowedRoles.includes(profile.role)) {
+  if (!allowedRoles.includes(role)) {
     return { redirect: '/login?error=insufficient_permissions' };
   }
-  return { user: profile };
+  return { user: { id: user.id, role, profile } };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -257,7 +272,7 @@ async function testRole(op) {
 
 async function testCustomerBlockedFromAdmin() {
   const customerId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
-  STORAGE.authUsers.push({ id: customerId, email: 'cust@example.com', password: 'pw', email_confirmed_at: new Date().toISOString(), user_metadata: {} });
+  STORAGE.authUsers.push({ id: customerId, email: 'cust@example.com', password: 'pw', email_confirmed_at: new Date().toISOString(), user_metadata: { role: 'customer' } });
   STORAGE.publicUsers.push({ id: customerId, email: 'cust@example.com', role: 'customer', is_active: true, is_verified: true });
 
   const loginRes = await fetch(`http://localhost:${PORT}/auth/v1/token?grant_type=password`, {
@@ -271,8 +286,13 @@ async function testCustomerBlockedFromAdmin() {
   const serviceClient = createServerClient(`http://localhost:${PORT}`, SERVICE_KEY, {
     cookies: { get() { return undefined; }, set() {}, remove() {} },
   });
+  // Get the full user object (with user_metadata) via the auth/v1/user endpoint
+  const userRes = await fetch(`http://localhost:${PORT}/auth/v1/user`, {
+    headers: { apikey: ANON_KEY, authorization: `Bearer ${loginData.access_token}` },
+  });
+  const customerUser = await userRes.json();
   // Customer trying to access /admin (requires 'admin')
-  const decision = await requireRoleFixed(serviceClient, 'admin', { id: customerId });
+  const decision = await requireRoleFixed(serviceClient, 'admin', customerUser);
   if (decision.redirect?.includes('insufficient_permissions')) {
     return { ok: true, reason: 'correctly redirected with insufficient_permissions' };
   }

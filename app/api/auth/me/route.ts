@@ -1,47 +1,54 @@
 /**
  * Get current authenticated user info
+ * ───────────────────────────────────
+ * Canonical API Layer: uses apiRoute() from @/lib/api/canonical.
+ *
+ * Demonstrates the new canonical entry point:
+ *   - Single config object: { method, auth, rateLimit, handler }
+ *   - Type-safe context: { req, user, body, query, params }
+ *   - Built-in: CSRF, rate limit, body validation, method validation,
+ *     request ID, response timing, structured logging
  */
-import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase/server';
-import { ok, withErrorHandling } from '@/lib/api/response';
-import { withSecurity } from '@/lib/api/security';
-import { secureRoute } from '@/lib/api/security-helpers';
+import { createServiceClient } from '@/lib/supabase/service';
+import { apiRoute, ok, tier } from '@/lib/api/canonical';
+import { getUserWithTransientRetry } from '@/lib/auth/get-user-with-retry';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(): Promise<NextResponse> {
-  // /me is callable both unauthenticated (returns null) and authenticated
-  // (returns the user). Don't require auth, but do apply lenient rate limit.
-  return (await withSecurity(
-    secureRoute('lenient'),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async () => getMe() as any,
-  )({} as NextRequest)) as unknown as NextResponse;
-}
-
-async function getMe(): Promise<NextResponse> {
-  return withErrorHandling(async () => {
-    const supabase = createServerClient();
-    const { data: { user } } = await supabase.auth.getUser();
+export const GET = apiRoute({
+  method: 'GET',
+  auth: 'optional',
+  rateLimit: tier('lenient'),
+  cacheControl: 'private, max-age=10',
+  handler: async () => {
+    const supabase = await createServerClient();
+    const { data: { user } } = await getUserWithTransientRetry(supabase);
 
     if (!user) {
       return ok({ user: null, profile: null });
     }
 
-    const { data: profile } = await supabase
+    // Use the service client for the profile lookup so the response
+    // isn't gated on RLS. The query is still scoped by `user.id` from
+    // the verified JWT, so this isn't a privilege escalation.
+    const service = createServiceClient();
+    const { data: profile } = await service
       .from('users')
-      .select('*')
+      .select('id, email, name, phone, role, is_active, is_verified')
       .eq('id', user.id)
       .single();
 
+    // Only return a curated subset of the user object — never the raw
+    // user_metadata (which a client can stuff with anything).
     return ok({
       user: {
         id: user.id,
         email: user.email,
-        user_metadata: user.user_metadata,
+        permissions: Array.isArray(user.app_metadata?.permissions) ? user.app_metadata.permissions : [],
       },
-      profile: profile || { role: user.user_metadata?.role || 'customer' },
+      profile: profile || { role: 'customer' },
     });
-  });
-}
+  },
+});

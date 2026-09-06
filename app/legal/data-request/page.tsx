@@ -138,7 +138,7 @@ export default function DataRequestPage() {
 
       <p className="text-sm mb-4">
         {t.loginNote}{' '}
-        <Link href="/account/export" className="text-brand-red underline">
+        <Link href="/api/account/export" className="text-brand-red underline" prefetch={false}>
           {t.exportNow}
         </Link>
       </p>

@@ -1,136 +1,109 @@
 /**
- * Admin: Geocode active orders' delivery addresses
- * 
- * For each active order with a delivery_address string (no coords),
- * use a simple keyword lookup to set reasonable coordinates.
- * 
- * In production, this would use Google Geocoding API.
+ * Repairs active orders that are missing delivery coordinates.
+ * Unresolved addresses remain untouched; coordinates are never invented.
  */
-import { NextResponse } from 'next/server';
-import { requireAdmin } from '@/lib/admin-auth';
+import { NextRequest, NextResponse } from 'next/server';
+import { requireAdminRole } from '@/lib/rbac';
 import { createServiceClient } from '@/lib/supabase/service';
-import { getApiUserWithRole } from '@/lib/auth-helper';
 import { safeErrorMessage } from '@/lib/api/safe-error';
+import { geocode } from '@/lib/maps/geocoder';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function POST() {
-  try {
-    const auth = await getApiUserWithRole();
-    if (!auth || auth.profile?.role !== 'admin') {
-      return NextResponse.json({ ok: false, error: 'Admin only' }, { status: 403 });
-    }
-    const supabase = createServiceClient();
+type DeliveryAddress = Record<string, unknown>;
+type RepairResult = {
+  id: string;
+  status: 'updated' | 'skipped' | 'unresolved' | 'failed';
+  reason?: string;
+  lat?: number;
+  lng?: number;
+  source?: 'google' | 'nominatim';
+};
 
-    // Get all active orders
-    const { data: orders } = await supabase
+function normalizeAddress(value: unknown): { record: DeliveryAddress | null; text: string } {
+  let parsed = value;
+  if (typeof parsed === 'string') {
+    const originalText = parsed.trim();
+    try {
+      parsed = JSON.parse(parsed) as unknown;
+    } catch {
+      return { record: null, text: originalText };
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { record: null, text: '' };
+  const record = parsed as DeliveryAddress;
+  const candidate = record.formatted_address ?? record.formattedAddress ?? record.address;
+  return { record, text: typeof candidate === 'string' ? candidate.trim() : '' };
+}
+
+export async function POST(request: NextRequest) {
+  const auth = await requireAdminRole(request, 'admin');
+  if (auth instanceof NextResponse) return auth;
+
+  try {
+    const supabase = createServiceClient();
+    const { data: orders, error: fetchError } = await supabase
       .from('orders')
       .select('id, delivery_address, customer_latitude, customer_longitude')
-      .in('status', ['confirmed', 'preparing', 'ready', 'picked_up', 'delivering']);
+      .in('status', ['confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivering'])
+      .limit(250);
+    if (fetchError) throw fetchError;
 
-    if (!orders) {
-      return NextResponse.json({ ok: true, count: 0 });
-    }
-
-    let updated = 0;
-    const results: any[] = [];
-
-    for (const o of orders) {
-      // Skip if already has coords
-      if (o.customer_latitude && o.customer_longitude) {
-        results.push({ id: o.id, skipped: 'has_coords' });
+    const results: RepairResult[] = [];
+    for (const order of orders ?? []) {
+      if (order.customer_latitude != null && order.customer_longitude != null) {
+        results.push({ id: order.id, status: 'skipped', reason: 'has_coordinates' });
         continue;
       }
 
-      // Get address string
-      let addr: any = o.delivery_address;
-      if (typeof addr === 'string') {
-        try { addr = JSON.parse(addr); } catch { /* keep string */ }
-      }
-      const addrStr = typeof addr === 'object' ? (addr?.formatted_address || addr?.address || JSON.stringify(addr)) : (addr || '');
-
-      // Determine coordinates based on address keywords
-      let lat: number | null = null;
-      let lng: number | null = null;
-
-      // Default to Bonn center if nothing matches
-      const DEFAULT_LAT = 50.7374;
-      const DEFAULT_LNG = 7.0982;
-
-      // Add some variation so different orders have different positions
-      const offset = (o.id.charCodeAt(0) % 20) / 1000; // 0-0.019
-      
-      // Match by street name
-      if (addrStr.includes('Sechtemer')) {
-        // Sechtemer Str. - south of Bonn
-        lat = 50.705 + offset;
-        lng = 7.085;
-      } else if (addrStr.includes('Kölnstraße')) {
-        lat = 50.732;
-        lng = 7.09;
-      } else if (addrStr.includes('Meckenheim') || addrStr.includes('Rheinbach')) {
-        lat = 50.625;
-        lng = 7.025;
-      } else if (addrStr.includes('Wesseling')) {
-        lat = 50.825;
-        lng = 6.985;
-      } else if (addrStr.includes('Bornheim')) {
-        lat = 50.755;
-        lng = 6.985;
-      } else if (addrStr.includes('Sankt Augustin')) {
-        lat = 50.775;
-        lng = 7.185;
-      } else {
-        // Default with small offset
-        lat = DEFAULT_LAT + (offset - 0.01);
-        lng = DEFAULT_LNG + (offset - 0.01);
+      const address = normalizeAddress(order.delivery_address);
+      if (!address.text) {
+        results.push({ id: order.id, status: 'unresolved', reason: 'missing_address' });
+        continue;
       }
 
-      // Parse JSON delivery_address if needed
-      let newDeliveryAddress: any;
-      if (typeof addr === 'object' && addr !== null) {
-        newDeliveryAddress = { ...addr, lat, lng };
-      } else {
-        newDeliveryAddress = {
-          formatted_address: addrStr,
-          address: addrStr,
-          lat,
-          lng,
-        };
+      const location = await geocode(address.text);
+      if (!location) {
+        results.push({ id: order.id, status: 'unresolved', reason: 'address_not_found' });
+        continue;
       }
 
-      const { error } = await supabase
+      const deliveryAddress = {
+        ...(address.record ?? { address: address.text }),
+        formatted_address: location.formattedAddress,
+        lat: location.lat,
+        lng: location.lng,
+        geocoding_source: location.source,
+      };
+      const { error: updateError } = await supabase
         .from('orders')
         .update({
-          customer_latitude: lat,
-          customer_longitude: lng,
-          delivery_address: newDeliveryAddress,
+          customer_latitude: location.lat,
+          customer_longitude: location.lng,
+          delivery_address: deliveryAddress,
         })
-        .eq('id', o.id);
+        .eq('id', order.id);
 
-      if (error) {
-        results.push({ id: o.id, error: error.message });
+      if (updateError) {
+        results.push({ id: order.id, status: 'failed', reason: safeErrorMessage(updateError) });
       } else {
-        updated++;
-        results.push({ id: o.id, lat, lng });
+        results.push({ id: order.id, status: 'updated', lat: location.lat, lng: location.lng, source: location.source });
       }
     }
 
-    return NextResponse.json({ ok: true, updated, results });
-  } catch (err: any) {
-    return NextResponse.json({ ok: false, error: safeErrorMessage(err) }, { status: 500 });
+    return NextResponse.json({
+      ok: true,
+      updated: results.filter((result) => result.status === 'updated').length,
+      unresolved: results.filter((result) => result.status === 'unresolved').length,
+      failed: results.filter((result) => result.status === 'failed').length,
+      results,
+    });
+  } catch (error: unknown) {
+    return NextResponse.json({ ok: false, error: safeErrorMessage(error) }, { status: 500 });
   }
 }
 
-/**
- * v80: Explicit GET handler so this route is discoverable in production.
- * Without it, the App Router returns 404 for non-POST methods, which makes
- * the route look "missing" instead of "method-not-allowed".
- */
 export async function GET(): Promise<NextResponse> {
-  return new NextResponse('Method Not Allowed', {
-    status: 405,
-    headers: { Allow: 'POST' },
-  });
+  return new NextResponse('Method Not Allowed', { status: 405, headers: { Allow: 'POST' } });
 }

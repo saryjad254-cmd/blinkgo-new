@@ -25,6 +25,13 @@
 
 const BASE = process.env.BASE_URL || 'http://localhost:3000';
 const ORIGIN = BASE;
+const fs = require('fs');
+const path = require('path');
+const { randomUUID } = require('crypto');
+const consentSource = fs.readFileSync(path.join(__dirname, '..', 'lib', 'privacy', 'consent.ts'), 'utf8');
+const consentVersionMatch = consentSource.match(/export const CONSENT_VERSION = ['"]([^'"]+)['"]/);
+if (!consentVersionMatch) throw new Error('Could not read CONSENT_VERSION');
+const CONSENT_VERSION = consentVersionMatch[1];
 
 let passed = 0;
 let failed = 0;
@@ -119,13 +126,13 @@ async function main() {
   console.log('\n► Consent API');
   const consentAccept = await f('/api/consent', {
     method: 'POST',
-    body: JSON.stringify({ action: 'accept_all' }),
+    body: JSON.stringify({ action: 'accept_all', consentId: randomUUID(), version: CONSENT_VERSION }),
   });
   record('Consent accept_all returns 200', consentAccept.ok, `status=${consentAccept.status}`);
 
   const consentReject = await f('/api/consent', {
     method: 'POST',
-    body: JSON.stringify({ action: 'reject_non_essential' }),
+    body: JSON.stringify({ action: 'reject_non_essential', consentId: randomUUID(), version: CONSENT_VERSION }),
   });
   record('Consent reject_non_essential returns 200', consentReject.ok, `status=${consentReject.status}`);
 

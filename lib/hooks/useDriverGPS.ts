@@ -156,25 +156,29 @@ export function useDriverGPS(options: UseDriverGPSOptions): UseDriverGPSResult {
         clearTimeout(maxIntervalTimerRef.current);
         maxIntervalTimerRef.current = null;
       }
-      setStatus('idle');
+      queueMicrotask(() => setStatus('idle'));
       return;
     }
 
     if (typeof window === 'undefined' || !navigator.geolocation) {
-      setStatus('unavailable');
-      setError('Geolocation not supported in this browser');
+      queueMicrotask(() => {
+        setStatus('unavailable');
+        setError('Geolocation not supported in this browser');
+      });
       return;
     }
 
-    setStatus('requesting');
-    setError(null);
+    queueMicrotask(() => {
+      setStatus('requesting');
+      setError(null);
+    });
 
     // Permission probe (best-effort)
-    if ((navigator.permissions ?? null) && typeof (navigator.permissions as any).query === 'function') {
-      (navigator.permissions as any)
+    if (navigator.permissions && typeof navigator.permissions.query === 'function') {
+      navigator.permissions
         .query({ name: 'geolocation' })
-        .then((p: any) => {
-          if (p.state === 'denied') {
+        .then((permissionStatus) => {
+          if (permissionStatus.state === 'denied') {
             setStatus('denied');
             setError('Geolocation permission denied');
           }

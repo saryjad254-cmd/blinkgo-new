@@ -3,6 +3,7 @@ import Phone from 'lucide-react/dist/esm/icons/phone';
 import StoreIcon from 'lucide-react/dist/esm/icons/store';
 import Receipt from 'lucide-react/dist/esm/icons/receipt';
 import CreditCard from 'lucide-react/dist/esm/icons/credit-card';
+import Download from 'lucide-react/dist/esm/icons/download';
 import { requireRole } from '@/lib/rbac';
 import { createServerClient } from '@/lib/supabase/server';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -15,15 +16,40 @@ import { RateOrderTrigger } from '@/components/orders/RateOrderTrigger';
 import { OrderPaymentSection } from '@/components/customer/OrderPaymentSection';
 import { CancelOrderButton } from '@/components/customer/CancelOrderButton';
 import { RefundRequestButton } from '@/components/customer/RefundRequestButton';
+import { RefundStatusCard } from '@/components/customer/RefundStatusCard';
 import { RealtimeStatusIndicator } from '@/components/customer/RealtimeStatusIndicator';
+import { ReplacementDecision } from '@/components/customer/ReplacementDecision';
+import { DeliveryProofCard } from '@/components/customer/DeliveryProofCard';
 import { getServerTranslations } from '@/lib/i18n/server-translations';
+import type { Locale } from '@/lib/i18n/server-translations';
 import type { Order, OrderItem } from '@/lib/types';
 import { formatEUR } from '@/lib/format';
 
 export const dynamic = 'force-dynamic';
 
+interface ReplacementProposal {
+  id: string;
+  original_product_name: string;
+  replacement_product_name: string;
+  original_line_total: number;
+  replacement_line_total: number;
+  replacement_quantity: number;
+  reason: string | null;
+  status: string;
+  expires_at: string;
+}
+
+interface FinancialAdjustment {
+  id: string;
+  amount_cents: number;
+  currency: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
 async function getOrder(id: string, userId: string): Promise<{ order: Order; items: OrderItem[]; driver: { name: string; phone: string } | null } | null> {
-  const supabase = createServerClient();
+  const supabase = await createServerClient();
 
   const { data: order, error } = await supabase
     .from('orders')
@@ -58,17 +84,43 @@ async function getOrder(id: string, userId: string): Promise<{ order: Order; ite
   };
 }
 
-export default async function OrderTrackingPage({
-  params,
-}: {
-  params: { id: string };
-}) {
+export default async function OrderTrackingPage(
+  props: {
+    params: Promise<{ id: string }>;
+  }
+) {
+  const params = await props.params;
   const user = await requireRole('customer');
   const data = await getOrder(params.id, user.id);
   if (!data) notFound();
 
   const { order, items, driver } = data;
   const { t, locale } = await getServerTranslations();
+  const isPickup = order.fulfillment_type === 'pickup';
+
+  // 7G-D: fetch refunds for this order (customer view: pending, succeeded, failed, etc.)
+  // Use service client because the refunds table has RLS lockdown.
+  const { createServiceClient } = await import('@/lib/supabase/service');
+  const svc = createServiceClient();
+  const { data: refundRows } = await svc
+    .from('payment_refunds')
+    .select('id, status, requested_amount_cents, refunded_amount_cents, currency, created_at, completed_at')
+    .eq('order_id', order.id)
+    .order('created_at', { ascending: true });
+
+  const { data: replacementRows } = await svc
+    .from('order_item_replacements')
+    .select('id,original_product_name,replacement_product_name,original_line_total,replacement_line_total,replacement_quantity,reason,status,expires_at')
+    .eq('order_id', order.id)
+    .order('created_at', { ascending: false });
+  const { data: adjustmentRows } = await svc
+    .from('order_financial_adjustments')
+    .select('id,amount_cents,currency,status,created_at,completed_at')
+    .eq('order_id', order.id)
+    .order('created_at', { ascending: false });
+  const replacementProposals = (replacementRows ?? []) as ReplacementProposal[];
+  const financialAdjustments = (adjustmentRows ?? []) as FinancialAdjustment[];
+  const restaurant = order.restaurants;
 
   return (
     <>
@@ -78,6 +130,7 @@ export default async function OrderTrackingPage({
           locale === 'ar' ? 'ar-IQ' : locale === 'en' ? 'en-US' : 'de-DE'
         )}
         back
+        backHref="/orders"
         action={
           <div className="flex items-center gap-2">
             <RealtimeStatusIndicator orderId={order.id} />
@@ -89,14 +142,22 @@ export default async function OrderTrackingPage({
       />
 
       <div className="max-w-2xl mx-auto px-4 sm:px-6 py-6 space-y-4">
+        <ReplacementDecision orderId={order.id} proposals={replacementProposals} locale={locale as 'de' | 'ar' | 'en'} />
+        {financialAdjustments.map((adjustment) => <div key={adjustment.id} data-testid="replacement-financial-adjustment" className="rounded-2xl border border-emerald-500/20 bg-emerald-500/[.07] p-4"><div className="flex items-center justify-between gap-3"><div><p className="font-extrabold text-text">{locale === 'ar' ? 'رصيد بدل المنتج' : locale === 'en' ? 'Substitution credit' : 'Gutschrift für Ersatzartikel'}</p><p className="mt-1 text-xs text-text-muted">{adjustment.status === 'succeeded' || adjustment.status === 'not_required' ? (locale === 'ar' ? 'تمت التسوية' : locale === 'en' ? 'Settled' : 'Abgerechnet') : adjustment.status === 'failed' ? (locale === 'ar' ? 'تحتاج مراجعة الدعم' : locale === 'en' ? 'Support review required' : 'Supportprüfung erforderlich') : (locale === 'ar' ? 'قيد الاسترداد' : locale === 'en' ? 'Refund in progress' : 'Erstattung läuft')}</p></div><strong className="text-lg text-emerald-500">€{(Number(adjustment.amount_cents) / 100).toFixed(2)}</strong></div></div>)}
         {/* Timeline — Beautiful Step-by-step Tracker */}
         <OrderTimeline order={order} />
 
+        {isPickup ? <section data-testid="customer-pickup-code" className="rounded-3xl border border-brand-yellow/30 bg-brand-yellow/10 p-5 text-center">
+          <p className="text-sm font-extrabold text-brand-yellow">{locale === 'ar' ? 'رمز الاستلام من المطعم' : locale === 'en' ? 'Restaurant pickup code' : 'Abholcode im Restaurant'}</p>
+          <strong className="mt-2 block font-mono text-4xl font-black tracking-[0.22em] text-text" dir="ltr">{order.pickup_code || '••••••'}</strong>
+          <p className="mt-2 text-xs leading-5 text-text-muted">{locale === 'ar' ? 'أظهر هذا الرمز للموظف عندما يصبح الطلب جاهزًا.' : locale === 'en' ? 'Show this code to staff when your order is ready.' : 'Zeige diesen Code, sobald deine Bestellung abholbereit ist.'}</p>
+        </section> : null}
+
         {/* Real-time WebSocket-style Tracker */}
-        <OrderTracker initialOrder={order} />
+        {!isPickup ? <OrderTracker initialOrder={order} /> : null}
 
         {/* Driver info if assigned — premium hero card */}
-        {order.driver_id && driver && order.status !== 'delivered' && (
+        {!isPickup && order.driver_id && driver && order.status !== 'delivered' && (
           <div className="card-glass p-4 animate-slide-up">
             <div className="flex items-center gap-3">
               <div className="relative w-12 h-12 rounded-xl bg-gradient-to-br from-brand-red-500 to-brand-yellow-500 flex items-center justify-center font-extrabold text-xl text-text shadow-speed-glow">
@@ -134,10 +195,10 @@ export default async function OrderTrackingPage({
             {order.restaurants?.name ?? (locale === 'ar' ? 'مطعم' : locale === 'en' ? 'Restaurant' : 'Restaurant')}
           </h3>
           <AddressWithMap
-            address={(order.restaurants as any)?.address}
-            lat={(order.restaurants as any)?.latitude}
-            lng={(order.restaurants as any)?.longitude}
-            phone={(order.restaurants as any)?.phone}
+            address={restaurant?.address}
+            lat={restaurant?.latitude}
+            lng={restaurant?.longitude}
+            phone={restaurant?.phone}
             variant="restaurant"
             label={t.customer.pickupFrom}
             showNavigation={false}
@@ -171,16 +232,26 @@ export default async function OrderTrackingPage({
               <span className="font-semibold text-text tabular-nums">{formatEUR(Number(order.subtotal))}</span>
             </div>
             <div className="flex justify-between text-text-secondary">
-              <span>{t.customer.delivery}</span>
+              <span>{isPickup ? (locale === 'ar' ? 'الاستلام' : locale === 'en' ? 'Pickup' : 'Abholung') : t.customer.delivery}</span>
               <span className="font-semibold text-text tabular-nums">{formatEUR(Number(order.delivery_fee))}</span>
             </div>
+            <div className="flex justify-between text-text-secondary">
+              <span>{t.customer.serviceFee}</span>
+              <span className="font-semibold text-text tabular-nums">{formatEUR(Number(order.service_fee ?? 0))}</span>
+            </div>
+            {Number(order.discount) > 0 && (
+              <div className="flex justify-between text-success">
+                <span>{t.customer.discount}</span>
+                <span className="font-semibold tabular-nums">− {formatEUR(Number(order.discount))}</span>
+              </div>
+            )}
             {Number(order.tip) > 0 && (
               <div className="flex justify-between text-text-secondary">
                 <span>{t.customer.tip}</span>
                 <span className="font-semibold text-text tabular-nums">{formatEUR(Number(order.tip))}</span>
               </div>
             )}
-            <div className="flex justify-between text-base font-extrabold text-text pt-3 mt-2 mt-2 border-t border-edge">
+            <div className="flex justify-between text-base font-extrabold text-text pt-3 mt-2 border-t border-edge">
               <span>{t.customer.total}</span>
               <span className="bg-gradient-to-br from-brand-red via-brand-red-hover to-brand-red-active bg-clip-text text-transparent text-lg tabular-nums">{formatEUR(Number(order.total))}</span>
             </div>
@@ -214,18 +285,18 @@ export default async function OrderTrackingPage({
         ) : null}
 
         {/* Customer delivery address with map */}
-        {(() => {
-          const da: any = order.delivery_address;
-          const addr = typeof da === 'object' && da ? (da.address ?? null) : (typeof da === 'string' ? da : null);
-          const lat = typeof da === 'object' && da ? (da.lat ?? null) : null;
-          const lng = typeof da === 'object' && da ? (da.lng ?? null) : null;
-          const directionsFrom = (order.restaurants as any)?.latitude
-            ? { lat: (order.restaurants as any).latitude, lng: (order.restaurants as any).longitude }
+        {!isPickup && (() => {
+          const da = order.delivery_address as Record<string, unknown> | string | null;
+          const addr = typeof da === 'object' && da && typeof da.address === 'string' ? da.address : (typeof da === 'string' ? da : null);
+          const lat = typeof da === 'object' && da && typeof da.lat === 'number' ? da.lat : null;
+          const lng = typeof da === 'object' && da && typeof da.lng === 'number' ? da.lng : null;
+          const directionsFrom = restaurant?.latitude && restaurant?.longitude
+            ? { lat: restaurant.latitude, lng: restaurant.longitude }
             : null;
           return (
             <div className="space-y-3">
               <DeliveryAddressCard
-                address={addr}
+                address={addr ?? ''}
                 lat={lat}
                 lng={lng}
                 instructions={order.delivery_instructions ?? undefined}
@@ -236,6 +307,11 @@ export default async function OrderTrackingPage({
             </div>
           );
         })()}
+
+        {/* Refund Request — only for delivered or cancelled */}
+        {!isPickup && order.status === 'delivered' ? (
+          <DeliveryProofCard orderId={order.id} locale={locale as 'de' | 'ar' | 'en'} />
+        ) : null}
 
         {/* Refund Request — only for delivered or cancelled */}
         {['delivered', 'cancelled'].includes(order.status) && (
@@ -250,6 +326,22 @@ export default async function OrderTrackingPage({
           </div>
         )}
 
+        {/* 7G-D: Refund status display (any non-customer-initiated refund flows) */}
+        {refundRows && refundRows.length > 0 && (
+          <RefundStatusCard
+            refunds={refundRows.map((r: Record<string, unknown>) => ({
+              id: String(r.id),
+              status: String(r.status) as 'requested' | 'validating' | 'submitted' | 'pending' | 'succeeded' | 'failed' | 'canceled' | 'requires_review',
+              requested_amount_cents: Number(r.requested_amount_cents ?? 0),
+              refunded_amount_cents: Number(r.refunded_amount_cents ?? 0),
+              currency: String(r.currency ?? 'EUR'),
+              created_at: String(r.created_at),
+              completed_at: r.completed_at ? String(r.completed_at) : null,
+            }))}
+            locale={locale as Locale}
+          />
+        )}
+
         {/* Rate Order — only show when delivered */}
         <div id="rate">
           {order.status === 'delivered' && (
@@ -262,6 +354,15 @@ export default async function OrderTrackingPage({
             />
           )}
         </div>
+        {['delivered', 'cancelled', 'refunded'].includes(order.status) && (
+          <section className="card-glass p-4" data-testid="customer-order-receipt-download">
+            <h3 className="font-extrabold text-text">{locale === 'ar' ? 'مستندات الطلب' : locale === 'en' ? 'Order documents' : 'Bestelldokumente'}</h3>
+            <p className="mt-1 text-xs leading-5 text-text-muted">{locale === 'ar' ? 'نزّل إيصال الطلب الثابت. هذا المستند ليس فاتورة ضريبية.' : locale === 'en' ? 'Download the immutable order receipt. This document is not a tax invoice.' : 'Laden Sie den unveränderlichen Bestellbeleg herunter. Dieses Dokument ist keine Steuerrechnung.'}</p>
+            <a href={`/api/orders/${order.id}/receipt`} className="mt-3 inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-2xl bg-brand px-4 font-extrabold text-white hover:bg-brand-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand">
+              <Download className="size-5" />{locale === 'ar' ? 'تنزيل إيصال PDF' : locale === 'en' ? 'Download PDF receipt' : 'PDF-Bestellbeleg herunterladen'}
+            </a>
+          </section>
+        )}
       </div>
     </>
   );

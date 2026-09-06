@@ -6,6 +6,8 @@ import { createServiceClient } from '@/lib/supabase/service';
 import { fail, ok, withErrorHandling } from '@/lib/api/response';
 import { ValidationError, AuthorizationError } from '@/lib/errors';
 import { logger } from '@/lib/logging';
+import { CUSTOMER_TERMS_VERSION, PRIVACY_NOTICE_VERSION } from '@/lib/legal/versions';
+import { getCanonicalBaseUrl } from '@/lib/auth/redirect-url';
 
 export const runtime = 'nodejs';
 export const dynamic = "force-dynamic";
@@ -13,11 +15,6 @@ export const dynamic = "force-dynamic";
 // Helper: case-insensitive email normalization
 function normalizeEmail(email: string): string {
   return (email ?? '').toString().toLowerCase().trim();
-}
-
-// Helper: sanitize name to avoid SQL injection (no special chars in DB-only fields)
-function safeName(name: string): string {
-  return (name ?? '').toString().trim().slice(0, 100);
 }
 
 /**
@@ -40,7 +37,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     const limited = authRateLimiters.register(req);
     if (limited) return limited;
 
-    const { name, email, phone, password, role } = await req.json();
+    const { name, email, phone, password, role, acceptedTerms, termsVersion, privacyVersion, locale } = await req.json();
 
     // Input validation (defense in depth) — use ValidationError so it maps to 400.
     if (!isValidName(name)) throw new ValidationError('Name muss 2-100 Zeichen enthalten');
@@ -48,6 +45,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     if (!isValidPassword(password)) throw new ValidationError('Passwort muss 8-128 Zeichen haben');
     if (phone && !isValidPhone(phone)) throw new ValidationError('Ungültiges Telefonformat');
     if (role && !isValidRole(role)) throw new ValidationError('Ungültige Rolle');
+    if (acceptedTerms !== true) throw new ValidationError('AGB und Datenschutzhinweise müssen akzeptiert werden');
+    if (termsVersion !== CUSTOMER_TERMS_VERSION || privacyVersion !== PRIVACY_NOTICE_VERSION) {
+      throw new ValidationError('Die Rechtstexte wurden aktualisiert. Bitte prüfe und akzeptiere sie erneut.');
+    }
+    if (locale !== 'de' && locale !== 'ar' && locale !== 'en') throw new ValidationError('Ungültige Sprache');
 
     const normEmail = normalizeEmail(email);
     const cleanName = sanitizeText(name);
@@ -94,7 +96,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       await supabase.from('users').delete().eq('id', existingProfile.id);
       try {
         await supabase.auth.admin.deleteUser(existingProfile.id);
-      } catch (e) {
+      } catch {
         // auth user may already be missing — that's fine
       }
     }
@@ -133,13 +135,14 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       email: normEmail,
       password,
       email_confirm: false, // require email verification
-      user_metadata: { name: cleanName, phone: phone || null, role: 'customer' },
+      user_metadata: { name: cleanName, phone: phone || null },
+      app_metadata: { app_role: 'customer' },
     });
 
     if (authErr || !authData.user) {
       // Most common: email already exists in auth.users (race condition we missed)
       const msg = authErr?.message ?? 'Auth-Fehler';
-      const code = (authErr as any)?.code ?? '';
+      const code = authErr?.code ?? '';
       if (msg.toLowerCase().includes('already') || code === 'email_exists') {
         // v80 (audit F-03): return the same 200/ok envelope as new-email.
         return ok({ ...ENUM_SAFE_OK_BODY });
@@ -179,6 +182,28 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       return fail(new Error(profileErr.message));
     }
 
+    // Store data-minimised evidence of the exact legal versions accepted.
+    // This service-role-only table intentionally excludes email, IP and UA.
+    const { error: legalAcceptanceError } = await supabase.from('legal_acceptance_records').insert({
+      id: crypto.randomUUID(),
+      user_id: authData.user.id,
+      terms_version: CUSTOMER_TERMS_VERSION,
+      privacy_version: PRIVACY_NOTICE_VERSION,
+      locale,
+      source: 'self_registration',
+      accepted_at: new Date().toISOString(),
+    });
+    if (legalAcceptanceError) {
+      logger.error('Legal acceptance record failed', { userId: authData.user.id }, legalAcceptanceError);
+      await supabase.from('users').delete().eq('id', authData.user.id);
+      try {
+        await supabase.auth.admin.deleteUser(authData.user.id);
+      } catch (rollbackError) {
+        logger.error('Legal acceptance rollback failed', { userId: authData.user.id }, rollbackError);
+      }
+      throw new Error('Legal acceptance could not be recorded. Apply the signup legal acceptance migration.');
+    }
+
     // ============================================================
     // STEP 4: Generate OTP and store it (in file store for no-SMTP setup)
     // ============================================================
@@ -207,9 +232,12 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         expires_at: expiresAt,
         purpose: 'signup',
       });
-    } catch (otpErr: any) {
+    } catch (otpErr: unknown) {
       console.error('Store OTP error (fatal):', otpErr);
-      // Roll back the auth user so we do not leave a half-registered account
+      // Roll back every record created in this transaction-like flow so a
+      // retry cannot be blocked by stale profile or legal evidence rows.
+      await supabase.from('legal_acceptance_records').delete().eq('user_id', authData.user.id);
+      await supabase.from('users').delete().eq('id', authData.user.id);
       try {
         await supabase.auth.admin.deleteUser(authData.user.id);
       } catch (rbErr) {
@@ -225,7 +253,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     // Detect locale from cookie or Accept-Language
     let detectedLocale: 'de' | 'ar' | 'en' = 'de';
     try {
-      const cookieStore = await import('next/headers').then((m) => m.cookies());
+      const { cookies } = await import('next/headers');
+      const cookieStore = await cookies();
       const localeCookie = cookieStore.get('blinkgo-locale')?.value;
       if (localeCookie === 'ar' || localeCookie === 'en') detectedLocale = localeCookie;
       else {
@@ -234,6 +263,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
         else if (acceptLang.includes('en')) detectedLocale = 'en';
       }
     } catch {}
+    let verificationEmailSent = false;
     try {
       const { sendOTPEmail } = await import('@/lib/email-service');
       const emailRes = await sendOTPEmail({
@@ -246,10 +276,37 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
       if (!emailRes.ok) {
         console.error('Email send failed:', emailRes.error);
       } else {
+        verificationEmailSent = true;
       }
     } catch (e) {
       console.error('Email service error:', e);
       // Non-fatal — user can still use on-screen code
+    }
+
+    // The branded Resend API integration and Supabase Auth SMTP are separate
+    // delivery channels. If the first is unavailable, use the configured
+    // Supabase SMTP instead of leaving a new customer without an email.
+    if (!verificationEmailSent) {
+      const appUrl = getCanonicalBaseUrl(req.nextUrl.origin);
+      const { error: smtpError } = await supabase.auth.signInWithOtp({
+        email: normEmail,
+        options: {
+          shouldCreateUser: false,
+          emailRedirectTo: `${appUrl}/login?verified=1`,
+        },
+      });
+      if (smtpError) {
+        logger.error('Supabase signup verification email failed', {
+          userId: authData.user.id,
+          status: smtpError.status,
+          code: smtpError.code,
+        });
+        await supabase.from('email_otps').delete().eq('user_id', authData.user.id);
+        await supabase.from('legal_acceptance_records').delete().eq('user_id', authData.user.id);
+        await supabase.from('users').delete().eq('id', authData.user.id);
+        await supabase.auth.admin.deleteUser(authData.user.id).catch(() => undefined);
+        throw new Error('Verification email could not be sent');
+      }
     }
 
     return ok({
