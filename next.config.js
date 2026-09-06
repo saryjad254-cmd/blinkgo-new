@@ -12,7 +12,6 @@ const nextConfig = {
   // Image optimization — WebP/AVIF, lazy, responsive
   images: {
     remotePatterns: [
-      { protocol: 'https', hostname: 'rhdaffhlrglyknxtucux.supabase.co', pathname: '/storage/v1/object/**' },
       { protocol: 'https', hostname: '*.supabase.co', pathname: '/storage/v1/object/**' },
       { protocol: 'https', hostname: 'picsum.photos' },
       { protocol: 'https', hostname: 'images.unsplash.com' },

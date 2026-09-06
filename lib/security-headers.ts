@@ -5,10 +5,8 @@ import { NextResponse, type NextRequest } from 'next/server';
 
 // Allowed origins for CORS. Empty array = same-origin only.
 function getAllowedOrigins(): (string | RegExp)[] {
-  // Tunnels are allowed in BOTH dev and production because their subdomains
-  // are randomly generated and can't be used for cross-site CSRF attacks.
-  // For production deployments, set ALLOWED_ORIGINS env to restrict to your
-  // own domains.
+  // Development-only conveniences. These must never become credentialed CORS
+  // origins in production: anyone can create a tunnel/preview subdomain.
   const tunnelOrigins: (string | RegExp)[] = [
     'http://localhost:3000',
     'http://127.0.0.1:3000',
@@ -31,16 +29,16 @@ function getAllowedOrigins(): (string | RegExp)[] {
   const isDev = process.env.NODE_ENV !== 'production';
   if (isDev) return tunnelOrigins;
 
-  // Production: optionally restrict to user-defined origins
-  // via ALLOWED_ORIGINS env (comma-separated, e.g. "https://app.example.com,https://admin.example.com")
+  // Production is exact-allowlist only. Same-origin requests do not need a
+  // CORS header; cross-origin frontends must be explicitly configured.
   const envOrigins = (process.env.ALLOWED_ORIGINS ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
   if (envOrigins.length > 0) {
-    return [...tunnelOrigins, ...envOrigins];
+    return envOrigins;
   }
-  return tunnelOrigins; // tunnels allowed in prod too (random subdomains, no CSRF risk)
+  return [];
 }
 
 /** Check if an origin is allowed (string or RegExp) */

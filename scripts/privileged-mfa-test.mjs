@@ -36,6 +36,8 @@ try {
   ]);
   check('all admin pages and APIs pass through the centralized AAL2 gate', () => {
     assert.match(proxy, /path\.startsWith\('\/api\/admin\/'\)/);
+    assert.match(proxy, /app_metadata\?\.app_role/);
+    assert.doesNotMatch(proxy, /app_metadata\?\.role/);
     assert.match(proxy, /getPrivilegedMfaState\(supabase\)/);
     assert.match(proxy, /MFA_REQUIRED/);
   });

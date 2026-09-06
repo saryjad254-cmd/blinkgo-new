@@ -273,7 +273,7 @@ export async function proxy(request: NextRequest) {
   // production. Authorization still happens in the page/API guard; this is a
   // centralized second-factor gate so no individual admin route can omit it.
   const isAdminSurface = path === '/admin' || path.startsWith('/admin/') || path === '/api/admin' || path.startsWith('/api/admin/');
-  const tokenRole = typeof user?.app_metadata?.role === 'string' ? user.app_metadata.role : '';
+  const tokenRole = typeof user?.app_metadata?.app_role === 'string' ? user.app_metadata.app_role : '';
   const claimsPrivilegedRole = ['admin', 'super_admin', 'manager'].includes(tokenRole);
   if (isPrivilegedMfaEnforced() && isAdminSurface && user && claimsPrivilegedRole && supabase) {
     const mfaState = await getPrivilegedMfaState(supabase);

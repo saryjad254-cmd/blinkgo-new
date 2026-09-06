@@ -109,6 +109,7 @@
     "test:api-layer": "tsx scripts/test-api-layer.mjs",
     "test:middleware": "node scripts/security-middleware-regression-test.mjs",
     "test:csrf-origin": "tsx scripts/csrf-origin-policy-test.ts",
+    "test:cors-origin": "tsx scripts/cors-origin-policy-test.ts",
     "test:cron-security": "node scripts/cron-security-contract-test.mjs",
     "test:scheduler-contract": "node scripts/scheduler-contract-test.mjs",
     "test:performance": "node scripts/performance-test.js",
