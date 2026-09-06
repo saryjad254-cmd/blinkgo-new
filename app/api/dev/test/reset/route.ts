@@ -8,7 +8,8 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const STAGING_DEMO_DRIVER_ID = 'b1000000-0000-4000-8000-000000000102';
-const ACTIVE_ORDER_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'assigned', 'picked_up', 'delivering'];
+const DIRECT_CANCELLATION_STATUSES = ['pending', 'confirmed', 'preparing', 'ready', 'assigned'];
+const DELIVERY_FAILURE_STATUSES = ['picked_up', 'delivering'];
 
 function testAccountEmails(): string[] {
   return [
@@ -65,21 +66,38 @@ async function resetTestAccountOperations() {
     updated_at: now,
   };
 
-  if (customerIds.length > 0) {
-    const { error } = await supabase
+  async function resetOrdersFor(column: 'customer_id' | 'driver_id', ids: string[]) {
+    if (ids.length === 0) return;
+
+    const { error: directCancellationError } = await supabase
       .from('orders')
       .update(cancellation)
-      .in('customer_id', customerIds)
-      .in('status', ACTIVE_ORDER_STATUSES);
-    if (error) throw error;
+      .in(column, ids)
+      .in('status', DIRECT_CANCELLATION_STATUSES);
+    if (directCancellationError) throw directCancellationError;
+
+    // The production state machine intentionally forbids cancelling an order
+    // after pickup. Test cleanup must follow the same legal transition graph
+    // instead of bypassing the guard: picked_up/delivering ->
+    // could_not_deliver -> cancelled.
+    const { error: deliveryFailureError } = await supabase
+      .from('orders')
+      .update({ status: 'could_not_deliver', updated_at: now })
+      .in(column, ids)
+      .in('status', DELIVERY_FAILURE_STATUSES);
+    if (deliveryFailureError) throw deliveryFailureError;
+
+    const { error: finalCancellationError } = await supabase
+      .from('orders')
+      .update(cancellation)
+      .in(column, ids)
+      .eq('status', 'could_not_deliver');
+    if (finalCancellationError) throw finalCancellationError;
   }
+
+  await resetOrdersFor('customer_id', customerIds);
   if (driverIds.length > 0) {
-    const { error: orderError } = await supabase
-      .from('orders')
-      .update(cancellation)
-      .in('driver_id', driverIds)
-      .in('status', ACTIVE_ORDER_STATUSES);
-    if (orderError) throw orderError;
+    await resetOrdersFor('driver_id', driverIds);
 
     const { error: statusError } = await supabase
       .from('driver_status')
